@@ -1,0 +1,169 @@
+// controllers/ai.controller.js
+const aiAssistantService = require('../services/aiAssistant.service');
+const aiPlaceholderService = require('../services/aiPlaceholder.service');
+const anomalyDetectionService = require('../services/anomalyDetection.service');
+const parserService = require('../services/nlParser/services/parserService');
+const forecastingService = require('../services/forecasting/forecastingService');
+const { METRIC_API_TO_TARGET, formatForecastApiResponse } = require('../utils/forecastResponse.helper');
+const ApiResponse = require('../utils/ApiResponse');
+const { ApiError } = require('../utils/ApiError');
+
+/**
+ * Parse natural language transaction description.
+ * POST /api/v1/ai/parse-nl
+ */
+const parseNaturalLanguage = async (req, res, next) => {
+  try {
+    const { text } = req.body;
+    if (!text || text.trim().length < 5) {
+      throw new ApiError(400, 'Transaction description must be at least 5 characters');
+    }
+    const parsed = await parserService.parseTransaction(text);
+    ApiResponse.success(res, parsed, 'Natural language parsed successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * AI assistant chat — powered by Gemini Flash with live financial context.
+ * POST /api/v1/ai/rag-query
+ */
+const ragQuery = async (req, res, next) => {
+  try {
+    const { question, chatHistory = [] } = req.body;
+    if (!question || question.trim().length < 3) {
+      throw new ApiError(400, 'Question must be at least 3 characters');
+    }
+    const response = await aiAssistantService.chat(question, req.user.businessId, chatHistory);
+    ApiResponse.success(res, response, 'AI response generated');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * AI-powered financial recommendations based on live accounting data.
+ * POST /api/v1/ai/cashflow-recommendations
+ */
+const cashflowRecommendations = async (req, res, next) => {
+  try {
+    const recommendations = await aiAssistantService.generateRecommendations(req.user.businessId);
+    ApiResponse.success(res, recommendations, 'Recommendations generated');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get financial forecast.
+ * POST /api/v1/ai/forecast
+ */
+const forecast = async (req, res, next) => {
+  try {
+    const { metric, horizon } = req.body;
+    if (!metric || !horizon) {
+      throw new ApiError(400, 'Both metric and horizon are required');
+    }
+    const target = METRIC_API_TO_TARGET[metric] || 'Revenue';
+    const forecastResult = forecastingService.generateForecast(target, horizon);
+    const payload = formatForecastApiResponse(metric, horizon, forecastResult);
+    ApiResponse.success(res, payload, 'Forecast generated');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Run Isolation Forest anomaly scan on recent transactions.
+ * POST /api/v1/ai/anomaly-scan
+ * Returns scan summary + formatted anomaly list for immediate display.
+ */
+const anomalyScan = async (req, res, next) => {
+  try {
+    const result = await anomalyDetectionService.runScan(req.user.businessId);
+    ApiResponse.success(res, result, 'Anomaly scan completed');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Fetch stored anomaly alerts from the database.
+ * GET /api/v1/ai/anomaly-alerts?status=pending&page=1&limit=25
+ */
+const getAnomalyAlerts = async (req, res, next) => {
+  try {
+    const { status = null, page = 1, limit = 25 } = req.query;
+    const result = await anomalyDetectionService.getAlerts(
+      req.user.businessId,
+      status || null,
+      { page: parseInt(page, 10), limit: parseInt(limit, 10) }
+    );
+    ApiResponse.success(res, result, 'Anomaly alerts retrieved');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Review / classify an anomaly alert.
+ * PUT /api/v1/ai/anomaly-alerts/:id/review
+ * Body: { action: "legitimate" | "fraud" }
+ */
+const reviewAnomalyAlert = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { action } = req.body;
+    if (!action || !['legitimate', 'fraud'].includes(action)) {
+      throw new ApiError(400, 'action must be "legitimate" or "fraud"');
+    }
+    const userId = req.user._id || req.user.id;
+    const updated = await anomalyDetectionService.reviewAlert(id, action, userId);
+    ApiResponse.success(res, updated, 'Alert reviewed successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Get anomaly counts grouped by status (for dashboard stats).
+ * GET /api/v1/ai/anomaly-stats
+ */
+const getAnomalyStats = async (req, res, next) => {
+  try {
+    const stats = await anomalyDetectionService.getStats(req.user.businessId);
+    ApiResponse.success(res, stats, 'Anomaly statistics retrieved');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Semantic search on transactions.
+ * POST /api/v1/ai/semantic-search
+ */
+const semanticSearch = async (req, res, next) => {
+  try {
+    const { query } = req.body;
+    if (!query || query.trim().length < 2) {
+      throw new ApiError(400, 'Search query must be at least 2 characters');
+    }
+    const results = await aiPlaceholderService.semanticSearch(query, req.user.businessId);
+    ApiResponse.success(res, results, 'Search completed');
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  parseNaturalLanguage,
+  ragQuery,
+  cashflowRecommendations,
+  forecast,
+  anomalyScan,
+  getAnomalyAlerts,
+  reviewAnomalyAlert,
+  getAnomalyStats,
+  semanticSearch,
+};
