@@ -407,6 +407,57 @@ class ReportService {
     reportCache.set('kpi-summary', businessId.toString(), _kpiParams, _kpiResult);
     return _kpiResult;
   }
+
+  /**
+   * Tax Summary Report — Phase 3.5 Step 4
+   * Aggregates GST collected (output), GST paid (input), WHT deducted, etc.
+   * Groups by taxType; supports optional date range.
+   */
+  async getTaxSummary(businessId, startDate, endDate) {
+    if (!businessId) throw new ApiError(400, 'Business ID is required');
+    const JournalEntry = require('../models/JournalEntry.model');
+    const mongoose = require('mongoose');
+    const businessObjId = new mongoose.Types.ObjectId(String(businessId));
+
+    const matchStage = {
+      businessId: businessObjId,
+      isArchived: { $ne: true },
+      taxAmount:  { $gt: 0 },
+    };
+    if (startDate) matchStage.transactionDate = { $gte: new Date(startDate) };
+    if (endDate)   matchStage.transactionDate = { ...(matchStage.transactionDate || {}), $lte: new Date(endDate) };
+
+    const rows = await JournalEntry.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id: { taxType: '$taxType', transactionType: '$transactionType' },
+          totalTaxAmount: { $sum: '$taxAmount' },
+          count: { $sum: 1 },
+          totalBaseAmount: { $sum: '$amount' },
+        },
+      },
+      { $sort: { '_id.taxType': 1, '_id.transactionType': 1 } },
+    ]);
+
+    // Separate output tax (sales) from input tax (purchases)
+    const SALES_TYPES = ['Cash Sale', 'Credit Sale', 'Inventory Sale', 'GST Collection', 'Income'];
+    const outputTax = rows.filter(r => SALES_TYPES.includes(r._id.transactionType));
+    const inputTax  = rows.filter(r => !SALES_TYPES.includes(r._id.transactionType));
+
+    const totalOutput = outputTax.reduce((s, r) => s + r.totalTaxAmount, 0);
+    const totalInput  = inputTax.reduce((s, r) => s + r.totalTaxAmount, 0);
+    const netTaxLiability = Math.round((totalOutput - totalInput) * 100) / 100;
+
+    return {
+      outputTax,
+      inputTax,
+      totalOutputTax: Math.round(totalOutput * 100) / 100,
+      totalInputTax:  Math.round(totalInput  * 100) / 100,
+      netTaxLiability,
+      period: { startDate, endDate },
+    };
+  }
 }
 
 module.exports = new ReportService();

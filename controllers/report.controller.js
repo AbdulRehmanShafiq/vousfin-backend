@@ -222,4 +222,15 @@ module.exports = {
   getKPISummary,
   exportReport,
   getTrialBalance,
+  getTaxSummary,
 };
+
+async function getTaxSummary(req, res, next) {
+  try {
+    const { startDate, endDate } = req.query;
+    const data = await reportService.getTaxSummary(req.user.businessId, startDate, endDate);
+    ApiResponse.success(res, data, 'Tax summary generated');
+  } catch (error) {
+    next(error);
+  }
+}

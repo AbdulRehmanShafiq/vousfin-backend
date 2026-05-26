@@ -287,6 +287,31 @@ const journalEntrySchema = new mongoose.Schema(
     },
 
     // ===============================
+    // Tax Fields (Phase 3.5 Step 4)
+    // ===============================
+    taxAmount: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    taxRate: {
+      type: Number,
+      default: null,
+      min: 0,
+      max: 100,
+    },
+    taxType: {
+      type: String,
+      default: null,
+      trim: true,
+      maxlength: 30,
+    },
+    taxInclusive: {
+      type: Boolean,
+      default: false,
+    },
+
+    // ===============================
     // Inventory Tracking (Phase 3.5)
     // ===============================
     inventoryItemId: {
@@ -392,6 +417,10 @@ journalEntrySchema.index(
   { businessId: 1, creditAccountId: 1, transactionDate: -1, status: 1 },
   { name: 'idx_ledger_credit' }
 );
+
+// 5b. Tax queries
+journalEntrySchema.index({ businessId: 1, taxType: 1, transactionDate: -1 },
+  { sparse: true, name: 'idx_tax_type' });
 
 // 6. Description text search — replaces slow regex scan
 //    Usage: findManyWithFilters({ search: '...' })

@@ -21,5 +21,6 @@ router.get('/cash-flow', validate(cashFlowSchema, 'query'), reportController.get
 router.get('/trial-balance', validate(trialBalanceSchema, 'query'), reportController.getTrialBalance);
 router.get('/kpi', validate(kpiSchema, 'query'), reportController.getKPISummary);
 router.get('/export', validate(exportReportSchema, 'query'), reportController.exportReport);
+router.get('/tax-summary', reportController.getTaxSummary);
 
 module.exports = router;
