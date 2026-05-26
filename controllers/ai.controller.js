@@ -5,6 +5,7 @@ const anomalyDetectionService = require('../services/anomalyDetection.service');
 const accountantSuggestionsService = require('../services/accountantSuggestions.service');
 const parserService = require('../services/nlParser/services/parserService');
 const { generateLSTMForecast } = require('../services/forecasting/lstmForecastService');
+const { getFinancialInsights } = require('../services/financialIntelligence.service');
 const { METRIC_API_TO_TARGET, formatForecastApiResponse } = require('../utils/forecastResponse.helper');
 const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
@@ -178,6 +179,19 @@ const preSaveCheck = async (req, res, next) => {
   }
 };
 
+/**
+ * AI financial intelligence — unusual spending, tax risk, cash flow warnings.
+ * GET /api/v1/ai/financial-insights
+ */
+const financialInsights = async (req, res, next) => {
+  try {
+    const result = await getFinancialInsights(req.user.businessId);
+    ApiResponse.success(res, result, 'Financial insights generated');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   parseNaturalLanguage,
   ragQuery,
@@ -189,4 +203,5 @@ module.exports = {
   getAnomalyStats,
   semanticSearch,
   preSaveCheck,
+  financialInsights,
 };

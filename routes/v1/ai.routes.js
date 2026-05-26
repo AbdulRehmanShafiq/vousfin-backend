@@ -54,4 +54,7 @@ router.get('/anomaly-alerts',                                            aiContr
 router.get('/anomaly-stats',                                             aiController.getAnomalyStats);
 router.put('/anomaly-alerts/:id/review', validate(reviewAlertSchema),   aiController.reviewAnomalyAlert);
 
+// AI Financial Intelligence
+router.get('/financial-insights',                                        aiController.financialInsights);
+
 module.exports = router;
