@@ -525,6 +525,82 @@ class TransactionRepository extends BaseRepository {
   }
 
   /**
+   * Period-bounded debit/credit totals per account (for Trial Balance with opening/closing).
+   * Same structure as getDebitCreditTotals but scoped to a specific date range.
+   * @param {string} businessId
+   * @param {Date|string} startDate
+   * @param {Date|string} endDate
+   * @returns {{ debitTotals: Array<{_id, total}>, creditTotals: Array<{_id, total}> }}
+   */
+  async getDebitCreditTotalsBetween(businessId, startDate, endDate) {
+    const validBusinessId = sanitizeAndValidateId(businessId);
+    const [result] = await this.model.aggregate([
+      {
+        $match: {
+          businessId: new mongoose.Types.ObjectId(validBusinessId),
+          transactionDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+          status: { $in: REPORT_STATUSES },
+          isArchived: { $ne: true },
+        },
+      },
+      {
+        $addFields: {
+          effectiveLines: {
+            $cond: {
+              if: { $gt: [{ $size: { $ifNull: ['$journalLines', []] } }, 0] },
+              then: '$journalLines',
+              else: [
+                { accountId: '$debitAccountId',  type: 'debit',  amount: '$amount' },
+                { accountId: '$creditAccountId', type: 'credit', amount: '$amount' },
+              ],
+            },
+          },
+        },
+      },
+      { $unwind: '$effectiveLines' },
+      {
+        $facet: {
+          debitTotals: [
+            { $match: { 'effectiveLines.type': 'debit' } },
+            { $group: { _id: '$effectiveLines.accountId', total: { $sum: '$effectiveLines.amount' } } },
+          ],
+          creditTotals: [
+            { $match: { 'effectiveLines.type': 'credit' } },
+            { $group: { _id: '$effectiveLines.accountId', total: { $sum: '$effectiveLines.amount' } } },
+          ],
+        },
+      },
+    ]);
+    return result || { debitTotals: [], creditTotals: [] };
+  }
+
+  /**
+   * Get all transactions for General Ledger — ordered by date, with populated accounts.
+   * Optionally filter by accountId.
+   */
+  async getGeneralLedgerEntries(businessId, startDate, endDate, accountId = null) {
+    const validBusinessId = sanitizeAndValidateId(businessId);
+    const matchStage = {
+      businessId: new mongoose.Types.ObjectId(validBusinessId),
+      transactionDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+      status: { $in: REPORT_STATUSES },
+      isArchived: { $ne: true },
+    };
+    if (accountId) {
+      const validAccId = sanitizeAndValidateId(accountId);
+      matchStage.$or = [
+        { debitAccountId: new mongoose.Types.ObjectId(validAccId) },
+        { creditAccountId: new mongoose.Types.ObjectId(validAccId) },
+      ];
+    }
+    return this.model.find(matchStage)
+      .populate('debitAccountId',  'accountName accountType accountCode normalBalance')
+      .populate('creditAccountId', 'accountName accountType accountCode normalBalance')
+      .sort({ transactionDate: 1, createdAt: 1 })
+      .lean();
+  }
+
+  /**
    * Aggregation pipeline for Balance Sheet (stub — service uses account repository).
    */
   async getBalanceSheetData(businessId, asOfDate) {
