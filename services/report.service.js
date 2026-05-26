@@ -2,7 +2,7 @@
 const transactionRepository = require('../repositories/transaction.repository');
 const accountRepository = require('../repositories/account.repository');
 const { ApiError } = require('../utils/ApiError');
-const { ACCOUNT_TYPES } = require('../config/constants');
+const { ACCOUNT_TYPES, TRANSACTION_TYPES } = require('../config/constants');
 const logger = require('../config/logger');
 const reportCache = require('../utils/reportCache');
 
@@ -108,7 +108,8 @@ class ReportService {
   }
 
   /**
-   * Generate Cash Flow Statement (indirect method) for a date range.
+   * Generate Cash Flow Statement (direct method) for a date range.
+   * Classifies all cash movements into Operating / Investing / Financing sections.
    */
   async getCashFlowStatement(businessId, startDate, endDate) {
     if (!businessId || !startDate || !endDate) {
@@ -123,43 +124,78 @@ class ReportService {
     const _cfCached = reportCache.get('cash-flow', businessId.toString(), _cfParams);
     if (_cfCached) return _cfCached;
 
+    // Find all Cash/Bank accounts by accountSubtype first, then fall back to name match
     const accounts = await accountRepository.findByBusiness(businessId);
-    const cashAccount = accounts.find(
-      acc => acc.accountName.toLowerCase() === 'cash' || acc.accountName.toLowerCase() === 'bank'
+    const cashAccounts = accounts.filter(
+      acc =>
+        acc.accountSubtype === 'Bank and Cash' ||
+        /\b(cash|bank)\b/i.test(acc.accountName)
     );
 
-    if (!cashAccount) {
-      throw new ApiError(500, 'Cash or Bank account not found. Please ensure chart of accounts includes Cash/Bank.');
+    if (cashAccounts.length === 0) {
+      throw new ApiError(500, 'No Cash or Bank account found. Ensure Chart of Accounts includes a Cash/Bank account.');
     }
 
-    const cashTransactions = await transactionRepository.getByAccount(businessId, cashAccount._id, startDate, endDate);
-    let cashInflow = 0, cashOutflow = 0;
-    for (const tx of cashTransactions) {
-      // getByAccount returns .lean() docs — debitAccountId is a plain ObjectId, NOT a populated sub-doc.
-      // Use .toString() directly, not ._id.toString(), to avoid TypeError on an ObjectId reference.
-      const isDebitCash = tx.debitAccountId.toString() === cashAccount._id.toString();
-      if (isDebitCash) {
-        cashInflow += tx.amount;
+    // Transaction types that classify as Investing or Financing activities
+    const INVESTING_TYPES = new Set([
+      TRANSACTION_TYPES.ASSET_PURCHASE,
+      TRANSACTION_TYPES.DEPRECIATION,
+    ]);
+    const FINANCING_TYPES = new Set([
+      TRANSACTION_TYPES.LOAN_DISBURSEMENT,
+      TRANSACTION_TYPES.LOAN_REPAYMENT,
+      TRANSACTION_TYPES.OWNER_INVESTMENT,
+      TRANSACTION_TYPES.OWNER_WITHDRAWAL,
+    ]);
+
+    // Collect transactions from all cash accounts, deduplicated by _id
+    const seenIds = new Set();
+    const allCashTxns = [];
+    await Promise.all(cashAccounts.map(async cashAcc => {
+      const txns = await transactionRepository.getByAccount(businessId, cashAcc._id, startDate, endDate);
+      for (const tx of txns) {
+        const id = tx._id.toString();
+        if (seenIds.has(id)) continue;
+        seenIds.add(id);
+        allCashTxns.push({ tx, cashAccId: cashAcc._id.toString() });
+      }
+    }));
+
+    const operatingItems = [];
+    const investingItems = [];
+    const financingItems = [];
+
+    for (const { tx, cashAccId } of allCashTxns) {
+      const isDebitCash = tx.debitAccountId.toString() === cashAccId;
+      // Positive = inflow (cash received), negative = outflow (cash paid)
+      const cashEffect = isDebitCash ? tx.amount : -tx.amount;
+      const item = {
+        description: tx.description || tx.transactionType || 'Transaction',
+        amount: cashEffect,
+        transactionType: tx.transactionType,
+        date: tx.transactionDate,
+      };
+
+      if (INVESTING_TYPES.has(tx.transactionType)) {
+        investingItems.push(item);
+      } else if (FINANCING_TYPES.has(tx.transactionType)) {
+        financingItems.push(item);
       } else {
-        cashOutflow += tx.amount;
+        operatingItems.push(item);
       }
     }
-    const netOperatingCashFlow = cashInflow - cashOutflow;
 
-    const investing = [];
-    const financing = [];
-    const netCashFlow = netOperatingCashFlow;
-
-    const operatingItems = [{ description: 'Net Cash from Operations', amount: netOperatingCashFlow }];
-    const investingItems = investing.map(i => ({ description: i.name || i.description, amount: i.amount }));
-    const financingItems = financing.map(i => ({ description: i.name || i.description, amount: i.amount }));
+    const sumItems = arr => arr.reduce((s, i) => s + i.amount, 0);
+    const netOperating  = sumItems(operatingItems);
+    const netInvesting  = sumItems(investingItems);
+    const netFinancing  = sumItems(financingItems);
 
     const _cfResult = {
-      operating: { items: operatingItems, total: netOperatingCashFlow },
-      investing: { items: investingItems, total: investingItems.reduce((s, i) => s + i.amount, 0) },
-      financing: { items: financingItems, total: financingItems.reduce((s, i) => s + i.amount, 0) },
-      netCashFlow,
-      period: { startDate, endDate },
+      operating:   { items: operatingItems,  total: netOperating  },
+      investing:   { items: investingItems,  total: netInvesting  },
+      financing:   { items: financingItems,  total: netFinancing  },
+      netCashFlow: netOperating + netInvesting + netFinancing,
+      period:      { startDate, endDate },
     };
     reportCache.set('cash-flow', businessId.toString(), _cfParams, _cfResult);
     return _cfResult;
