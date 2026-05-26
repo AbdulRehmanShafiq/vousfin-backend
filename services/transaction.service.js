@@ -10,6 +10,7 @@ const { ApiError } = require('../utils/ApiError');
 const { ENTITY_TYPES, TRANSACTION_TYPES, INPUT_METHODS, JOURNAL_STATUS, PAYMENT_STATUS, TRANSACTION_MODES, TRANSACTION_SOURCES } = require('../config/constants');
 const logger = require('../config/logger');
 const reportCache = require('../utils/reportCache');
+// Phase 5.1: Period lock model (inline require to avoid circular deps)
 
 class TransactionService {
   /**

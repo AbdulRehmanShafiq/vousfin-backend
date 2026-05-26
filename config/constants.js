@@ -369,28 +369,6 @@ module.exports = {
   ANOMALY_REVIEWED_STATUSES: ['marked_legit', 'confirmed_fraud', 'valid', 'confirmed_issue', 'ignored'],
 
   // ===============================
-  // Accounting Period Constants
-  // ===============================
-  PERIOD_STATUS: {
-    OPEN:   'open',    // transactions can be posted freely
-    CLOSED: 'closed',  // period closed; edits blocked; admin can reopen
-    LOCKED: 'locked',  // permanently locked; no edits even for admin
-  },
-
-  PERIOD_TYPE: {
-    MONTHLY:   'monthly',
-    QUARTERLY: 'quarterly',
-    YEARLY:    'yearly',
-  },
-
-  PERIOD_ACTION: {
-    OPENED:   'opened',
-    CLOSED:   'closed',
-    LOCKED:   'locked',
-    REOPENED: 'reopened',
-  },
-
-  // ===============================
   // API & Pagination Constants
   // ===============================
   DEFAULT_PAGE: 1,
