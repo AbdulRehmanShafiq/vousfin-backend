@@ -2,6 +2,7 @@
 const aiAssistantService = require('../services/aiAssistant.service');
 const aiPlaceholderService = require('../services/aiPlaceholder.service');
 const anomalyDetectionService = require('../services/anomalyDetection.service');
+const accountantSuggestionsService = require('../services/accountantSuggestions.service');
 const parserService = require('../services/nlParser/services/parserService');
 const forecastingService = require('../services/forecasting/forecastingService');
 const { generateLSTMForecast } = require('../services/forecasting/lstmForecastService');
@@ -171,6 +172,19 @@ const semanticSearch = async (req, res, next) => {
   }
 };
 
+/**
+ * Pre-save accountant check — duplicate, tax, party, amount warnings.
+ * POST /api/v1/ai/pre-save-check
+ */
+const preSaveCheck = async (req, res, next) => {
+  try {
+    const result = await accountantSuggestionsService.preCheck(req.user.businessId, req.body);
+    ApiResponse.success(res, result, 'Pre-save check complete');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   parseNaturalLanguage,
   ragQuery,
@@ -181,4 +195,5 @@ module.exports = {
   reviewAnomalyAlert,
   getAnomalyStats,
   semanticSearch,
+  preSaveCheck,
 };

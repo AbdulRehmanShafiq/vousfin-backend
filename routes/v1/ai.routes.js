@@ -45,6 +45,9 @@ router.post('/cashflow-recommendations',                                 aiContr
 router.post('/forecast',                validate(forecastSchema),        aiController.forecast);
 router.post('/semantic-search',         validate(semanticSearchSchema),  aiController.semanticSearch);
 
+// Pre-save accountant suggestions
+router.post('/pre-save-check',                                           aiController.preSaveCheck);
+
 // Anomaly detection
 router.post('/anomaly-scan',                                             aiController.anomalyScan);
 router.get('/anomaly-alerts',                                            aiController.getAnomalyAlerts);
