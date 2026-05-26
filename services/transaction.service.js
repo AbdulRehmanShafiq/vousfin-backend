@@ -3,6 +3,8 @@ const transactionRepository = require('../repositories/transaction.repository');
 const accountRepository = require('../repositories/account.repository');
 const customerRepository = require('../repositories/customer.repository');
 const vendorRepository = require('../repositories/vendor.repository');
+const inventoryItemRepository = require('../repositories/inventoryItem.repository');
+const ChartOfAccount = require('../models/ChartOfAccount.model');
 const auditService = require('./audit.service');
 const { ApiError } = require('../utils/ApiError');
 const { ENTITY_TYPES, TRANSACTION_TYPES, INPUT_METHODS, JOURNAL_STATUS, PAYMENT_STATUS, TRANSACTION_MODES, TRANSACTION_SOURCES } = require('../config/constants');
@@ -134,11 +136,67 @@ class TransactionService {
       }
     }
 
-    // 7. Multi-line journal handling (Future-proofing)
-    if (data.journalLines && data.journalLines.length > 0) {
-      // Validate sum(debits) = sum(credits)
+    // 7. Inventory Sale — auto-generate COGS journal lines
+    // When caller provides inventoryItemId + inventoryQty, reduce stock and append
+    // DR Cost of Goods Sold / CR Inventory lines to the compound entry.
+    if (
+      entryData.transactionType === TRANSACTION_TYPES.INVENTORY_SALE &&
+      data.inventoryItemId &&
+      data.inventoryQty > 0
+    ) {
+      const item = await inventoryItemRepository.model.findOne({
+        _id: data.inventoryItemId,
+        businessId: data.businessId,
+      });
+      if (!item) throw new ApiError(404, 'Inventory item not found');
+      if (item.currentStock < data.inventoryQty) {
+        throw new ApiError(400, `Insufficient stock: ${item.currentStock} ${item.unit || 'units'} available`);
+      }
+
+      // Find COGS + Inventory accounts for this business
+      const [cogsAcct, inventoryAcct] = await Promise.all([
+        ChartOfAccount.findOne({
+          businessId: data.businessId,
+          $or: [
+            { accountName: { $regex: /cost of goods/i } },
+            { accountSubtype: 'Direct Cost' },
+          ],
+        }).lean(),
+        ChartOfAccount.findOne({
+          businessId: data.businessId,
+          accountName: { $regex: /^inventory$/i },
+        }).lean(),
+      ]);
+
+      if (cogsAcct && inventoryAcct) {
+        const cogsAmount = Math.round(data.inventoryQty * item.unitCostPrice * 100) / 100;
+        // Reduce stock
+        await item.reduceStock(data.inventoryQty);
+
+        // Build compound journal lines if not already provided
+        if (!entryData.journalLines || entryData.journalLines.length === 0) {
+          entryData.journalLines = [
+            { type: 'debit',  accountId: entryData.debitAccountId,  amount: entryData.amount },
+            { type: 'credit', accountId: entryData.creditAccountId, amount: entryData.amount },
+          ];
+        }
+        // Append the COGS pair
+        entryData.journalLines.push(
+          { type: 'debit',  accountId: cogsAcct._id,       amount: cogsAmount },
+          { type: 'credit', accountId: inventoryAcct._id,  amount: cogsAmount }
+        );
+        entryData.inventoryItemId = data.inventoryItemId;
+        entryData.inventoryQty    = data.inventoryQty;
+        logger.info(`COGS auto-generated: ${cogsAmount} for item "${item.name}" (qty ${data.inventoryQty})`);
+      } else {
+        logger.warn(`COGS auto-generation skipped — COGS or Inventory account not found for business ${data.businessId}`);
+      }
+    }
+
+    // 7b. Multi-line journal validation
+    if (entryData.journalLines && entryData.journalLines.length > 0) {
       let debits = 0, credits = 0;
-      for (const line of data.journalLines) {
+      for (const line of entryData.journalLines) {
         if (line.type === 'debit') debits += line.amount;
         if (line.type === 'credit') credits += line.amount;
       }

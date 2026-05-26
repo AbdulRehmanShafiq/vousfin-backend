@@ -287,6 +287,20 @@ const journalEntrySchema = new mongoose.Schema(
     },
 
     // ===============================
+    // Inventory Tracking (Phase 3.5)
+    // ===============================
+    inventoryItemId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'InventoryItem',
+      default: null,
+    },
+    inventoryQty: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+
+    // ===============================
     // Future-Compatible Multi-Line Journal (v2 — deferred, schema only)
     // ===============================
     journalLines: [{

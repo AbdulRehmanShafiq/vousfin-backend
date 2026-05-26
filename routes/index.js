@@ -13,6 +13,7 @@ const adminRoutes = require('./v1/admin.routes');
 const customerRoutes = require('./v1/customer.routes');
 const vendorRoutes = require('./v1/vendor.routes');
 const forecastRoutes = require('./v1/forecast.routes');
+const inventoryRoutes = require('./v1/inventory.routes');
 
 // Mount v1 routes under /api/v1
 router.use('/auth', authRoutes);
@@ -25,6 +26,7 @@ router.use('/admin', adminRoutes);
 router.use('/customers', customerRoutes);
 router.use('/vendors', vendorRoutes);
 router.use('/forecast', forecastRoutes);
+router.use('/inventory', inventoryRoutes);
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
