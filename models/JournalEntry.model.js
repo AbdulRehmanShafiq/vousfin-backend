@@ -8,6 +8,8 @@ const {
   TRANSACTION_MODES,
   TRANSACTION_SOURCES,
   TRANSACTION_CATEGORIES,
+  ENTRY_TYPE,
+  ADJUSTING_TYPE,
 } = require('../config/constants');
 
 /**
@@ -350,6 +352,48 @@ const journalEntrySchema = new mongoose.Schema(
         maxlength: 200,
       },
     }],
+
+    // ===============================
+    // Accounting Period Engine (Phase 5.1)
+    // ===============================
+
+    // The AccountingPeriod this entry belongs to (set automatically on post)
+    periodId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'AccountingPeriod',
+      default: null,
+      index: true,
+    },
+
+    // The FiscalYear this entry belongs to (set automatically on post)
+    fiscalYearId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'FiscalYear',
+      default: null,
+      index: true,
+    },
+
+    // Entry classification: 'normal' | 'closing' | 'opening_balance' | 'adjusting'
+    entryType: {
+      type: String,
+      enum: ['normal', 'closing', 'opening_balance', 'adjusting'],
+      default: 'normal',
+      index: true,
+    },
+
+    // For adjusting entries: 'accrual' | 'deferral' | 'year_end' | 'depreciation'
+    adjustingType: {
+      type: String,
+      enum: ['accrual', 'deferral', 'year_end', 'depreciation', null],
+      default: null,
+    },
+
+    // Groups related closing entries from the same close operation
+    closingBatchId: {
+      type: String,
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: true,

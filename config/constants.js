@@ -197,6 +197,11 @@ module.exports = {
     REFUND:               'Refund',             // cash returned to customer or from vendor
     BANK_TRANSFER:        'Bank Transfer',      // inter-account movement (no P&L impact)
     JOURNAL_ENTRY:        'Journal Entry',      // manual adjusting entry
+
+    // ── Accounting Period Engine (Phase 5.1) ──────────────────────────────────
+    CLOSING_ENTRY:        'Closing Entry',      // year-end close revenue/expense to retained earnings
+    OPENING_BALANCE:      'Opening Balance',    // carry-forward balance at start of new fiscal year
+    ADJUSTING_ENTRY:      'Adjusting Entry',    // accrual, deferral, or year-end adjustment
   },
 
   // Transaction mode abstraction (reduces type explosion)
@@ -269,26 +274,67 @@ module.exports = {
   },
 
   // ===============================
+  // Accounting Period Engine (Phase 5.1)
+  // ===============================
+  FISCAL_YEAR_STATUS: {
+    OPEN:   'open',
+    CLOSED: 'closed',
+    LOCKED: 'locked',
+  },
+
+  PERIOD_STATUS: {
+    OPEN:   'open',
+    CLOSED: 'closed',
+    LOCKED: 'locked',
+  },
+
+  PERIOD_TYPE: {
+    MONTHLY:   'monthly',
+    QUARTERLY: 'quarterly',
+    YEARLY:    'yearly',
+  },
+
+  ENTRY_TYPE: {
+    NORMAL:          'normal',
+    CLOSING:         'closing',
+    OPENING_BALANCE: 'opening_balance',
+    ADJUSTING:       'adjusting',
+  },
+
+  ADJUSTING_TYPE: {
+    ACCRUAL:      'accrual',
+    DEFERRAL:     'deferral',
+    YEAR_END:     'year_end',
+    DEPRECIATION: 'depreciation',
+  },
+
+  // ===============================
   // Audit Log Constants
   // ===============================
   AUDIT_ACTIONS: {
-    CREATED: 'Created',
-    EDITED: 'Edited',
-    DELETED: 'Deleted',
-    REVERSED: 'Reversed',
-    SUSPENDED: 'Suspended',
-    EXPORTED: 'Exported',
+    CREATED:       'Created',
+    EDITED:        'Edited',
+    DELETED:       'Deleted',
+    REVERSED:      'Reversed',
+    SUSPENDED:     'Suspended',
+    EXPORTED:      'Exported',
+    PERIOD_CLOSED: 'Period Closed',
+    PERIOD_LOCKED: 'Period Locked',
+    PERIOD_REOPENED: 'Period Reopened',
+    YEAR_CLOSED:   'Fiscal Year Closed',
   },
 
   ENTITY_TYPES: {
-    JOURNAL_ENTRY: 'journalEntry',
-    USER: 'user',
-    BUSINESS: 'business',
-    ACCOUNT: 'account',
-    REPORT: 'report',
-    CUSTOMER: 'customer',
-    VENDOR: 'vendor',
-    INSTALLMENT_PLAN: 'installmentPlan',
+    JOURNAL_ENTRY:     'journalEntry',
+    USER:              'user',
+    BUSINESS:          'business',
+    ACCOUNT:           'account',
+    REPORT:            'report',
+    CUSTOMER:          'customer',
+    VENDOR:            'vendor',
+    INSTALLMENT_PLAN:  'installmentPlan',
+    FISCAL_YEAR:       'fiscalYear',
+    ACCOUNTING_PERIOD: 'accountingPeriod',
   },
 
   // ===============================
@@ -321,6 +367,28 @@ module.exports = {
   ANOMALY_SUPPRESS_STATUSES: ['marked_legit', 'valid', 'ignored'],
   // Statuses that count as "user reviewed" (any verdict given)
   ANOMALY_REVIEWED_STATUSES: ['marked_legit', 'confirmed_fraud', 'valid', 'confirmed_issue', 'ignored'],
+
+  // ===============================
+  // Accounting Period Constants
+  // ===============================
+  PERIOD_STATUS: {
+    OPEN:   'open',    // transactions can be posted freely
+    CLOSED: 'closed',  // period closed; edits blocked; admin can reopen
+    LOCKED: 'locked',  // permanently locked; no edits even for admin
+  },
+
+  PERIOD_TYPE: {
+    MONTHLY:   'monthly',
+    QUARTERLY: 'quarterly',
+    YEARLY:    'yearly',
+  },
+
+  PERIOD_ACTION: {
+    OPENED:   'opened',
+    CLOSED:   'closed',
+    LOCKED:   'locked',
+    REOPENED: 'reopened',
+  },
 
   // ===============================
   // API & Pagination Constants
