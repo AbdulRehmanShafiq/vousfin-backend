@@ -738,13 +738,60 @@ class TransactionService {
     if (amountChanged || debitChanged || creditChanged) {
       await this._updateAccountBalance(original.debitAccountId._id, original.amount, 'debit');
       await this._updateAccountBalance(original.creditAccountId._id, original.amount, 'credit');
-      
+
       const finalDebitId = debitChanged ? updateData.debitAccountId : original.debitAccountId._id;
       const finalCreditId = creditChanged ? updateData.creditAccountId : original.creditAccountId._id;
       const finalAmount = amountChanged ? updateData.amount : original.amount;
-      
+
       await this._updateAccountBalance(finalDebitId, finalAmount, 'debit');
       await this._updateAccountBalance(finalCreditId, finalAmount, 'credit');
+    }
+
+    // AR/AP parent reconciliation ─────────────────────────────────────────────
+    // When a child payment transaction's amount is edited (e.g. user recorded
+    // a payment of 1500 but corrects it to 1000), recalculate the parent
+    // AR/AP transaction's remainingBalance and paymentStatus so the outstanding
+    // balance stays accurate without needing a full reversal + re-entry.
+    //
+    // Example: parent amount=2000, partiallyPaidAmount=1500 → remaining=500
+    //   User edits child 1500→1000 → amountDiff = -500
+    //   newPaid=1000, newRemaining=1000, status→PARTIALLY_PAID
+    //
+    // Wrapped in try/catch — reconciliation failure must not crash the edit.
+    if (amountChanged && original.parentTransactionId) {
+      try {
+        const parentId = original.parentTransactionId._id
+          ? original.parentTransactionId._id.toString()
+          : original.parentTransactionId.toString();
+        const parent = await transactionRepository.findByIdWithDetails(parentId, businessId);
+        if (parent && parent.amount != null) {
+          const amountDiff   = updateData.amount - original.amount;
+          const newPaid      = Math.max(0, (parent.partiallyPaidAmount || 0) + amountDiff);
+          const newRemaining = Math.max(0, (parent.remainingBalance   || 0) - amountDiff);
+          const newPayStatus = newRemaining <= 0.01
+            ? PAYMENT_STATUS.PAID
+            : newPaid > 0
+              ? PAYMENT_STATUS.PARTIALLY_PAID
+              : PAYMENT_STATUS.UNPAID;
+          const newJournalStatus = newRemaining <= 0.01
+            ? JOURNAL_STATUS.SETTLED
+            : JOURNAL_STATUS.PARTIALLY_SETTLED;
+          await transactionRepository.updateTransaction(parentId, businessId, {
+            partiallyPaidAmount: newPaid,
+            remainingBalance:    newRemaining,
+            paymentStatus:       newPayStatus,
+            status:              newJournalStatus,
+          });
+          logger.info(
+            `AR/AP parent reconciliation: parent ${parentId} updated ` +
+            `(remaining ${parent.remainingBalance}→${newRemaining}, ` +
+            `paid ${parent.partiallyPaidAmount}→${newPaid}) ` +
+            `after child ${transactionId} amount edit`
+          );
+        }
+      } catch (reconErr) {
+        logger.warn(`AR/AP parent reconciliation failed on payment edit: ${reconErr.message}`);
+      }
     }
 
     await auditService.logUpdate(
