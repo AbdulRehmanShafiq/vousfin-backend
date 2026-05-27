@@ -55,6 +55,44 @@ const stateChangeSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// ── Phase 2: Line Item sub-schema ────────────────────────────────────────────
+
+const lineItemSchema = new mongoose.Schema(
+  {
+    itemType:        { type: String, enum: ['product', 'service', 'custom'], default: 'custom' },
+    inventoryItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'InventoryItem', default: null },
+    sku:             { type: String, default: null, trim: true, maxlength: 100 },
+    name:            { type: String, required: true, trim: true, maxlength: 300 },
+    description:     { type: String, default: null, trim: true, maxlength: 500 },
+    quantity:        { type: Number, required: true, min: 0.0001 },
+    unit:            { type: String, default: 'pcs', trim: true, maxlength: 20 },
+    unitPrice:       { type: Number, required: true, min: 0 },
+    discountType:    { type: String, enum: ['percentage', 'fixed', null], default: null },
+    discountValue:   { type: Number, default: 0, min: 0 },
+    discountAmount:  { type: Number, default: 0, min: 0 },
+    taxType:         { type: String, default: null, maxlength: 30 },
+    taxRate:         { type: Number, default: 0, min: 0, max: 100 },
+    taxAmount:       { type: Number, default: 0, min: 0 },
+    taxInclusive:    { type: Boolean, default: false },
+    accountId:       { type: mongoose.Schema.Types.ObjectId, ref: 'ChartOfAccount', default: null },
+    lineTotal:       { type: Number, default: 0, min: 0 },
+    sortOrder:       { type: Number, default: 0 },
+  },
+  { _id: true }
+);
+
+const attachmentSchema = new mongoose.Schema(
+  {
+    fileName:   { type: String, required: true, maxlength: 255 },
+    fileUrl:    { type: String, required: true },
+    fileType:   { type: String, default: null, maxlength: 50 },
+    fileSize:   { type: Number, default: null },
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    uploadedAt: { type: Date, default: Date.now },
+  },
+  { _id: true }
+);
+
 // ── Main schema ───────────────────────────────────────────────────────────────
 
 const billSchema = new mongoose.Schema(
@@ -100,11 +138,32 @@ const billSchema = new mongoose.Schema(
       strn:       { type: String, default: null },
     },
 
+    // ── Phase 2: Line Items ─────────────────────────────────────────────
+    lineItems: [lineItemSchema],
+
     amount:       { type: Number, required: true, min: 0.01 },
     taxAmount:    { type: Number, default: 0, min: 0 },
-    whtAmount:    { type: Number, default: 0, min: 0 }, // withholding tax deducted at source
-    totalAmount:  { type: Number, default: 0, min: 0 }, // amount + taxAmount (net of WHT for net-payable use)
+    whtAmount:    { type: Number, default: 0, min: 0 },
+    totalAmount:  { type: Number, default: 0, min: 0 },
     currencyCode: { type: String, default: 'PKR', uppercase: true, maxlength: 3 },
+
+    // ── Phase 2: Dynamic Totals ──────────────────────────────────────
+    subtotal:              { type: Number, default: 0, min: 0 },
+    totalLineDiscount:     { type: Number, default: 0, min: 0 },
+    invoiceDiscountType:   { type: String, enum: ['percentage', 'fixed', null], default: null },
+    invoiceDiscountValue:  { type: Number, default: 0, min: 0 },
+    invoiceDiscountAmount: { type: Number, default: 0, min: 0 },
+    totalTax:              { type: Number, default: 0, min: 0 },
+    shippingCharges:       { type: Number, default: 0, min: 0 },
+    roundingAdjustment:    { type: Number, default: 0 },
+
+    // ── Phase 2: Multi-Currency ──────────────────────────────────────
+    baseCurrencyCode:  { type: String, default: 'PKR', uppercase: true, maxlength: 3 },
+    exchangeRate:      { type: Number, default: 1, min: 0 },
+    baseCurrencyTotal: { type: Number, default: null },
+
+    // ── Phase 2: Attachments ─────────────────────────────────────────
+    attachments: [attachmentSchema],
 
     issueDate:        { type: Date, required: true, index: true },
     dueDate:          { type: Date, default: null, index: true },
@@ -195,11 +254,61 @@ billSchema.methods.recordFieldChange = function (field, before, after, actorId) 
   this.fieldHistory.push({ field, before, after, changedBy: actorId, changedAt: new Date() });
 };
 
-// ── Pre-save ──────────────────────────────────────────────────────────────────
+// ── Pre-save: compute totals from lineItems (Phase 2) ────────────────────────
 billSchema.pre('save', function () {
-  if (this.amount != null && this.taxAmount != null) {
-    this.totalAmount = Math.round((this.amount + (this.taxAmount || 0)) * 100) / 100;
+  const r2 = (v) => Math.round(v * 100) / 100;
+
+  if (this.lineItems && this.lineItems.length > 0) {
+    let subtotal = 0, totalLineDiscount = 0, totalTax = 0;
+    for (const li of this.lineItems) {
+      const gross = r2(li.quantity * li.unitPrice);
+      let disc = 0;
+      if (li.discountType === 'percentage' && li.discountValue > 0) {
+        disc = r2(gross * li.discountValue / 100);
+      } else if (li.discountType === 'fixed' && li.discountValue > 0) {
+        disc = r2(Math.min(li.discountValue, gross));
+      }
+      li.discountAmount = disc;
+      totalLineDiscount += disc;
+      const afterDiscount = gross - disc;
+      let tax = 0;
+      if (li.taxRate > 0) {
+        tax = li.taxInclusive
+          ? r2(afterDiscount - afterDiscount / (1 + li.taxRate / 100))
+          : r2(afterDiscount * li.taxRate / 100);
+      }
+      li.taxAmount = tax;
+      totalTax += tax;
+      li.lineTotal = li.taxInclusive ? r2(afterDiscount) : r2(afterDiscount + tax);
+      subtotal += gross;
+    }
+    this.subtotal = r2(subtotal);
+    this.totalLineDiscount = r2(totalLineDiscount);
+    this.totalTax = r2(totalTax);
+
+    const afterLineDiscounts = r2(subtotal - totalLineDiscount);
+    let invoiceDisc = 0;
+    if (this.invoiceDiscountType === 'percentage' && this.invoiceDiscountValue > 0) {
+      invoiceDisc = r2(afterLineDiscounts * this.invoiceDiscountValue / 100);
+    } else if (this.invoiceDiscountType === 'fixed' && this.invoiceDiscountValue > 0) {
+      invoiceDisc = r2(Math.min(this.invoiceDiscountValue, afterLineDiscounts));
+    }
+    this.invoiceDiscountAmount = invoiceDisc;
+    this.amount = r2(afterLineDiscounts - invoiceDisc);
+    this.taxAmount = r2(totalTax);
+    this.totalAmount = r2(this.amount + this.taxAmount + (this.shippingCharges || 0) + (this.roundingAdjustment || 0));
+  } else {
+    if (this.amount != null && this.taxAmount != null) {
+      this.totalAmount = r2(this.amount + (this.taxAmount || 0) + (this.shippingCharges || 0) + (this.roundingAdjustment || 0));
+    }
   }
+
+  if (this.exchangeRate && this.exchangeRate !== 1 && this.totalAmount) {
+    this.baseCurrencyTotal = r2(this.totalAmount * this.exchangeRate);
+  } else {
+    this.baseCurrencyTotal = this.totalAmount;
+  }
+
   if (this.isNew && (this.remainingBalance === null || this.remainingBalance === undefined)) {
     this.remainingBalance = this.totalAmount;
   }

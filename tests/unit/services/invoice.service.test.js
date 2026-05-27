@@ -6,6 +6,10 @@
 //
 jest.mock('../../../repositories/customer.repository');
 jest.mock('../../../services/audit.service');
+jest.mock('../../../services/fx.service', () => ({
+  prepareFxFields: jest.fn().mockResolvedValue({ currencyCode: 'PKR', exchangeRate: 1, baseCurrencyAmount: 0 }),
+  getBaseCurrency: jest.fn().mockResolvedValue('PKR'),
+}));
 jest.mock('../../../models/Invoice.model', () => {
   // Tiny in-memory Invoice mock that mimics the parts of the model the service uses.
   const stateStore = new Map();

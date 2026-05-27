@@ -19,6 +19,7 @@ const {
   INVOICE_TRANSITIONS,
   APPROVAL_STATUS,
   APPROVER_ROLES,
+  TAX_TYPES,
 } = require('../config/constants');
 
 // ── Sub-schemas ───────────────────────────────────────────────────────────────
@@ -59,6 +60,59 @@ const stateChangeSchema = new mongoose.Schema(
     timestamp: { type: Date, default: Date.now },
   },
   { _id: false }
+);
+
+// ── Phase 2: Line Item sub-schema ────────────────────────────────────────────
+
+const lineItemSchema = new mongoose.Schema(
+  {
+    // Product / service identification
+    itemType:        { type: String, enum: ['product', 'service', 'custom'], default: 'custom' },
+    inventoryItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'InventoryItem', default: null },
+    sku:             { type: String, default: null, trim: true, maxlength: 100 },
+    name:            { type: String, required: true, trim: true, maxlength: 300 },
+    description:     { type: String, default: null, trim: true, maxlength: 500 },
+
+    // Quantities & pricing
+    quantity:  { type: Number, required: true, min: 0.0001 },
+    unit:      { type: String, default: 'pcs', trim: true, maxlength: 20 },
+    unitPrice: { type: Number, required: true, min: 0 },
+
+    // Line-level discount
+    discountType:   { type: String, enum: ['percentage', 'fixed', null], default: null },
+    discountValue:  { type: Number, default: 0, min: 0 },
+    discountAmount: { type: Number, default: 0, min: 0 }, // computed
+
+    // Line-level tax
+    taxType:     { type: String, default: null, maxlength: 30 },
+    taxRate:     { type: Number, default: 0, min: 0, max: 100 },
+    taxAmount:   { type: Number, default: 0, min: 0 }, // computed
+    taxInclusive:{ type: Boolean, default: false },
+
+    // Accounting mapping
+    accountId: { type: mongoose.Schema.Types.ObjectId, ref: 'ChartOfAccount', default: null },
+
+    // Computed line total (qty × unitPrice − discount + tax)
+    lineTotal: { type: Number, default: 0, min: 0 },
+
+    // Sort order for drag-and-drop
+    sortOrder: { type: Number, default: 0 },
+  },
+  { _id: true } // keep _id so frontend can key rows
+);
+
+// ── Phase 2: Attachment sub-schema ───────────────────────────────────────────
+
+const attachmentSchema = new mongoose.Schema(
+  {
+    fileName:    { type: String, required: true, maxlength: 255 },
+    fileUrl:     { type: String, required: true },
+    fileType:    { type: String, default: null, maxlength: 50 }, // mime type
+    fileSize:    { type: Number, default: null }, // bytes
+    uploadedBy:  { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    uploadedAt:  { type: Date, default: Date.now },
+  },
+  { _id: true }
 );
 
 // ── Main schema ───────────────────────────────────────────────────────────────
@@ -106,15 +160,56 @@ const invoiceSchema = new mongoose.Schema(
       taxId:        { type: String, default: null },
     },
 
-    // ── Money ─────────────────────────────────────────────────────────────────
+    // ── Phase 2: Line Items ─────────────────────────────────────────────────
+    lineItems: [lineItemSchema],
+
+    // ── Money (Phase 1 fields preserved; Phase 2 adds granular totals) ───
     amount: {
       type: Number,
       required: true,
       min: 0.01,
     },
     taxAmount:    { type: Number, default: 0, min: 0 },
-    totalAmount:  { type: Number, default: 0, min: 0 }, // amount + taxAmount
+    totalAmount:  { type: Number, default: 0, min: 0 },
     currencyCode: { type: String, default: 'PKR', uppercase: true, maxlength: 3 },
+
+    // ── Phase 2: Dynamic Totals ──────────────────────────────────────────
+    subtotal:           { type: Number, default: 0, min: 0 }, // sum of line (qty × unitPrice)
+    totalLineDiscount:  { type: Number, default: 0, min: 0 }, // sum of per-line discounts
+    // Invoice-level discount (applied after line totals)
+    invoiceDiscountType:  { type: String, enum: ['percentage', 'fixed', null], default: null },
+    invoiceDiscountValue: { type: Number, default: 0, min: 0 },
+    invoiceDiscountAmount:{ type: Number, default: 0, min: 0 }, // computed
+    totalTax:             { type: Number, default: 0, min: 0 }, // sum of all tax lines
+    shippingCharges:      { type: Number, default: 0, min: 0 },
+    roundingAdjustment:   { type: Number, default: 0 }, // can be negative
+    // totalAmount = subtotal − totalLineDiscount − invoiceDiscount + totalTax + shipping + rounding
+
+    // ── Phase 2: Multi-Currency ──────────────────────────────────────────
+    baseCurrencyCode: { type: String, default: 'PKR', uppercase: true, maxlength: 3 },
+    exchangeRate:     { type: Number, default: 1, min: 0 },
+    baseCurrencyTotal:{ type: Number, default: null }, // totalAmount × exchangeRate
+
+    // ── Phase 2: Attachments ─────────────────────────────────────────────
+    attachments: [attachmentSchema],
+
+    // ── Phase 2: Template & PDF ──────────────────────────────────────────
+    templateId: { type: String, default: 'modern', maxlength: 50 },
+    // Bank details for payment instructions on PDF
+    bankDetails: {
+      bankName:      { type: String, default: null, maxlength: 100 },
+      accountTitle:  { type: String, default: null, maxlength: 100 },
+      accountNumber: { type: String, default: null, maxlength: 50 },
+      iban:          { type: String, default: null, maxlength: 40 },
+      swiftCode:     { type: String, default: null, maxlength: 20 },
+      branchCode:    { type: String, default: null, maxlength: 20 },
+    },
+    // Payment terms text shown on PDF
+    paymentTermsText: { type: String, default: null, maxlength: 500, trim: true },
+
+    // ── Phase 2: Credit Note reference ───────────────────────────────────
+    creditNoteIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'CreditNote' }],
+    totalCredited: { type: Number, default: 0, min: 0 },
 
     // ── Dates ─────────────────────────────────────────────────────────────────
     issueDate: { type: Date, required: true, index: true },
@@ -233,11 +328,88 @@ invoiceSchema.methods.recordFieldChange = function (field, before, after, actorI
   });
 };
 
-// ── Pre-save: derive totalAmount + remainingBalance ──────────────────────────
+// ── Pre-save: compute totals from lineItems (Phase 2) + derive remainingBalance
 invoiceSchema.pre('save', function () {
-  if (this.amount != null && this.taxAmount != null) {
-    this.totalAmount = Math.round((this.amount + (this.taxAmount || 0)) * 100) / 100;
+  const r2 = (v) => Math.round(v * 100) / 100;
+
+  if (this.lineItems && this.lineItems.length > 0) {
+    // ── Compute per-line values ──────────────────────────────────────
+    let subtotal = 0;
+    let totalLineDiscount = 0;
+    let totalTax = 0;
+
+    for (const li of this.lineItems) {
+      const gross = r2(li.quantity * li.unitPrice);
+
+      // Line discount
+      let disc = 0;
+      if (li.discountType === 'percentage' && li.discountValue > 0) {
+        disc = r2(gross * li.discountValue / 100);
+      } else if (li.discountType === 'fixed' && li.discountValue > 0) {
+        disc = r2(Math.min(li.discountValue, gross));
+      }
+      li.discountAmount = disc;
+      totalLineDiscount += disc;
+
+      const afterDiscount = gross - disc;
+
+      // Line tax
+      let tax = 0;
+      if (li.taxRate > 0) {
+        if (li.taxInclusive) {
+          tax = r2(afterDiscount - afterDiscount / (1 + li.taxRate / 100));
+        } else {
+          tax = r2(afterDiscount * li.taxRate / 100);
+        }
+      }
+      li.taxAmount = tax;
+      totalTax += tax;
+
+      // Line total = after discount + tax (exclusive) or just afterDiscount (inclusive — tax already in price)
+      li.lineTotal = li.taxInclusive ? r2(afterDiscount) : r2(afterDiscount + tax);
+      subtotal += gross;
+    }
+
+    this.subtotal = r2(subtotal);
+    this.totalLineDiscount = r2(totalLineDiscount);
+    this.totalTax = r2(totalTax);
+
+    // Invoice-level discount
+    const afterLineDiscounts = r2(subtotal - totalLineDiscount);
+    let invoiceDisc = 0;
+    if (this.invoiceDiscountType === 'percentage' && this.invoiceDiscountValue > 0) {
+      invoiceDisc = r2(afterLineDiscounts * this.invoiceDiscountValue / 100);
+    } else if (this.invoiceDiscountType === 'fixed' && this.invoiceDiscountValue > 0) {
+      invoiceDisc = r2(Math.min(this.invoiceDiscountValue, afterLineDiscounts));
+    }
+    this.invoiceDiscountAmount = invoiceDisc;
+
+    // amount = net before tax (backward-compat with Phase 1)
+    this.amount = r2(afterLineDiscounts - invoiceDisc);
+    this.taxAmount = r2(totalTax);
+
+    // totalAmount = amount + tax + shipping + rounding
+    this.totalAmount = r2(
+      this.amount + this.taxAmount
+      + (this.shippingCharges || 0)
+      + (this.roundingAdjustment || 0)
+    );
+  } else {
+    // Legacy path: no line items — derive totalAmount from amount + taxAmount
+    if (this.amount != null && this.taxAmount != null) {
+      this.totalAmount = r2(this.amount + (this.taxAmount || 0)
+        + (this.shippingCharges || 0)
+        + (this.roundingAdjustment || 0));
+    }
   }
+
+  // Multi-currency: derive base currency total
+  if (this.exchangeRate && this.exchangeRate !== 1 && this.totalAmount) {
+    this.baseCurrencyTotal = r2(this.totalAmount * this.exchangeRate);
+  } else {
+    this.baseCurrencyTotal = this.totalAmount;
+  }
+
   // Initialise remainingBalance on first save if not set
   if (this.isNew && (this.remainingBalance === null || this.remainingBalance === undefined)) {
     this.remainingBalance = this.totalAmount;

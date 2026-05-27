@@ -27,6 +27,7 @@ const mongoose = require('mongoose');
 const Invoice = require('../models/Invoice.model');
 const customerRepository = require('../repositories/customer.repository');
 const auditService = require('./audit.service');
+const fxService = require('./fx.service');
 const { ApiError } = require('../utils/ApiError');
 const logger = require('../config/logger');
 const {
@@ -108,18 +109,37 @@ class InvoiceService {
 
   /**
    * Create a draft invoice — no ledger posting yet.
-   * Approval requirement is computed from amount vs threshold.
+   * Phase 2: Accepts lineItems, discount, shipping, multi-currency, attachments, bank details.
+   * If lineItems are provided, amount is auto-computed by the model's pre-save hook.
    */
   async createDraft(data, user, ipAddress) {
-    if (!data.businessId || !data.amount || !data.invoiceNumber || !data.issueDate) {
-      throw new ApiError(400, 'createDraft requires: businessId, invoiceNumber, amount, issueDate');
+    const hasLines = Array.isArray(data.lineItems) && data.lineItems.length > 0;
+    if (!data.businessId || !data.invoiceNumber || !data.issueDate) {
+      throw new ApiError(400, 'createDraft requires: businessId, invoiceNumber, issueDate');
     }
-    if (data.amount <= 0) {
-      throw new ApiError(400, 'Invoice amount must be greater than zero');
+    if (!hasLines && (!data.amount || data.amount <= 0)) {
+      throw new ApiError(400, 'Invoice amount must be greater than zero (or provide lineItems)');
     }
 
     const snap = await this._customerSnapshot(data.businessId, data.customerId);
-    const approvalRequired = this._requiresApproval(data.amount, data.businessConfig);
+
+    // Multi-currency: resolve FX rate if foreign currency
+    let fxFields = {};
+    const txnCurrency = (data.currencyCode || 'PKR').toUpperCase();
+    try {
+      fxFields = await fxService.prepareFxFields(
+        data.amount || 0, txnCurrency, data.businessId, data.issueDate
+      );
+    } catch (e) {
+      logger.warn(`[invoice] FX prepareFxFields failed (non-fatal): ${e.message}`);
+      fxFields = { currencyCode: txnCurrency, exchangeRate: 1, baseCurrencyAmount: data.amount || 0 };
+    }
+
+    // Amount for threshold check: use provided amount or estimate from lineItems
+    const estimateAmount = data.amount || (hasLines
+      ? data.lineItems.reduce((s, li) => s + (li.quantity || 0) * (li.unitPrice || 0), 0)
+      : 0);
+    const approvalRequired = this._requiresApproval(estimateAmount, data.businessConfig);
 
     const invoice = new Invoice({
       businessId:        data.businessId,
@@ -127,9 +147,34 @@ class InvoiceService {
       linkedJournalEntryId: data.linkedJournalEntryId || null,
       customerId:        data.customerId || null,
       customerSnapshot:  Object.keys(snap).length ? snap : data.customerSnapshot || {},
-      amount:            data.amount,
+
+      // Line items (Phase 2)
+      lineItems:         hasLines ? data.lineItems : [],
+
+      // Money — if lineItems present, pre-save hook computes amount/taxAmount/totalAmount
+      amount:            hasLines ? 0.01 : data.amount, // placeholder; pre-save overrides when lineItems exist
       taxAmount:         data.taxAmount || 0,
-      currencyCode:      data.currencyCode || 'PKR',
+      currencyCode:      fxFields.currencyCode || txnCurrency,
+
+      // Dynamic totals (Phase 2)
+      invoiceDiscountType:  data.invoiceDiscountType || null,
+      invoiceDiscountValue: data.invoiceDiscountValue || 0,
+      shippingCharges:      data.shippingCharges || 0,
+      roundingAdjustment:   data.roundingAdjustment || 0,
+
+      // Multi-currency (Phase 2)
+      baseCurrencyCode:  fxFields.currencyCode === (await fxService.getBaseCurrency(data.businessId))
+        ? fxFields.currencyCode : await fxService.getBaseCurrency(data.businessId),
+      exchangeRate:      fxFields.exchangeRate || 1,
+
+      // Template & bank details (Phase 2)
+      templateId:        data.templateId || 'modern',
+      bankDetails:       data.bankDetails || {},
+      paymentTermsText:  data.paymentTermsText || null,
+
+      // Attachments (Phase 2)
+      attachments:       data.attachments || [],
+
       issueDate:         data.issueDate,
       dueDate:           data.dueDate || null,
       state:             INVOICE_STATES.DRAFT,
@@ -144,7 +189,7 @@ class InvoiceService {
     });
 
     invoice.recordStateChange(INVOICE_STATES.DRAFT, user, 'Initial creation');
-    await invoice.save();
+    await invoice.save(); // pre-save hook computes lineItem totals
 
     try {
       await auditService.logCreate(
@@ -157,6 +202,73 @@ class InvoiceService {
       );
     } catch (e) {
       logger.warn(`[invoice] audit logCreate failed: ${e.message}`);
+    }
+    return invoice;
+  }
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // Phase 2: Update draft
+  // ───────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Update a draft invoice (only drafts can be edited).
+   * Accepts full lineItems replacement, discount, shipping, bank details, etc.
+   * Records field-level changes in fieldHistory.
+   */
+  async updateDraft(id, data, user, ipAddress) {
+    const invoice = await this._loadOrThrow(id);
+    if (invoice.state !== INVOICE_STATES.DRAFT) {
+      throw new ApiError(409, 'Only draft invoices can be edited');
+    }
+
+    // Editable fields whitelist
+    const editable = [
+      'invoiceNumber', 'customerId', 'lineItems', 'amount', 'taxAmount',
+      'currencyCode', 'invoiceDiscountType', 'invoiceDiscountValue',
+      'shippingCharges', 'roundingAdjustment', 'issueDate', 'dueDate',
+      'description', 'notes', 'tags', 'templateId', 'bankDetails',
+      'paymentTermsText', 'attachments',
+    ];
+
+    for (const field of editable) {
+      if (data[field] !== undefined) {
+        const before = invoice[field];
+        invoice[field] = data[field];
+        // Record scalar field changes (skip large arrays from fieldHistory for perf)
+        if (!['lineItems', 'attachments', 'tags', 'bankDetails'].includes(field)) {
+          invoice.recordFieldChange(field, before, data[field], user._id);
+        }
+      }
+    }
+
+    // Re-snapshot customer if customerId changed
+    if (data.customerId && String(data.customerId) !== String(invoice.customerId)) {
+      invoice.customerSnapshot = await this._customerSnapshot(invoice.businessId, data.customerId);
+    }
+
+    // Recalculate approval requirement based on new amount estimate
+    const hasLines = invoice.lineItems && invoice.lineItems.length > 0;
+    const estimateAmount = hasLines
+      ? invoice.lineItems.reduce((s, li) => s + (li.quantity || 0) * (li.unitPrice || 0), 0)
+      : invoice.amount;
+    invoice.approvalRequired = this._requiresApproval(estimateAmount, data.businessConfig);
+    invoice.approvalStatus = invoice.approvalRequired ? APPROVAL_STATUS.PENDING : APPROVAL_STATUS.NOT_REQUIRED;
+
+    invoice.lastModifiedBy = user._id;
+    await invoice.save(); // pre-save recomputes totals
+
+    try {
+      await auditService.log({
+        businessId:      invoice.businessId,
+        entityType:      ENTITY_TYPES.INVOICE,
+        entityId:        invoice._id,
+        action:          AUDIT_ACTIONS.EDITED,
+        performedBy:     user._id,
+        performedByName: user.fullName || user.email || 'Unknown',
+        ipAddress,
+      });
+    } catch (e) {
+      logger.warn(`[invoice] audit log (updateDraft) failed: ${e.message}`);
     }
     return invoice;
   }

@@ -14,9 +14,13 @@ router.use(authMiddleware, requireBusiness);
 router.post('/', invoiceController.createDraft);
 router.get('/',  invoiceController.list);
 
-// Detail + timeline
+// Detail + timeline + PDF
 router.get('/:id',          invoiceController.getById);
 router.get('/:id/timeline', invoiceController.getTimeline);
+router.get('/:id/pdf',      invoiceController.downloadPdf);
+
+// Phase 2: Update draft
+router.put('/:id', invoiceController.updateDraft);
 
 // Approval workflow
 router.post('/:id/submit',  invoiceController.submitForApproval);

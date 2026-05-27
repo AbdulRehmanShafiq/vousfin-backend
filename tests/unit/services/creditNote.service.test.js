@@ -1,0 +1,239 @@
+// tests/unit/services/creditNote.service.test.js
+//
+// Phase 2 — Tests for credit note lifecycle: create, approve, apply, cancel.
+//
+
+const mongoose = require('mongoose');
+
+// ── Mocks ────────────────────────────────────────────────────────────────────
+jest.mock('../../../repositories/customer.repository', () => ({
+  findByBusinessAndId: jest.fn().mockResolvedValue({ fullName: 'Test Customer', email: 'c@test.com' }),
+}));
+jest.mock('../../../services/audit.service', () => ({
+  logCreate: jest.fn(),
+  log: jest.fn(),
+}));
+
+// Use global to share stores between mock factories and tests
+// (Jest mock factories cannot reference outer-scope variables)
+global.__mockCnStore = new Map();
+global.__mockInvoiceStoreForCN = new Map();
+
+jest.mock('../../../models/CreditNote.model', () => {
+  const mongoose = require('mongoose');
+
+  function makeDoc(props) {
+    const doc = {
+      ...props,
+      _id: props._id || new mongoose.Types.ObjectId(),
+      isArchived: false,
+      async save() {
+        const r2 = (v) => Math.round(v * 100) / 100;
+        if (this.lineItems && this.lineItems.length > 0) {
+          let sub = 0, tax = 0;
+          for (const li of this.lineItems) {
+            const gross = r2(li.quantity * li.unitPrice);
+            const t = li.taxRate > 0 ? r2(gross * li.taxRate / 100) : 0;
+            li.taxAmount = t;
+            li.lineTotal = r2(gross + t);
+            sub += gross;
+            tax += t;
+          }
+          this.subtotal = r2(sub);
+          this.taxAmount = r2(tax);
+          this.totalAmount = r2(sub + tax);
+        }
+        global.__mockCnStore.set(String(this._id), this);
+        return this;
+      },
+      toObject() { return { ...this }; },
+    };
+    return doc;
+  }
+
+  const CreditNote = function (props) { return makeDoc(props); };
+  CreditNote.findById = jest.fn(async (id) => global.__mockCnStore.get(String(id)) || null);
+  CreditNote.findOne = jest.fn(async (q) => {
+    if (q?._id) return global.__mockCnStore.get(String(q._id)) || null;
+    return null;
+  });
+  CreditNote.find = jest.fn(() => ({ sort: () => Promise.resolve([]) }));
+  CreditNote.countDocuments = jest.fn(async () => 0);
+  return CreditNote;
+});
+
+jest.mock('../../../models/Invoice.model', () => {
+  const Invoice = {
+    findOne: jest.fn(async (q) => {
+      if (q?._id) return global.__mockInvoiceStoreForCN.get(String(q._id)) || null;
+      return null;
+    }),
+    findById: jest.fn(async (id) => global.__mockInvoiceStoreForCN.get(String(id)) || null),
+  };
+  return Invoice;
+});
+
+const creditNoteService = require('../../../services/creditNote.service');
+
+const user = { _id: new mongoose.Types.ObjectId(), fullName: 'Tester', email: 'test@test.com', role: 'owner' };
+
+beforeEach(() => {
+  global.__mockCnStore.clear();
+  global.__mockInvoiceStoreForCN.clear();
+  jest.clearAllMocks();
+});
+
+function seedInvoice(overrides = {}) {
+  const id = new mongoose.Types.ObjectId();
+  const inv = {
+    _id: id,
+    businessId: overrides.businessId || new mongoose.Types.ObjectId(),
+    invoiceNumber: overrides.invoiceNumber || 'INV-TEST',
+    totalAmount: overrides.totalAmount || 10000,
+    totalCredited: overrides.totalCredited || 0,
+    remainingBalance: overrides.remainingBalance ?? overrides.totalAmount ?? 10000,
+    customerId: overrides.customerId || null,
+    currencyCode: 'PKR',
+    baseCurrencyCode: 'PKR',
+    exchangeRate: 1,
+    creditNoteIds: [],
+    lastModifiedBy: null,
+    async save() { global.__mockInvoiceStoreForCN.set(String(this._id), this); return this; },
+    ...overrides,
+  };
+  global.__mockInvoiceStoreForCN.set(String(id), inv);
+  return inv;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('CreditNote — create', () => {
+  test('creates a draft credit note linked to an invoice', async () => {
+    const inv = seedInvoice({ totalAmount: 5000 });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId,
+      invoiceId: inv._id,
+      creditNoteNumber: 'CN-001',
+      issueDate: new Date(),
+      totalAmount: 1000,
+    }, user, '127.0.0.1');
+
+    expect(cn.state).toBe('draft');
+    expect(cn.invoiceId.toString()).toBe(inv._id.toString());
+    expect(cn.creditNoteNumber).toBe('CN-001');
+  });
+
+  test('rejects credit that exceeds creditable balance', async () => {
+    const inv = seedInvoice({ totalAmount: 1000, totalCredited: 800 });
+    await expect(
+      creditNoteService.create({
+        businessId: inv.businessId,
+        invoiceId: inv._id,
+        creditNoteNumber: 'CN-OVER',
+        issueDate: new Date(),
+        totalAmount: 500, // only 200 creditable
+      }, user, '127.0.0.1')
+    ).rejects.toThrow(/exceeds remaining creditable/);
+  });
+
+  test('creates credit note with line items', async () => {
+    const inv = seedInvoice({ totalAmount: 10000 });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId,
+      invoiceId: inv._id,
+      creditNoteNumber: 'CN-LI',
+      issueDate: new Date(),
+      lineItems: [
+        { name: 'Return Widget', quantity: 2, unitPrice: 100, taxRate: 17 },
+      ],
+    }, user, '127.0.0.1');
+
+    expect(cn.subtotal).toBe(200);
+    expect(cn.taxAmount).toBe(34);
+    expect(cn.totalAmount).toBe(234);
+  });
+});
+
+describe('CreditNote — approve + apply', () => {
+  test('approve transitions draft → approved', async () => {
+    const inv = seedInvoice({ totalAmount: 5000 });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId,
+      invoiceId: inv._id,
+      creditNoteNumber: 'CN-APP',
+      issueDate: new Date(),
+      totalAmount: 1000,
+    }, user, '127.0.0.1');
+
+    const approved = await creditNoteService.approve(cn._id, user);
+    expect(approved.state).toBe('approved');
+    expect(approved.approvedBy.toString()).toBe(user._id.toString());
+  });
+
+  test('apply reduces invoice remaining balance', async () => {
+    const inv = seedInvoice({ totalAmount: 5000, remainingBalance: 5000 });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId,
+      invoiceId: inv._id,
+      creditNoteNumber: 'CN-APPLY',
+      issueDate: new Date(),
+      totalAmount: 1500,
+    }, user, '127.0.0.1');
+
+    await creditNoteService.approve(cn._id, user);
+    await creditNoteService.apply(cn._id, user);
+
+    const updatedInv = global.__mockInvoiceStoreForCN.get(String(inv._id));
+    expect(updatedInv.totalCredited).toBe(1500);
+    expect(updatedInv.remainingBalance).toBe(3500);
+    expect(updatedInv.creditNoteIds.length).toBe(1);
+  });
+});
+
+describe('CreditNote — cancel', () => {
+  test('cancelling an applied credit note reverses the credit', async () => {
+    const inv = seedInvoice({ totalAmount: 5000, remainingBalance: 5000 });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId,
+      invoiceId: inv._id,
+      creditNoteNumber: 'CN-CANCEL',
+      issueDate: new Date(),
+      totalAmount: 2000,
+    }, user, '127.0.0.1');
+
+    await creditNoteService.approve(cn._id, user);
+    await creditNoteService.apply(cn._id, user);
+
+    // Verify applied
+    let updatedInv = global.__mockInvoiceStoreForCN.get(String(inv._id));
+    expect(updatedInv.remainingBalance).toBe(3000);
+
+    // Cancel
+    await creditNoteService.cancel(cn._id, user, 'Mistake');
+
+    updatedInv = global.__mockInvoiceStoreForCN.get(String(inv._id));
+    expect(updatedInv.totalCredited).toBe(0);
+    expect(updatedInv.remainingBalance).toBe(5000);
+    expect(updatedInv.creditNoteIds.length).toBe(0);
+  });
+});
+
+describe('CreditNote — debit note', () => {
+  test('debit note increases remaining balance on apply', async () => {
+    const inv = seedInvoice({ totalAmount: 5000, remainingBalance: 3000 });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId,
+      invoiceId: inv._id,
+      creditNoteNumber: 'DN-001',
+      noteType: 'debit_note',
+      issueDate: new Date(),
+      totalAmount: 500,
+    }, user, '127.0.0.1');
+
+    await creditNoteService.approve(cn._id, user);
+    await creditNoteService.apply(cn._id, user);
+
+    const updatedInv = global.__mockInvoiceStoreForCN.get(String(inv._id));
+    expect(updatedInv.remainingBalance).toBe(3500); // increased by 500
+  });
+});

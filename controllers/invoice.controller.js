@@ -5,6 +5,7 @@
 // and shapes responses via ApiResponse helpers.
 //
 const invoiceService = require('../services/invoice.service');
+const invoicePdfService = require('../services/invoicePdf.service');
 const ApiResponse = require('../utils/ApiResponse');
 
 /** Build the canonical user payload services expect from req.user (auth attaches id, not _id). */
@@ -25,6 +26,40 @@ exports.createDraft = async (req, res, next) => {
       req.ip
     );
     ApiResponse.created(res, invoice, 'Invoice draft created');
+  } catch (err) { next(err); }
+};
+
+// Phase 2: Update draft
+exports.updateDraft = async (req, res, next) => {
+  try {
+    const invoice = await invoiceService.updateDraft(
+      req.params.id,
+      { ...req.body, businessId: req.user.businessId },
+      actor(req),
+      req.ip
+    );
+    ApiResponse.success(res, invoice, 'Invoice draft updated');
+  } catch (err) { next(err); }
+};
+
+// Phase 2: Download PDF
+exports.downloadPdf = async (req, res, next) => {
+  try {
+    const invoice = await invoiceService.getById(req.params.id, req.user.businessId);
+    // Pass business details for the PDF header
+    const Business = require('../models/Business.model');
+    const biz = await Business.findById(req.user.businessId).lean();
+    await invoicePdfService.streamPdf(
+      invoice.toObject ? invoice.toObject() : invoice,
+      {
+        businessName: biz?.businessName || '',
+        address:      biz?.address || '',
+        phone:        biz?.phone || '',
+        email:        biz?.email || '',
+        taxId:        biz?.taxId || biz?.ntn || '',
+      },
+      res
+    );
   } catch (err) { next(err); }
 };
 
