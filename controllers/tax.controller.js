@@ -16,7 +16,8 @@
 const Business           = require('../models/Business.model');
 const ChartOfAccount     = require('../models/ChartOfAccount.model');
 const taxEngine          = require('../services/taxEngine.service');
-const { getProfile, getSupportedCountries, getApplicableTaxes } = require('../config/countryTaxProfiles');
+const taxReport          = require('../services/taxReport.service');   // Phase 5.4.6
+const { getProfile, getSupportedCountries } = require('../config/countryTaxProfiles');
 const { SUPPORTED_COUNTRIES } = require('../config/constants');
 const { ApiError }       = require('../utils/ApiError');
 const logger             = require('../config/logger');
@@ -316,6 +317,86 @@ class TaxController {
       const country = config.country || 'PK';
       const profile = getProfile(country);
       res.json({ success: true, data: profile.whtSchedules, country });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/reports/ledger ────────────────────────────────────────────────
+  /**
+   * All tax transactions in a date range.
+   * Query: ?startDate=2025-01-01&endDate=2025-03-31
+   */
+  async taxLedger(req, res, next) {
+    try {
+      const { startDate, endDate } = req.query;
+      const data = await taxReport.getTaxLedger(req.businessId, {
+        startDate: startDate ? new Date(startDate) : null,
+        endDate:   endDate   ? new Date(endDate)   : null,
+      });
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/reports/summary ───────────────────────────────────────────────
+  /**
+   * Input vs output tax summary + net payable.
+   */
+  async taxSummary(req, res, next) {
+    try {
+      const { startDate, endDate } = req.query;
+      const { config } = await taxEngine.getBusinessTaxConfig(req.businessId);
+      const data = await taxReport.getTaxSummary(
+        req.businessId,
+        {
+          startDate: startDate ? new Date(startDate) : null,
+          endDate:   endDate   ? new Date(endDate)   : null,
+        },
+        config.country || 'PK'
+      );
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/reports/wht ───────────────────────────────────────────────────
+  /**
+   * WHT deducted per vendor for the period.
+   */
+  async whtSummary(req, res, next) {
+    try {
+      const { startDate, endDate } = req.query;
+      const data = await taxReport.getWhtSummary(req.businessId, {
+        startDate: startDate ? new Date(startDate) : null,
+        endDate:   endDate   ? new Date(endDate)   : null,
+      });
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/reports/filing ────────────────────────────────────────────────
+  /**
+   * Filing-ready summary structured for the business's country tax return.
+   * Pakistan → GST-101, UAE/SA → VAT-201, India → GSTR-3B
+   */
+  async filingSummary(req, res, next) {
+    try {
+      const { startDate, endDate } = req.query;
+      const { config } = await taxEngine.getBusinessTaxConfig(req.businessId);
+      const data = await taxReport.getFilingSummary(
+        req.businessId,
+        {
+          startDate: startDate ? new Date(startDate) : null,
+          endDate:   endDate   ? new Date(endDate)   : null,
+        },
+        config.country || 'PK'
+      );
+      res.json({ success: true, data });
     } catch (err) {
       next(err);
     }

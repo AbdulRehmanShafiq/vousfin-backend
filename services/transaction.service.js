@@ -147,6 +147,33 @@ class TransactionService {
             }
           }
 
+          // Phase 5.4.5: Auto-detect reverse charge from business country + vendor country
+          let autoReverseCharge = data.isReverseCharge || false;
+          if (!autoReverseCharge) {
+            try {
+              const { config: bCfg } = await taxEngine.getBusinessTaxConfig(data.businessId);
+              const businessCountry = bCfg.country || 'PK';
+
+              // If vendor has a country set, check if RC applies
+              let vendorCountry = null;
+              if (data.vendorId && bCfg.reverseChargeEnabled) {
+                const Vendor2 = require('../models/Vendor.model');
+                const vend2 = await Vendor2.findOne({ _id: data.vendorId, businessId: data.businessId }, 'country').lean();
+                vendorCountry = vend2?.country || null;
+              }
+
+              autoReverseCharge = taxEngine.shouldApplyReverseCharge({
+                businessCountry,
+                transactionType: data.transactionType,
+                isImportedService: data.isImportedService || false,
+                isReverseCharge:   data.isReverseCharge || false,
+                vendorCountry,
+              });
+            } catch (rcErr) {
+              logger.warn(`[RC] Reverse charge detection failed: ${rcErr.message}`);
+            }
+          }
+
           // If caller already set an explicit taxAmount, trust it (manual override)
           const explicitTaxAmount = (data.taxAmount && data.taxAmount > 0) ? data.taxAmount : null;
 
@@ -157,7 +184,7 @@ class TransactionService {
             mode:            data.taxInclusive !== false ? 'inclusive' : 'exclusive',
             overrideTaxType: data.taxType   || null,
             overrideTaxRate: autoWhtRate || data.taxRate || null,
-            isReverseCharge: data.isReverseCharge   || false,
+            isReverseCharge: autoReverseCharge,
             isImportedService: data.isImportedService || false,
             whtCategory:     autoWhtCategory,
             whtApply:        autoWhtApply,

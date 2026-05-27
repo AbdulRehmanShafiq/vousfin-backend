@@ -34,4 +34,10 @@ router.get('/profiles/:code',       validate(countryCodeParamSchema, 'params'), 
 router.get('/wht-schedules',        taxCtrl.getWhtSchedules);
 router.put('/vendor/:id/wht',       taxCtrl.updateVendorWht);
 
+// ── Reporting (Phase 5.4.6) ───────────────────────────────────────────────────
+router.get('/reports/ledger',       taxCtrl.taxLedger);      // ?startDate&endDate
+router.get('/reports/summary',      taxCtrl.taxSummary);     // input/output split
+router.get('/reports/wht',          taxCtrl.whtSummary);     // WHT per vendor
+router.get('/reports/filing',       taxCtrl.filingSummary);  // country-specific filing
+
 module.exports = router;

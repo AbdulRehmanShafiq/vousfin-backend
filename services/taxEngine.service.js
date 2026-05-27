@@ -389,6 +389,47 @@ async function isTaxEnabled(businessId) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Reverse Charge detection (Phase 5.4.5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Determine whether reverse charge applies for a given transaction context.
+ *
+ * Reverse charge triggers when:
+ *  - Business is in AE / SA / IN (RC-capable countries)
+ *  - Transaction is a PURCHASE type
+ *  - Vendor is outside the business country (isImportedService flag)
+ *  - OR explicit isReverseCharge flag set by caller
+ *
+ * @param {object} opts
+ * @param {string}  opts.businessCountry    - e.g. 'AE', 'SA', 'IN'
+ * @param {string}  opts.transactionType
+ * @param {boolean} opts.isImportedService
+ * @param {boolean} opts.isReverseCharge    - explicit caller flag
+ * @param {string}  [opts.vendorCountry]    - vendor's country code (from vendor profile)
+ * @returns {boolean}
+ */
+function shouldApplyReverseCharge({ businessCountry, transactionType, isImportedService, isReverseCharge, vendorCountry }) {
+  // Explicit override always wins
+  if (isReverseCharge === true)  return true;
+  if (isReverseCharge === false) return false;
+
+  const RC_COUNTRIES = ['AE', 'SA', 'IN', 'GB'];
+  if (!RC_COUNTRIES.includes(businessCountry)) return false;
+
+  const PURCHASE_TYPES = [
+    'Cash Purchase', 'Credit Purchase', 'Inventory Purchase',
+  ];
+  if (!PURCHASE_TYPES.includes(transactionType)) return false;
+
+  // Auto-trigger when vendor is from outside the business country
+  if (isImportedService) return true;
+  if (vendorCountry && vendorCountry !== businessCountry) return true;
+
+  return false;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Private helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -488,4 +529,5 @@ module.exports = {
   ensureTaxAccounts,
   getBusinessTaxConfig,
   isTaxEnabled,
+  shouldApplyReverseCharge,
 };
