@@ -22,6 +22,7 @@ router.get( '/convert',        fxRateCtrl.convertPreview);   // ?from=USD&to=PKR
 router.get( '/pairs',          fxRateCtrl.listPairs);        // distinct currency pairs
 router.get( '/latest',         fxRateCtrl.latestRates);      // most recent rate per pair
 router.post('/bulk',           validate(bulkUpsertFxRatesSchema), fxRateCtrl.bulkUpsertRates);
+router.post('/sync',           fxRateCtrl.syncRates);              // live rate fetch from open.er-api.com
 router.post('/revaluate',      validate(revaluationSchema),       fxRateCtrl.runRevaluation);
 
 // ── Collection ───────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ const connectDB = require('./config/database');
 const config = require('./config');
 const logger = require('./config/logger');
 const { scheduleAnomalyScan } = require('./jobs/anomalyScan.job');
+const { scheduleFxRateSync }  = require('./jobs/fxRateSync.job');
 const { initialize: initForecastingData } = require('./services/forecasting/dataLoader');
 const { ensureLSTMRunning, stopLSTM } = require('./utils/lstmService');
 
@@ -34,6 +35,13 @@ const startServer = async () => {
     if (scheduleAnomalyScan) {
       scheduleAnomalyScan();
       logger.info('⏰ Anomaly scan job scheduled');
+    }
+
+    // Step 3a: Schedule daily FX rate sync (live rates from open.er-api.com)
+    try {
+      scheduleFxRateSync();
+    } catch (err) {
+      logger.warn(`⚠️ FX rate sync job failed to schedule (non-fatal): ${err.message}`);
     }
 
     try {

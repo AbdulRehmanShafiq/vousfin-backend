@@ -1,7 +1,8 @@
 // controllers/fxRate.controller.js
-// CRUD for per-business exchange rates + month-end FX revaluation trigger.
+// CRUD for per-business exchange rates + live rate sync + month-end FX revaluation.
 const CurrencyRate         = require('../models/CurrencyRate.model');
 const fxService            = require('../services/fx.service');
+const rateSyncService      = require('../services/rateSync.service');
 const journalGenerator     = require('../services/journalGenerator.service');
 const { ApiError }         = require('../utils/ApiError');
 const logger               = require('../config/logger');
@@ -210,6 +211,35 @@ class FxRateController {
       res.json({ success: true, message: 'Exchange rate deleted' });
     } catch (err) {
       next(err);
+    }
+  }
+
+  // ── POST /fx-rates/sync ──────────────────────────────────────────────────────
+  /**
+   * Fetch live exchange rates from open.er-api.com (fallback: frankfurter.app)
+   * and upsert today's rates for the authenticated business.
+   *
+   * Body (optional):
+   *   currencies: string[]  — override default currency list
+   *
+   * Returns synced count, date, and the data source that responded.
+   */
+  async syncRates(req, res, next) {
+    try {
+      const businessId = req.businessId;
+      const currencies = Array.isArray(req.body?.currencies) ? req.body.currencies : undefined;
+
+      logger.info(`[FX] Manual rate sync triggered for business ${businessId}`);
+      const result = await rateSyncService.syncForBusiness(businessId, currencies);
+
+      res.json({
+        success: true,
+        message: `${result.synced} exchange rates updated from ${result.source}`,
+        data: result,
+      });
+    } catch (err) {
+      // Surface the real error so the frontend can show a useful message
+      next(new ApiError(502, `Live rate fetch failed: ${err.message}`));
     }
   }
 
