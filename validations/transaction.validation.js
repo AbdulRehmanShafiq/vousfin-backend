@@ -54,6 +54,17 @@ const createTransactionSchema = Joi.object({
   currencyCode:  Joi.string().length(3).uppercase().allow(null, '').optional(),
   exchangeRate:  Joi.number().positive().optional(),
 
+  // Tax Engine (Phase 5.4) — all optional; backend auto-calculates when tax is enabled
+  taxAmount:        Joi.number().min(0).precision(2).allow(null).optional(),
+  taxRate:          Joi.number().min(0).max(100).allow(null).optional(),
+  taxType:          Joi.string().max(30).uppercase().allow(null, '').optional(),
+  taxInclusive:     Joi.boolean().allow(null).optional(),
+  skipTax:          Joi.boolean().optional(),           // explicitly disable auto-tax for this txn
+  isReverseCharge:  Joi.boolean().optional(),           // AE/SA/IN reverse charge
+  isImportedService:Joi.boolean().optional(),           // RC trigger: supplier is outside country
+  whtCategory:      Joi.string().max(50).allow(null, '').optional(),  // e.g. 'services_company'
+  whtApply:         Joi.boolean().optional(),           // explicitly enable WHT on this transaction
+
   // Compound Entry Support (Optional)
   journalLines: Joi.array().items(journalLineSchema).optional(),
 }).custom((value, helpers) => {

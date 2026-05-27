@@ -10,7 +10,8 @@ const { ApiError } = require('../utils/ApiError');
 const { ENTITY_TYPES, TRANSACTION_TYPES, INPUT_METHODS, JOURNAL_STATUS, PAYMENT_STATUS, TRANSACTION_MODES, TRANSACTION_SOURCES } = require('../config/constants');
 const logger = require('../config/logger');
 const reportCache = require('../utils/reportCache');
-const fxService = require('./fx.service');
+const fxService    = require('./fx.service');
+const taxEngine    = require('./taxEngine.service');   // Phase 5.4
 // Phase 5.1: Period lock model (inline require to avoid circular deps)
 
 class TransactionService {
@@ -97,6 +98,95 @@ class TransactionService {
       logger.info(`Auto-inferred transactionType: ${data.transactionType} (debit: ${dn}/${dt}, credit: ${cn}/${ct})`);
     }
 
+    // 3c. Tax Engine (Phase 5.4) — auto-calculate GST/VAT/WHT when tax is enabled.
+    //  - Completely skipped when: business has no tax enabled, or caller sets skipTax=true
+    //  - If caller already provides taxAmount+taxType, we honour their values and only
+    //    generate the journal lines (no recalculation)
+    //  - Tax journal lines are accumulated into pendingTaxLines[] and merged later (step 7b)
+    //  - taxAmountTotal / taxResult are stored on entry for audit trail
+    let pendingTaxLines = [];
+    let taxMeta = null;
+
+    const skipTax = data.skipTax === true ||
+                    data.entryType === 'closing' ||
+                    data.entryType === 'opening_balance' ||
+                    data.transactionSource === 'system_generated';
+
+    if (!skipTax) {
+      try {
+        const taxEnabled = await taxEngine.isTaxEnabled(data.businessId);
+
+        if (taxEnabled) {
+          // If caller already set an explicit taxAmount, trust it (manual override)
+          const explicitTaxAmount = (data.taxAmount && data.taxAmount > 0) ? data.taxAmount : null;
+
+          const taxResult = await taxEngine.resolveApplicableTaxes({
+            businessId:      data.businessId,
+            transactionType: data.transactionType,
+            amount:          baseAmount,        // always use base-currency amount
+            mode:            data.taxInclusive !== false ? 'inclusive' : 'exclusive',
+            overrideTaxType: data.taxType   || null,
+            overrideTaxRate: data.taxRate   || null,
+            isReverseCharge: data.isReverseCharge   || false,
+            isImportedService: data.isImportedService || false,
+            whtCategory:     data.whtCategory  || null,
+            whtApply:        data.whtApply     || false,
+          });
+
+          if (taxResult.taxApplied && taxResult.lines.length > 0) {
+            // If explicit taxAmount was provided, override engine's calculation
+            const effectiveTaxAmount = explicitTaxAmount ?? taxResult.totalTax;
+            const primaryLine = taxResult.lines[0];
+
+            // Store tax metadata on the entry
+            taxMeta = {
+              taxAmount:   effectiveTaxAmount,
+              taxRate:     primaryLine.rate,
+              taxType:     primaryLine.taxType,
+              taxInclusive: data.taxInclusive !== false,
+            };
+
+            // Generate journal line descriptors
+            const { lines: taxJournalDescriptors } = taxEngine.generateTaxJournalLines(
+              data.transactionType,
+              baseAmount,
+              { ...taxResult, lines: explicitTaxAmount
+                  ? taxResult.lines.map(l => ({ ...l, taxAmount: effectiveTaxAmount }))
+                  : taxResult.lines,
+              },
+              {}
+            );
+
+            // Resolve account names → IDs for each tax journal line
+            for (const desc of taxJournalDescriptors) {
+              if (!desc.account) continue;
+              const taxAcct = await ChartOfAccount.findOne({
+                businessId: data.businessId,
+                accountName: { $regex: new RegExp(`^${desc.account.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') },
+              }).lean();
+
+              if (!taxAcct) {
+                logger.warn(`[Tax] Account "${desc.account}" not found for business ${data.businessId} — skipping tax line`);
+                continue;
+              }
+
+              pendingTaxLines.push({
+                type:      desc.debit > 0 ? 'debit' : 'credit',
+                accountId: taxAcct._id,
+                amount:    desc.debit > 0 ? desc.debit : desc.credit,
+                memo:      desc.memo,
+              });
+            }
+
+            logger.info(`[Tax] ${taxResult.countryCode} — ${taxResult.lines.map(l => `${l.taxType} ${l.rate}% = ${l.taxAmount}`).join(', ')}`);
+          }
+        }
+      } catch (taxErr) {
+        // Non-fatal: tax engine errors must never block a transaction
+        logger.warn(`[Tax] Engine error — continuing without tax. ${taxErr.message}`);
+      }
+    }
+
     // 4. Resolve customerName / vendorName → IDs (find or auto-create)
     if (!data.customerId && data.customerName?.trim()) {
       const customer = await customerRepository.findOrCreateByName(data.businessId, data.customerName.trim());
@@ -151,6 +241,13 @@ class TransactionService {
       periodId: resolvedPeriodId,
       fiscalYearId: resolvedFiscalYearId,
       entryType: data.entryType || 'normal',
+      // Phase 5.4 — persist tax metadata if tax was calculated
+      ...(taxMeta ? {
+        taxAmount:   taxMeta.taxAmount,
+        taxRate:     taxMeta.taxRate,
+        taxType:     taxMeta.taxType,
+        taxInclusive:taxMeta.taxInclusive,
+      } : {}),
     };
 
     // ── GAAP compliance: Account-pair determines AR/AP treatment ────────────────
@@ -256,7 +353,22 @@ class TransactionService {
       }
     }
 
-    // 7b. Multi-line journal validation
+    // 7b. Merge tax journal lines + validate balance
+    if (pendingTaxLines.length > 0) {
+      // Ensure a baseline journalLines array exists before appending tax lines
+      if (!entryData.journalLines || entryData.journalLines.length === 0) {
+        entryData.journalLines = [
+          { type: 'debit',  accountId: entryData.debitAccountId,  amount: baseAmount },
+          { type: 'credit', accountId: entryData.creditAccountId, amount: baseAmount },
+        ];
+      }
+      // Append each tax line
+      for (const tl of pendingTaxLines) {
+        entryData.journalLines.push(tl);
+      }
+      logger.info(`[Tax] Appended ${pendingTaxLines.length} tax journal line(s) to transaction`);
+    }
+
     if (entryData.journalLines && entryData.journalLines.length > 0) {
       let debits = 0, credits = 0;
       for (const line of entryData.journalLines) {
