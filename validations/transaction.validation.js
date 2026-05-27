@@ -54,7 +54,7 @@ const createTransactionSchema = Joi.object({
 
   // Multi-Currency (Phase 5.3)
   currencyCode:  Joi.string().length(3).uppercase().allow(null, '').optional(),
-  exchangeRate:  Joi.number().positive().optional(),
+  exchangeRate:  Joi.number().positive().allow(null).optional(),  // null when field cleared
 
   // Tax Engine (Phase 5.4) — all optional; backend auto-calculates when tax is enabled
   taxAmount:        Joi.number().min(0).precision(2).allow(null).optional(),
@@ -69,6 +69,10 @@ const createTransactionSchema = Joi.object({
 
   // Compound Entry Support (Optional)
   journalLines: Joi.array().items(journalLineSchema).optional(),
+
+  // Inventory (Phase 3.5) — set when an inventory item is linked to a sale/purchase
+  inventoryItemId: Joi.string().pattern(objectIdPattern).allow(null, '').optional(),
+  inventoryQty:    Joi.number().min(0).allow(null).optional(),
 }).custom((value, helpers) => {
   // Validate Debit != Credit
   if (value.debitAccountId === value.creditAccountId) {
@@ -143,13 +147,16 @@ const recordPaymentSchema = Joi.object({
  */
 const createInstallmentSchema = createTransactionSchema.keys({
   // Installment plan fields (required)
+  // Note: integer().min(1) is lenient — coerces string "12" → 12 automatically
   installmentCount:     Joi.number().integer().min(1).max(120).required(),
   installmentFrequency: Joi.string().valid('weekly', 'biweekly', 'monthly', 'quarterly').required(),
 
   // Installment plan fields (optional)
-  downPayment:          Joi.number().min(0).precision(2).default(0),
-  interestRate:         Joi.number().min(0).max(100).optional(),
-  interestMethod:       Joi.string().valid('reducing_balance', 'flat').optional(),
+  // allow(null) is required: react-hook-form valueAsNumber returns NaN for empty inputs;
+  // JSON.stringify converts NaN → null, so the backend receives null for cleared fields.
+  downPayment:          Joi.number().min(0).precision(2).allow(null).default(0),
+  interestRate:         Joi.number().min(0).max(100).allow(null).optional(),
+  interestMethod:       Joi.string().valid('reducing_balance', 'flat').allow(null, '').optional(),
   firstPaymentDate:     Joi.date().iso().allow(null, '').optional(),
 });
 
