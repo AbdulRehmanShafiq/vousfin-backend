@@ -16,6 +16,7 @@ const forecastRoutes = require('./v1/forecast.routes');
 const inventoryRoutes  = require('./v1/inventory.routes');
 const fiscalYearRoutes = require('./v1/fiscalYear.routes');
 const fxRateRoutes     = require('./v1/fxRate.routes');
+const taxRoutes        = require('./v1/tax.routes');        // Phase 5.4
 
 // Mount v1 routes under /api/v1
 router.use('/auth', authRoutes);
@@ -31,6 +32,7 @@ router.use('/forecast', forecastRoutes);
 router.use('/inventory',   inventoryRoutes);
 router.use('/fiscal-years', fiscalYearRoutes);
 router.use('/fx-rates',    fxRateRoutes);
+router.use('/tax',         taxRoutes);            // Phase 5.4
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
