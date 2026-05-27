@@ -23,16 +23,21 @@ const { calculateConfidence, evaluateReviewNeed } = require('../utils/confidence
  *   5. Validation
  *   6. Confidence & Review Assessment
  *
- * @param {string} rawInput - Natural language transaction description.
+ * @param {string} rawInput         - Natural language transaction description.
  * @param {Array}  businessAccounts - Live ChartOfAccount docs for CoA-aware parsing.
+ * @param {object} [opts]           - Optional context
+ * @param {string} [opts.countryCode] - Business country code for tax intelligence (Phase 5.4.7)
  * @returns {Promise<object>} Structured journal entry response.
  */
-async function parseTransaction(rawInput, businessAccounts = []) {
+async function parseTransaction(rawInput, businessAccounts = [], opts = {}) {
   // ── Step 1: AI Extraction — inject live accounts so Gemini uses real names ──
   const rawExtraction = await callGeminiAPI(rawInput, businessAccounts);
 
-  // ── Step 2: Normalization ──
-  const { normalized, confidence: rawConfidence } = normalizeExtraction(rawExtraction);
+  // ── Step 2: Normalization (Phase 5.4.7: pass rawText + countryCode for tax intelligence) ──
+  const { normalized, confidence: rawConfidence } = normalizeExtraction(rawExtraction, {
+    rawText:     rawInput,
+    countryCode: opts.countryCode || null,
+  });
 
   // ── Step 3 & 4: Journal Entry Generation (includes accounting rules) ──
   const journalEntries = generateJournalEntries(normalized);

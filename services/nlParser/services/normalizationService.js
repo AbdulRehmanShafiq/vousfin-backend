@@ -17,13 +17,17 @@ const { VALID_TRANSACTION_TYPES, CASH_FLOW_MAP } = require('../constants/transac
 const { ALL_SUBCATEGORIES } = require('../constants/subcategories');
 const { SOURCE_ACCOUNT_ALIASES } = require('../utils/accountMappings');
 const { resolveTaxType } = require('../utils/taxCalculator');
+const { enrichWithTaxIntelligence } = require('../utils/taxIntelligence'); // Phase 5.4.7
 
 /**
  * Normalize the raw AI-extracted data into clean, standardized values.
  * @param {object} rawExtraction - Raw data from Gemini API response.
+ * @param {object} [opts] - Optional context
+ * @param {string} [opts.rawText]     - Original user text for NLP tax detection
+ * @param {string} [opts.countryCode] - Business country code (Phase 5.4.7)
  * @returns {{ normalized: object, confidence: object }}
  */
-function normalizeExtraction(rawExtraction) {
+function normalizeExtraction(rawExtraction, opts = {}) {
   const transactionType = normalizeTransactionType(rawExtraction.transactionType);
 
   const normalized = {
@@ -100,6 +104,12 @@ function normalizeExtraction(rawExtraction) {
 
   // Build confidence from AI scores + normalization adjustments
   const confidence = normalizeConfidenceScores(rawExtraction.confidence, normalized, dateResult);
+
+  // Phase 5.4.7 — Enrich with country-profile-aware tax intelligence
+  // Only fires when country is provided; completely non-invasive if country is absent
+  if (opts.countryCode) {
+    enrichWithTaxIntelligence(normalized, opts.rawText || '', opts.countryCode);
+  }
 
   return { normalized, confidence };
 }
