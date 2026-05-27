@@ -72,6 +72,25 @@ const vendorSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+
+    // ── Phase 5.4.4 — WHT Profile ────────────────────────────────────────────
+    /**
+     * Withholding Tax profile for this vendor.
+     * When enabled, every payment to this vendor auto-deducts WHT at source.
+     */
+    whtProfile: {
+      enabled:     { type: Boolean, default: false },
+      // WHT schedule category — maps to country profile whtSchedules[].category
+      // Pakistan examples: 'services_company' | 'services_individual' | 'goods_company' | 'rent_filer'
+      // India examples: 'tds_contractor' | 'tds_professional' | 'tds_rent'
+      category:    { type: String, default: null, trim: true },
+      // Is vendor a non-filer? (Pakistan: higher rates for non-filers)
+      isNonFiler:  { type: Boolean, default: false },
+      // Optional rate override (beats schedule default)
+      customRate:  { type: Number, default: null, min: 0, max: 100 },
+      // Vendor's STRN (Sales Tax Registration Number) — for Pakistan WHT receipts
+      strn:        { type: String, default: null, trim: true, maxlength: 30 },
+    },
   },
   {
     timestamps: true,

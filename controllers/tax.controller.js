@@ -268,6 +268,58 @@ class TaxController {
       next(err);
     }
   }
+
+  // ── PUT /tax/vendor/:id/wht ────────────────────────────────────────────────
+  /**
+   * Update the WHT profile on a vendor (Phase 5.4.4).
+   * Replaces the vendor's whtProfile subdocument.
+   *
+   * Body: { enabled, category, isNonFiler, customRate, strn }
+   */
+  async updateVendorWht(req, res, next) {
+    try {
+      const Vendor = require('../models/Vendor.model');
+      const { id } = req.params;
+      const { enabled, category, isNonFiler, customRate, strn } = req.body;
+
+      const vendor = await Vendor.findOneAndUpdate(
+        { _id: id, businessId: req.businessId },
+        {
+          $set: {
+            'whtProfile.enabled':    !!enabled,
+            'whtProfile.category':   category   || null,
+            'whtProfile.isNonFiler': !!isNonFiler,
+            'whtProfile.customRate': customRate  ?? null,
+            'whtProfile.strn':       strn        || null,
+          },
+        },
+        { new: true, runValidators: true }
+      ).lean();
+
+      if (!vendor) throw new ApiError(404, 'Vendor not found');
+
+      logger.info(`[WHT] Updated WHT profile for vendor ${id}, category: ${category}, enabled: ${enabled}`);
+      res.json({ success: true, data: vendor.whtProfile, message: 'Vendor WHT profile updated' });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/wht-schedules ─────────────────────────────────────────────────
+  /**
+   * Return WHT schedules for the business's current country.
+   * Used to populate the WHT category dropdown on the vendor form.
+   */
+  async getWhtSchedules(req, res, next) {
+    try {
+      const { config } = await taxEngine.getBusinessTaxConfig(req.businessId);
+      const country = config.country || 'PK';
+      const profile = getProfile(country);
+      res.json({ success: true, data: profile.whtSchedules, country });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 module.exports = new TaxController();

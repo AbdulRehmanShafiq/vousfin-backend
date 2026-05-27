@@ -30,4 +30,8 @@ router.post('/preview',             validate(taxPreviewSchema),                 
 router.get('/profiles',             taxCtrl.listProfiles);
 router.get('/profiles/:code',       validate(countryCodeParamSchema, 'params'), taxCtrl.getProfile);
 
+// ── WHT (Phase 5.4.4) ────────────────────────────────────────────────────────
+router.get('/wht-schedules',        taxCtrl.getWhtSchedules);
+router.put('/vendor/:id/wht',       taxCtrl.updateVendorWht);
+
 module.exports = router;

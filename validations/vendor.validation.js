@@ -1,6 +1,15 @@
 // validations/vendor.validation.js
 const Joi = require('joi');
 
+// Phase 5.4.4 — WHT profile sub-schema
+const whtProfileSchema = Joi.object({
+  enabled:    Joi.boolean().default(false),
+  category:   Joi.string().max(50).allow(null, '').optional(),
+  isNonFiler: Joi.boolean().optional(),
+  customRate: Joi.number().min(0).max(100).allow(null).optional(),
+  strn:       Joi.string().max(30).allow(null, '').trim().optional(),
+});
+
 const createVendorSchema = Joi.object({
   vendorName: Joi.string().min(2).max(150).required().trim().messages({
     'string.min': 'Vendor name must be at least 2 characters',
@@ -15,6 +24,8 @@ const createVendorSchema = Joi.object({
   paymentTerms: Joi.string().max(100).allow('', null).trim().optional(),
   notes: Joi.string().max(500).allow('', null).trim().optional(),
   isActive: Joi.boolean().default(true).optional(),
+  // Phase 5.4.4 — WHT profile (optional)
+  whtProfile: whtProfileSchema.optional(),
 });
 
 const updateVendorSchema = Joi.object({
@@ -27,6 +38,8 @@ const updateVendorSchema = Joi.object({
   paymentTerms: Joi.string().max(100).allow('', null).trim().optional(),
   notes: Joi.string().max(500).allow('', null).trim().optional(),
   isActive: Joi.boolean().optional(),
+  // Phase 5.4.4 — WHT profile
+  whtProfile: whtProfileSchema.optional(),
 }).min(1);
 
 const vendorIdParamSchema = Joi.object({

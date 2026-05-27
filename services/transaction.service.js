@@ -117,6 +117,36 @@ class TransactionService {
         const taxEnabled = await taxEngine.isTaxEnabled(data.businessId);
 
         if (taxEnabled) {
+          // Phase 5.4.4: Auto-detect WHT from vendor profile when vendorId is present
+          let autoWhtCategory = data.whtCategory || null;
+          let autoWhtApply    = data.whtApply    || false;
+          let autoWhtRate     = null;
+
+          if (data.vendorId && !autoWhtApply) {
+            try {
+              const Vendor = require('../models/Vendor.model');
+              const vendor = await Vendor.findOne({
+                _id: data.vendorId, businessId: data.businessId,
+              }, 'whtProfile').lean();
+
+              if (vendor?.whtProfile?.enabled && vendor.whtProfile.category) {
+                autoWhtCategory = vendor.whtProfile.category;
+                autoWhtApply    = true;
+                // Non-filer rate override: taxEngine reads isNonFiler from the schedule
+                if (vendor.whtProfile.customRate != null) {
+                  autoWhtRate = vendor.whtProfile.customRate;
+                } else if (vendor.whtProfile.isNonFiler) {
+                  // Signal to engine to use rateNonFiler — pass via overrideTaxRate = -1 sentinel
+                  // The engine resolves actual non-filer rate from the schedule
+                  autoWhtRate = null; // taxEngine._buildWhtLine handles isNonFiler via vendor flag
+                }
+                logger.info(`[WHT] Auto-applying WHT from vendor profile: ${autoWhtCategory}`);
+              }
+            } catch (vErr) {
+              logger.warn(`[WHT] Vendor profile lookup failed: ${vErr.message}`);
+            }
+          }
+
           // If caller already set an explicit taxAmount, trust it (manual override)
           const explicitTaxAmount = (data.taxAmount && data.taxAmount > 0) ? data.taxAmount : null;
 
@@ -126,11 +156,11 @@ class TransactionService {
             amount:          baseAmount,        // always use base-currency amount
             mode:            data.taxInclusive !== false ? 'inclusive' : 'exclusive',
             overrideTaxType: data.taxType   || null,
-            overrideTaxRate: data.taxRate   || null,
+            overrideTaxRate: autoWhtRate || data.taxRate || null,
             isReverseCharge: data.isReverseCharge   || false,
             isImportedService: data.isImportedService || false,
-            whtCategory:     data.whtCategory  || null,
-            whtApply:        data.whtApply     || false,
+            whtCategory:     autoWhtCategory,
+            whtApply:        autoWhtApply,
           });
 
           if (taxResult.taxApplied && taxResult.lines.length > 0) {
