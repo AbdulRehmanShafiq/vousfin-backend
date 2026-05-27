@@ -704,9 +704,18 @@ class TransactionService {
 
     delete updateData.businessId;
 
-    const amountChanged = updateData.amount && updateData.amount !== original.amount;
-    const debitChanged = updateData.debitAccountId && updateData.debitAccountId.toString() !== original.debitAccountId._id.toString();
-    const creditChanged = updateData.creditAccountId && updateData.creditAccountId.toString() !== original.creditAccountId._id.toString();
+    const amountChanged = updateData.amount != null && updateData.amount !== original.amount;
+    const debitChanged = updateData.debitAccountId &&
+      updateData.debitAccountId.toString() !== original.debitAccountId._id.toString();
+    const creditChanged = updateData.creditAccountId &&
+      updateData.creditAccountId.toString() !== original.creditAccountId._id.toString();
+
+    // Strip account IDs that haven't actually changed.
+    // This prevents Mongoose's creditAccountId custom validator from running inside
+    // findOneAndUpdate (runValidators:true) where `this.debitAccountId` is undefined
+    // and `undefined.toString()` throws — producing a false "Validation failed" 400.
+    if (!debitChanged)  delete updateData.debitAccountId;
+    if (!creditChanged) delete updateData.creditAccountId;
 
     // Prevent changing amount on AR/AP transactions if it breaks balance logic (simplified for Phase 1)
     if (amountChanged && (original.transactionType === TRANSACTION_TYPES.CREDIT_SALE || original.transactionType === TRANSACTION_TYPES.CREDIT_PURCHASE)) {
