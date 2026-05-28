@@ -84,9 +84,14 @@ const getAccounts = async (req, res, next) => {
       throw new ApiError(404, 'Business profile not found');
     }
 
-    // Silently backfill any default accounts introduced after this business
-    // was created. Fire-and-forget: if sync fails, accounts are still returned.
-    accountRepository.syncMissingDefaults(business._id).catch(() => {});
+    // Await sync BEFORE fetching so this very response already includes any
+    // accounts that were missing.  syncMissingDefaults is idempotent and fast
+    // after the first run (returns {inserted:0} immediately on subsequent calls).
+    try {
+      await accountRepository.syncMissingDefaults(business._id);
+    } catch (_) {
+      // Sync failure is non-fatal — still return whatever accounts exist
+    }
 
     const { accountType } = req.query;
     // findByBusiness returns ALL accounts sorted by accountType → accountName.

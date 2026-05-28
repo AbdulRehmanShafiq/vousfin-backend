@@ -120,66 +120,102 @@ module.exports = {
    *               normalBalance, isDefault }
    */
   DEFAULT_ACCOUNTS: [
-    // 1000s — Assets / Bank and Cash
-    { accountCode: '1010', accountName: 'Cash at Bank',                accountType: 'Asset',     accountSubtype: 'Bank and Cash',          normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '1020', accountName: 'Cash on Hand',                accountType: 'Asset',     accountSubtype: 'Bank and Cash',          normalBalance: 'Debit',  isDefault: true },
+    // ─── 1000s — Assets: Bank & Cash ─────────────────────────────────────────
+    { accountCode: '1010', accountName: 'Cash at Bank',                  accountType: 'Asset',     accountSubtype: 'Bank and Cash',           normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1020', accountName: 'Cash on Hand',                  accountType: 'Asset',     accountSubtype: 'Bank and Cash',           normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1030', accountName: 'Petty Cash',                    accountType: 'Asset',     accountSubtype: 'Bank and Cash',           normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1040', accountName: 'Savings Account',               accountType: 'Asset',     accountSubtype: 'Bank and Cash',           normalBalance: 'Debit',  isDefault: true },
 
-    // 1100s — Current Assets
-    { accountCode: '1110', accountName: 'Accounts Receivable',         accountType: 'Asset',     accountSubtype: 'Current Assets',         normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '1120', accountName: 'Prepaid Expenses',            accountType: 'Asset',     accountSubtype: 'Current Assets',         normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '1150', accountName: 'Inventory',                   accountType: 'Asset',     accountSubtype: 'Current Assets',         normalBalance: 'Debit',  isDefault: true },
+    // ─── 1100s — Assets: Current ──────────────────────────────────────────────
+    { accountCode: '1110', accountName: 'Accounts Receivable',           accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1120', accountName: 'Prepaid Expenses',              accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1130', accountName: 'Short-term Deposits',           accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1140', accountName: 'Other Receivables',             accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1150', accountName: 'Inventory',                     accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1160', accountName: 'Advance Payments to Suppliers', accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
 
-    // 1200s — Non-current Assets
-    { accountCode: '1210', accountName: 'Furniture and Fittings',      accountType: 'Asset',     accountSubtype: 'Non-current Assets',     normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '1220', accountName: 'Office Equipment',            accountType: 'Asset',     accountSubtype: 'Non-current Assets',     normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '1230', accountName: 'Company Car',                 accountType: 'Asset',     accountSubtype: 'Non-current Assets',     normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '1250', accountName: 'Accumulated Depreciation',    accountType: 'Asset',     accountSubtype: 'Non-current Assets',     normalBalance: 'Credit', isDefault: true },
+    // ─── 1200s — Assets: Non-current ─────────────────────────────────────────
+    { accountCode: '1210', accountName: 'Furniture and Fittings',        accountType: 'Asset',     accountSubtype: 'Non-current Assets',      normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1220', accountName: 'Office Equipment',              accountType: 'Asset',     accountSubtype: 'Non-current Assets',      normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1230', accountName: 'Company Car',                   accountType: 'Asset',     accountSubtype: 'Non-current Assets',      normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1240', accountName: 'Computer & IT Equipment',       accountType: 'Asset',     accountSubtype: 'Non-current Assets',      normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1245', accountName: 'Leasehold Improvements',        accountType: 'Asset',     accountSubtype: 'Non-current Assets',      normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1250', accountName: 'Accumulated Depreciation',      accountType: 'Asset',     accountSubtype: 'Non-current Assets',      normalBalance: 'Credit', isDefault: true },
+    { accountCode: '1260', accountName: 'Security Deposit (Refundable)', accountType: 'Asset',     accountSubtype: 'Non-current Assets',      normalBalance: 'Debit',  isDefault: true },
 
-    // 2100s — Current Liabilities
-    { accountCode: '2110', accountName: 'Accounts Payable',            accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2120', accountName: 'GST Payable',                 accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2125', accountName: 'WHT Payable',                 accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2130', accountName: "Director's Loan",             accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2140', accountName: 'Wages Payable',               accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2150', accountName: 'PAYG Withholding Payable',    accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2160', accountName: 'Superannuation Payable',      accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2170', accountName: 'Unearned Revenue',            accountType: 'Liability', accountSubtype: 'Current Liabilities',    normalBalance: 'Credit', isDefault: true },
+    // ─── 2100s — Liabilities: Current ────────────────────────────────────────
+    { accountCode: '2110', accountName: 'Accounts Payable',              accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2120', accountName: 'GST Payable',                   accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2125', accountName: 'WHT Payable',                   accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2130', accountName: "Director's Loan",               accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2140', accountName: 'Wages Payable',                 accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2150', accountName: 'PAYG Withholding Payable',      accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2160', accountName: 'Superannuation Payable',        accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2170', accountName: 'Unearned Revenue',              accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2180', accountName: 'Income Tax Payable',            accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2190', accountName: 'Advance from Customers',        accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2195', accountName: 'Other Payables & Accruals',     accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
 
-    // 2200s — Non-current Liabilities
-    { accountCode: '2210', accountName: 'Company Car Loan',            accountType: 'Liability', accountSubtype: 'Non-current Liabilities', normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2220', accountName: 'Equipment Loan',              accountType: 'Liability', accountSubtype: 'Non-current Liabilities', normalBalance: 'Credit', isDefault: true },
-    { accountCode: '2230', accountName: 'Loan Payable',               accountType: 'Liability', accountSubtype: 'Non-current Liabilities', normalBalance: 'Credit', isDefault: true },
+    // ─── 2200s — Liabilities: Non-current ────────────────────────────────────
+    { accountCode: '2210', accountName: 'Company Car Loan',              accountType: 'Liability', accountSubtype: 'Non-current Liabilities', normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2220', accountName: 'Equipment Loan',                accountType: 'Liability', accountSubtype: 'Non-current Liabilities', normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2230', accountName: 'Loan Payable',                  accountType: 'Liability', accountSubtype: 'Non-current Liabilities', normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2240', accountName: 'Mortgage / Property Loan',      accountType: 'Liability', accountSubtype: 'Non-current Liabilities', normalBalance: 'Credit', isDefault: true },
 
-    // 3000s — Equity
-    { accountCode: '3110', accountName: 'Capital / Investment',        accountType: 'Equity',    accountSubtype: 'Equity',                 normalBalance: 'Credit', isDefault: true },
-    { accountCode: '3120', accountName: 'Distributions / Drawings',    accountType: 'Equity',    accountSubtype: 'Equity',                 normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '3210', accountName: 'Retained Earnings',           accountType: 'Equity',    accountSubtype: 'Equity',                 normalBalance: 'Credit', isDefault: true },
-    { accountCode: '3310', accountName: 'Current Year Earnings',       accountType: 'Equity',    accountSubtype: 'Equity',                 normalBalance: 'Credit', isDefault: true },
+    // ─── 3000s — Equity ───────────────────────────────────────────────────────
+    { accountCode: '3110', accountName: 'Capital / Investment',          accountType: 'Equity',    accountSubtype: 'Equity',                  normalBalance: 'Credit', isDefault: true },
+    { accountCode: '3120', accountName: 'Distributions / Drawings',      accountType: 'Equity',    accountSubtype: 'Equity',                  normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '3210', accountName: 'Retained Earnings',             accountType: 'Equity',    accountSubtype: 'Equity',                  normalBalance: 'Credit', isDefault: true },
+    { accountCode: '3310', accountName: 'Current Year Earnings',         accountType: 'Equity',    accountSubtype: 'Equity',                  normalBalance: 'Credit', isDefault: true },
 
-    // 4000s — Revenue
-    { accountCode: '4110', accountName: 'Sales',                       accountType: 'Revenue',   accountSubtype: 'Revenue',                normalBalance: 'Credit', isDefault: true },
-    { accountCode: '4120', accountName: 'Other Revenue',               accountType: 'Revenue',   accountSubtype: 'Revenue',                normalBalance: 'Credit', isDefault: true },
-    { accountCode: '4130', accountName: 'Interest Income',             accountType: 'Revenue',   accountSubtype: 'Revenue',                normalBalance: 'Credit', isDefault: true },
+    // ─── 4000s — Revenue ──────────────────────────────────────────────────────
+    { accountCode: '4110', accountName: 'Sales',                         accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
+    { accountCode: '4115', accountName: 'Sales Returns & Allowances',    accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '4120', accountName: 'Other Revenue',                 accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
+    { accountCode: '4130', accountName: 'Interest Income',               accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
+    { accountCode: '4140', accountName: 'FX Gain on Exchange',           accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
+    { accountCode: '4150', accountName: 'Service / Consultancy Revenue', accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
+    { accountCode: '4160', accountName: 'Rental Income',                 accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
+    { accountCode: '4170', accountName: 'Commission Income',             accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
+    { accountCode: '4180', accountName: 'Discount Received',             accountType: 'Revenue',   accountSubtype: 'Revenue',                 normalBalance: 'Credit', isDefault: true },
 
-    // 5000s — Direct Cost (COGS)
-    { accountCode: '5110', accountName: 'Cost of Goods Sold',          accountType: 'Expense',   accountSubtype: 'Direct Cost',            normalBalance: 'Debit',  isDefault: true },
+    // ─── 5000s — Direct Cost (COGS) ───────────────────────────────────────────
+    { accountCode: '5110', accountName: 'Cost of Goods Sold',            accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '5120', accountName: 'Direct Labour',                 accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '5130', accountName: 'Direct Materials',              accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '5140', accountName: 'Subcontractor Costs',           accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
 
-    // 6000s — Expenses
-    { accountCode: '6110', accountName: 'Rent',                        accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6120', accountName: 'Bank Fees',                   accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6130', accountName: 'Company Car Expenses',        accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6140', accountName: 'Website Hosting',             accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6150', accountName: 'Utilities',                   accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6160', accountName: 'Advertising',                 accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6170', accountName: 'Freight',                     accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6180', accountName: 'Wages and Salaries',          accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6190', accountName: 'Superannuation',              accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '4140', accountName: 'FX Gain on Exchange',          accountType: 'Revenue',   accountSubtype: 'Revenue',                normalBalance: 'Credit', isDefault: true },
-    { accountCode: '6200', accountName: 'FX Loss on Exchange',         accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6210', accountName: 'Unrealised FX Gain/Loss',     accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6220', accountName: 'Bank Currency Revaluations',  accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6230', accountName: 'Depreciation Expense',        accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
-    { accountCode: '6240', accountName: 'Interest Expense',            accountType: 'Expense',   accountSubtype: 'Expenses',               normalBalance: 'Debit',  isDefault: true },
+    // ─── 6000s — Expenses ─────────────────────────────────────────────────────
+    { accountCode: '6110', accountName: 'Rent',                          accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6120', accountName: 'Bank Fees & Charges',           accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6130', accountName: 'Company Car Expenses',          accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6140', accountName: 'Website Hosting',               accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6150', accountName: 'Utilities (Electricity & Gas)', accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6160', accountName: 'Advertising & Marketing',       accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6170', accountName: 'Freight & Delivery',            accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6180', accountName: 'Wages and Salaries',            accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6190', accountName: 'Superannuation',                accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6200', accountName: 'FX Loss on Exchange',           accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6210', accountName: 'Unrealised FX Gain/Loss',       accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6220', accountName: 'Bank Currency Revaluations',    accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6230', accountName: 'Depreciation Expense',          accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6240', accountName: 'Interest Expense',              accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    // ── Commonly-needed expenses (ensure all businesses have these) ──────────
+    { accountCode: '6250', accountName: 'Office Supplies & Stationery',  accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6260', accountName: 'Professional / Legal Fees',     accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6270', accountName: 'Insurance',                     accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6280', accountName: 'Travel & Entertainment',        accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6290', accountName: 'Telephone & Internet',          accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6300', accountName: 'Repairs & Maintenance',         accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6310', accountName: 'Software & Subscriptions',      accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6320', accountName: 'Printing & Postage',            accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6330', accountName: 'Training & Development',        accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6340', accountName: 'Medical & Health Expenses',     accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6350', accountName: 'Security Services',             accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6360', accountName: 'Cleaning & Janitorial',         accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6370', accountName: 'Bad Debt Expense',              accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6380', accountName: 'Donation & Charitable Giving',  accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '6390', accountName: 'Miscellaneous Expenses',        accountType: 'Expense',   accountSubtype: 'Expenses',                normalBalance: 'Debit',  isDefault: true },
 
     // ── Tax Engine accounts (Phase 5.4) ── seeded only when business enables tax ──
     // Codes 1170–1177 (receivable / input tax assets) and 2121–2130 (payable liabilities)
