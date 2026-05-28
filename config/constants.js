@@ -368,6 +368,10 @@ module.exports = {
     // ── Phase 1: First-class Invoice / Bill domain entities ───────────────────
     INVOICE:           'invoice',
     BILL:              'bill',
+    // ── Phase 3.1: Procurement entities ──────────────────────────────────────
+    PURCHASE_ORDER:    'purchaseOrder',
+    GOODS_RECEIPT:     'goodsReceipt',
+    VENDOR_CREDIT:     'vendorCredit',
   },
 
   // ===============================
@@ -545,6 +549,65 @@ module.exports = {
 
   /** Countries with full tax engine support (ISO 3166-1 alpha-2) */
   SUPPORTED_COUNTRIES: ['PK', 'AE', 'SA', 'IN', 'US', 'GB'],
+
+  // ===============================
+  // Phase 3.1 — Purchase Order State Machine
+  // Lifecycle:
+  //   draft → pending_approval → approved → partially_received / fully_received → billed → closed
+  //                                       → cancelled (terminal)
+  // ===============================
+  PO_STATES: {
+    DRAFT:               'draft',
+    PENDING_APPROVAL:    'pending_approval',
+    APPROVED:            'approved',
+    PARTIALLY_RECEIVED:  'partially_received',
+    FULLY_RECEIVED:      'fully_received',
+    BILLED:              'billed',
+    CLOSED:              'closed',
+    CANCELLED:           'cancelled',
+  },
+
+  PO_TRANSITIONS: {
+    draft:               ['pending_approval', 'approved', 'cancelled'],
+    pending_approval:    ['approved', 'draft', 'cancelled'],          // draft = rejected back
+    approved:            ['partially_received', 'fully_received', 'cancelled'],
+    partially_received:  ['fully_received', 'billed', 'cancelled'],
+    fully_received:      ['billed', 'closed', 'cancelled'],
+    billed:              ['closed', 'cancelled'],
+    closed:              [],   // terminal
+    cancelled:           [],   // terminal
+  },
+
+  // ===============================
+  // Phase 3.1 — Goods Receipt Note (GRN) State Machine
+  // Lifecycle: draft → confirmed → discrepancy_reported / reconciled
+  // ===============================
+  GRN_STATES: {
+    DRAFT:                'draft',
+    CONFIRMED:            'confirmed',
+    DISCREPANCY_REPORTED: 'discrepancy_reported',
+    RECONCILED:           'reconciled',
+    CANCELLED:            'cancelled',
+  },
+
+  GRN_TRANSITIONS: {
+    // draft can directly reach discrepancy_reported when confirm() detects issues
+    draft:                ['confirmed', 'discrepancy_reported', 'cancelled'],
+    confirmed:            ['discrepancy_reported', 'reconciled', 'cancelled'],
+    discrepancy_reported: ['reconciled', 'cancelled'],
+    reconciled:           [],  // terminal
+    cancelled:            [],  // terminal
+  },
+
+  // ===============================
+  // Phase 3.1 — Vendor Credit State Machine
+  // ===============================
+  VENDOR_CREDIT_STATES: {
+    OPEN:      'open',
+    PARTIALLY_APPLIED: 'partially_applied',
+    FULLY_APPLIED:     'fully_applied',
+    CANCELLED:         'cancelled',
+  },
 
   // ===============================
   // API & Pagination Constants

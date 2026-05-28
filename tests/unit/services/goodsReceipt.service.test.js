@@ -1,0 +1,226 @@
+// tests/unit/services/goodsReceipt.service.test.js
+//
+// Phase 3.1 — Unit tests for goodsReceipt.service.js.
+//
+jest.mock('../../../services/audit.service');
+jest.mock('../../../services/purchaseOrder.service', () => ({
+  recordGrnReceipt: jest.fn().mockResolvedValue({}),
+}));
+
+jest.mock('../../../models/PurchaseOrder.model', () => {
+  const mongoose = require('mongoose');
+  const po = {
+    _id:       new mongoose.Types.ObjectId(),
+    state:     'approved',
+    vendorId:  new mongoose.Types.ObjectId(),
+    lineItems: [
+      { _id: new mongoose.Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa'), name: 'Widget', quantityOrdered: 10, unitPrice: 500, unit: 'pcs' },
+      { _id: new mongoose.Types.ObjectId('bbbbbbbbbbbbbbbbbbbbbbbb'), name: 'Gadget', quantityOrdered: 5,  unitPrice: 200, unit: 'pcs' },
+    ],
+  };
+  return {
+    findOne:     jest.fn().mockResolvedValue(po),
+    findById:    jest.fn().mockResolvedValue(po),
+    __mockPO: po,
+  };
+});
+
+jest.mock('../../../models/GoodsReceipt.model', () => {
+  const stateStore = new Map();
+  const mongoose   = require('mongoose');
+  const { GRN_TRANSITIONS } = require('../../../config/constants');
+
+  function makeDoc(props) {
+    const doc = {
+      ...props,
+      _id:           props._id          || new mongoose.Types.ObjectId(),
+      discrepancies: props.discrepancies || [],
+      receivedItems: props.receivedItems || [],
+      linkedBillIds: props.linkedBillIds || [],
+      stateHistory:  props.stateHistory  || [],
+      isArchived:    !!props.isArchived,
+      recordStateChange(toState, actor, reason) {
+        this.stateHistory.push({ fromState: this.state, toState, actorId: actor._id, reason, timestamp: new Date() });
+      },
+      async save() { stateStore.set(String(this._id), this); return this; },
+      toObject() { return { ...this }; },
+    };
+    return doc;
+  }
+
+  const makeQ = (result) => {
+    const q = {
+      sort:     () => q,
+      lean:     () => Promise.resolve(result),
+      populate: () => q,
+      then:     (res, rej) => Promise.resolve(result).then(res, rej),
+    };
+    return q;
+  };
+
+  function GoodsReceipt(props) { return makeDoc(props); }
+  GoodsReceipt.canTransition = (from, to) => {
+    if (from === to) return true;
+    const allowed = GRN_TRANSITIONS[from];
+    return Array.isArray(allowed) && allowed.includes(to);
+  };
+  GoodsReceipt.findById = (id) => makeQ(stateStore.get(String(id)) || null);
+  GoodsReceipt.findOne  = ()   => makeQ(null);
+  GoodsReceipt.find     = ()   => makeQ(Array.from(stateStore.values()));
+  GoodsReceipt.countDocuments = async () => stateStore.size;
+  GoodsReceipt.__reset = () => stateStore.clear();
+  return GoodsReceipt;
+});
+
+const GoodsReceipt  = require('../../../models/GoodsReceipt.model');
+const PurchaseOrder = require('../../../models/PurchaseOrder.model');
+const grnService    = require('../../../services/goodsReceipt.service');
+const auditService  = require('../../../services/audit.service');
+const poService     = require('../../../services/purchaseOrder.service');
+
+const USER = { _id: 'u1', fullName: 'Bob Warehouse', email: 'bob@x', role: 'warehouse' };
+const BIZ  = 'biz1';
+
+const PO_ID   = PurchaseOrder.__mockPO._id;
+const LINE_1  = PurchaseOrder.__mockPO.lineItems[0]._id;
+const LINE_2  = PurchaseOrder.__mockPO.lineItems[1]._id;
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  GoodsReceipt.__reset();
+  auditService.log       = jest.fn().mockResolvedValue(undefined);
+  auditService.logCreate = jest.fn().mockResolvedValue(undefined);
+  auditService.logDelete = jest.fn().mockResolvedValue(undefined);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('grnService.createDraft()', () => {
+  const baseData = {
+    businessId:     BIZ,
+    purchaseOrderId: PO_ID,
+    receivedDate:   new Date(),
+    receivedItems:  [
+      { poLineItemId: LINE_1, name: 'Widget', quantityOrdered: 10, quantityReceived: 10, unitCost: 500 },
+    ],
+  };
+
+  test('creates a GRN in DRAFT state linked to the PO', async () => {
+    const grn = await grnService.createDraft(baseData, USER);
+    expect(grn.state).toBe('draft');
+    expect(String(grn.purchaseOrderId)).toBe(String(PO_ID));
+    expect(grn.stateHistory).toHaveLength(1);
+  });
+
+  test('auto-generates grnNumber', async () => {
+    const grn = await grnService.createDraft(baseData, USER);
+    expect(grn.grnNumber).toMatch(/^GRN-\d{6}-\d{5}$/);
+  });
+
+  test('throws 400 when receivedItems is empty', async () => {
+    await expect(
+      grnService.createDraft({ ...baseData, receivedItems: [] }, USER)
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  test('throws 404 when PO not found', async () => {
+    PurchaseOrder.findOne.mockResolvedValueOnce(null);
+    await expect(grnService.createDraft(baseData, USER)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  test('throws 409 when PO is not in a receivable state', async () => {
+    PurchaseOrder.findOne.mockResolvedValueOnce({ ...PurchaseOrder.__mockPO, state: 'draft' });
+    await expect(grnService.createDraft(baseData, USER)).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('grnService.confirm()', () => {
+  async function makeDraftGRN(receivedItems) {
+    return grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(), receivedItems },
+      USER
+    );
+  }
+
+  test('confirms without discrepancy when quantities match', async () => {
+    const grn = await makeDraftGRN([
+      { poLineItemId: LINE_1, name: 'Widget', quantityOrdered: 10, quantityReceived: 10, unitCost: 500 },
+    ]);
+    const confirmed = await grnService.confirm(grn._id, USER, '127.0.0.1');
+    expect(confirmed.state).toBe('confirmed');
+    expect(confirmed.discrepancies).toHaveLength(0);
+    expect(poService.recordGrnReceipt).toHaveBeenCalledTimes(1);
+  });
+
+  test('moves to discrepancy_reported when quantity short', async () => {
+    const grn = await makeDraftGRN([
+      { poLineItemId: LINE_1, name: 'Widget', quantityOrdered: 10, quantityReceived: 7, unitCost: 500 },
+    ]);
+    const confirmed = await grnService.confirm(grn._id, USER);
+    expect(confirmed.state).toBe('discrepancy_reported');
+    expect(confirmed.discrepancies.length).toBeGreaterThan(0);
+    const d = confirmed.discrepancies[0];
+    expect(d.type).toBe('quantity_short');
+    expect(d.quantityExpected).toBe(10);
+    expect(d.quantityActual).toBe(7);
+  });
+
+  test('detects price mismatch discrepancy (>5% deviation)', async () => {
+    const grn = await makeDraftGRN([
+      { poLineItemId: LINE_1, name: 'Widget', quantityOrdered: 10, quantityReceived: 10, unitCost: 600 }, // 500 → 600 = 20% over
+    ]);
+    const confirmed = await grnService.confirm(grn._id, USER);
+    expect(confirmed.state).toBe('discrepancy_reported');
+    expect(confirmed.discrepancies.some(d => d.type === 'price_mismatch')).toBe(true);
+  });
+
+  test('throws 409 when trying to confirm a non-draft GRN', async () => {
+    const grn = await makeDraftGRN([
+      { poLineItemId: LINE_1, name: 'Widget', quantityOrdered: 10, quantityReceived: 10, unitCost: 500 },
+    ]);
+    grn.state = 'confirmed';
+    await grn.save();
+    await expect(grnService.confirm(grn._id, USER)).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('grnService.cancel()', () => {
+  test('cancels a draft GRN', async () => {
+    const grn = await grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(),
+        receivedItems: [{ poLineItemId: LINE_1, name: 'W', quantityOrdered: 5, quantityReceived: 5, unitCost: 100 }] },
+      USER
+    );
+    const cancelled = await grnService.cancel(grn._id, USER, 'Wrong PO', '127.0.0.1');
+    expect(cancelled.state).toBe('cancelled');
+  });
+
+  test('cannot cancel a reconciled GRN', async () => {
+    const grn = await grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(),
+        receivedItems: [{ poLineItemId: LINE_1, name: 'W', quantityOrdered: 5, quantityReceived: 5, unitCost: 100 }] },
+      USER
+    );
+    grn.state = 'reconciled';
+    await grn.save();
+    await expect(grnService.cancel(grn._id, USER, 'test')).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+describe('grnService._detectDiscrepancies()', () => {
+  // Test the private detection logic via the service's exposed confirm flow
+  test('detects quality_reject when quantityRejected > 0', async () => {
+    const grn = await grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(),
+        receivedItems: [{
+          poLineItemId: LINE_1, name: 'Widget',
+          quantityOrdered: 10, quantityReceived: 10, quantityRejected: 2, unitCost: 500,
+        }] },
+      USER
+    );
+    const confirmed = await grnService.confirm(grn._id, USER);
+    expect(confirmed.discrepancies.some(d => d.type === 'quality_reject')).toBe(true);
+  });
+});

@@ -19,7 +19,10 @@ const fxRateRoutes     = require('./v1/fxRate.routes');
 const taxRoutes        = require('./v1/tax.routes');        // Phase 5.4
 const invoiceRoutes    = require('./v1/invoice.routes');    // Phase 1 — AR domain
 const billRoutes       = require('./v1/bill.routes');       // Phase 1 — AP domain
-const creditNoteRoutes = require('./v1/creditNote.routes'); // Phase 2 — Credit/Debit Notes
+const creditNoteRoutes    = require('./v1/creditNote.routes');    // Phase 2 — Credit/Debit Notes
+const purchaseOrderRoutes = require('./v1/purchaseOrder.routes'); // Phase 3.1 — Procurement
+const goodsReceiptRoutes  = require('./v1/goodsReceipt.routes');  // Phase 3.1 — Procurement
+const vendorCreditRoutes  = require('./v1/vendorCredit.routes');  // Phase 3.1 — Procurement
 
 // Mount v1 routes under /api/v1
 router.use('/auth', authRoutes);
@@ -38,7 +41,10 @@ router.use('/fx-rates',    fxRateRoutes);
 router.use('/tax',         taxRoutes);            // Phase 5.4
 router.use('/invoices',     invoiceRoutes);        // Phase 1 — AR domain
 router.use('/bills',        billRoutes);           // Phase 1 — AP domain
-router.use('/credit-notes', creditNoteRoutes);     // Phase 2 — Credit/Debit Notes
+router.use('/credit-notes',    creditNoteRoutes);    // Phase 2 — Credit/Debit Notes
+router.use('/purchase-orders', purchaseOrderRoutes); // Phase 3.1 — Procurement
+router.use('/goods-receipts',  goodsReceiptRoutes);  // Phase 3.1 — Procurement
+router.use('/vendor-credits',  vendorCreditRoutes);  // Phase 3.1 — Procurement
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {

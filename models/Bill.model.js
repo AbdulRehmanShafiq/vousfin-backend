@@ -1,6 +1,7 @@
 // models/Bill.model.js
 //
 // Phase 1 — First-class Accounts Payable domain entity.
+// Phase 3.1 — Extended with 3-Way Match links (PO → GRN → Bill).
 //
 // Symmetric to Invoice.model.js but on the vendor / AP side.  Each Bill
 // document carries:
@@ -9,6 +10,9 @@
 //   • append-only history of field-level edits
 //   • soft-delete flag
 //   • linkedJournalEntryId — pointer to the underlying GAAP journal entry
+//   • purchaseOrderId     — Phase 3.1: the PO this bill was raised against (nullable)
+//   • linkedGrnIds        — Phase 3.1: GRNs whose received goods are billed here
+//   • threeWayMatchStatus — Phase 3.1: none | pending | matched | discrepancy
 //
 const mongoose = require('mongoose');
 const {
@@ -125,6 +129,30 @@ const billSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ── Phase 3.1: 3-Way Match Links ──────────────────────────────────────────
+    // The PO this bill is reconciled against (null = ad-hoc bill with no PO)
+    purchaseOrderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'PurchaseOrder',
+      default: null,
+      index: true,
+    },
+
+    // One or more GRNs whose received lines this bill covers (partial deliveries)
+    linkedGrnIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'GoodsReceipt' }],
+
+    // 3-way match result: auto-computed when both PO and GRN are linked
+    //   none         — no PO/GRN linked, cannot perform match
+    //   pending      — PO/GRN linked but match hasn't been run yet
+    //   matched      — bill amounts align with PO + GRN within tolerance
+    //   discrepancy  — amounts differ; manual review required before approval
+    threeWayMatchStatus: {
+      type: String,
+      enum: ['none', 'pending', 'matched', 'discrepancy'],
+      default: 'none',
+      index: true,
+    },
+
     vendorId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Vendor',
@@ -230,6 +258,9 @@ billSchema.index({ businessId: 1, state: 1, dueDate: 1 });
 billSchema.index({ businessId: 1, vendorId: 1, state: 1 });
 billSchema.index({ businessId: 1, isArchived: 1, state: 1, createdAt: -1 });
 billSchema.index({ businessId: 1, approvalStatus: 1, state: 1 });
+// Phase 3.1 — 3-Way Match query patterns
+billSchema.index({ businessId: 1, purchaseOrderId: 1 });
+billSchema.index({ businessId: 1, threeWayMatchStatus: 1, state: 1 });
 
 // ── Statics ───────────────────────────────────────────────────────────────────
 billSchema.statics.canTransition = function (fromState, toState) {
