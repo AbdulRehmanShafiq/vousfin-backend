@@ -476,6 +476,17 @@ journalEntrySchema.index(
   { sparse: true, name: 'idx_tax_report', partialFilterExpression: { taxAmount: { $gt: 0 } } }
 );
 
+// 5c. Inventory stock-ledger (ERP Steps 3 & 5) — per-item movement history.
+//     Covers getStockLedger's { businessId, inventoryItemId } filter AND its
+//     { transactionDate } sort. Partial so only inventory-linked entries are
+//     indexed (the vast majority of journal entries have inventoryItemId = null),
+//     keeping the index small. Before this the stock-ledger modal forced a
+//     business-wide scan on every open.
+journalEntrySchema.index(
+  { businessId: 1, inventoryItemId: 1, transactionDate: 1 },
+  { name: 'idx_inventory_ledger', partialFilterExpression: { inventoryItemId: { $type: 'objectId' } } }
+);
+
 // 6. Description text search — replaces slow regex scan
 //    Usage: findManyWithFilters({ search: '...' })
 journalEntrySchema.index(

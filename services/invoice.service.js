@@ -683,11 +683,14 @@ class InvoiceService {
    */
   async _postInvoiceSettlementJournal(invoice, amount, user) {
     const businessId = invoice.businessId;
-    const arAccount = await ChartOfAccount.findOne({ businessId, accountCode: '1110' }).lean();
-    const cashAccount = await ChartOfAccount.findOne({
-      businessId,
-      accountCode: { $in: ['1010', '1020', '1040', '1030'] }, // Cash at Bank → on Hand → Savings → Petty
-    }).lean();
+    // Independent lookups — fetch in parallel to save a DB round-trip (Step 10).
+    const [arAccount, cashAccount] = await Promise.all([
+      ChartOfAccount.findOne({ businessId, accountCode: '1110' }).lean(),
+      ChartOfAccount.findOne({
+        businessId,
+        accountCode: { $in: ['1010', '1020', '1040', '1030'] }, // Cash at Bank → on Hand → Savings → Petty
+      }).lean(),
+    ]);
     if (!arAccount || !cashAccount) {
       logger.warn(`[invoice] settlement JE skipped for ${invoice.invoiceNumber} — AR (1110) or cash account missing`);
       return null;
