@@ -189,25 +189,45 @@ class TaxController {
   // ── POST /tax/preview ──────────────────────────────────────────────────────
   /**
    * Calculate tax preview for a given amount. Pure computation — no DB writes.
-   * Useful for the frontend TaxPreviewPanel (Phase 5.4.8).
+   * Powers the frontend TaxPreviewPanel (live, as the user types).
    *
-   * Body: { amount, transactionType, mode ('inclusive'|'exclusive'), taxType?, taxRate? }
+   * Body: {
+   *   amount, transactionType,
+   *   mode ('inclusive'|'exclusive'),
+   *   taxType?, taxRate?,
+   *   isReverseCharge?, isImportedService?,   // ERP Step 6 — RC modes
+   *   whtApply?, whtCategory?                  // ERP Step 6 — withholding
+   * }
    */
   async preview(req, res, next) {
     try {
-      const { amount, transactionType, mode, taxType, taxRate } = req.body;
+      const {
+        amount, transactionType, mode, taxType, taxRate,
+        isReverseCharge, isImportedService, whtApply, whtCategory,
+      } = req.body;
 
       if (!amount || amount <= 0) throw new ApiError(400, 'amount must be > 0');
       if (!transactionType)       throw new ApiError(400, 'transactionType is required');
 
       const taxResult = await taxEngine.resolveApplicableTaxes({
-        businessId:      req.businessId,
+        businessId:        req.businessId,
         transactionType,
-        amount:          Number(amount),
-        mode:            mode || 'inclusive',
-        overrideTaxType: taxType || null,
-        overrideTaxRate: taxRate || null,
+        amount:            Number(amount),
+        mode:              mode || 'inclusive',
+        overrideTaxType:   taxType || null,
+        overrideTaxRate:   taxRate || null,
+        isReverseCharge:   isReverseCharge === true ? true : undefined,
+        isImportedService: !!isImportedService,
+        whtApply:          !!whtApply,
+        whtCategory:       whtCategory || null,
       });
+
+      // WHT is a deduction at source, not part of the price — surface the net
+      // amount actually payable to / receivable from the party separately.
+      const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+      const withholding = taxResult.lines.filter(l => l.isWithholding);
+      const whtTotal    = r2(withholding.reduce((s, l) => s + (l.taxAmount || 0), 0));
+      const hasReverseCharge = taxResult.lines.some(l => l.isReverseCharge);
 
       res.json({
         success: true,
@@ -217,12 +237,17 @@ class TaxController {
           netAmount:    taxResult.netAmount,
           grossAmount:  taxResult.grossAmount,
           countryCode:  taxResult.countryCode,
+          whtTotal,
+          netPayable:   whtTotal > 0 ? r2(taxResult.grossAmount - whtTotal) : null,
+          hasReverseCharge,
           lines: taxResult.lines.map(l => ({
-            taxType:     l.taxType,
-            taxName:     l.taxName,
-            rate:        l.rate,
-            taxAmount:   l.taxAmount,
-            side:        l.side,
+            taxType:         l.taxType,
+            taxName:         l.taxName,
+            rate:            l.rate,
+            taxAmount:       l.taxAmount,
+            side:            l.side,
+            isWithholding:   !!l.isWithholding,
+            isReverseCharge: !!l.isReverseCharge,
           })),
         },
       });

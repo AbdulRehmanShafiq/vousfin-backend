@@ -30,14 +30,19 @@
 
 'use strict';
 
-const mongoose           = require('mongoose');
 const { getProfile, getApplicableTaxes, getWhtSchedule } = require('../config/countryTaxProfiles');
 const { calcFromInclusive, calcFromExclusive }            = require('./nlParser/utils/taxCalculator');
 const logger             = require('../config/logger');
 
-// ── Lazy model references (avoid circular at require-time) ───────────────────
-const Account  = () => mongoose.model('Account');
-const Business = () => mongoose.model('Business');
+// ── Model references ─────────────────────────────────────────────────────────
+// FIX (ERP Step 6): the Chart-of-Accounts model is registered as
+// 'ChartOfAccount', NOT 'Account'. The previous `mongoose.model('Account')`
+// threw MissingSchemaError, so ensureTaxAccounts could NEVER seed the tax
+// accounts — which silently broke every downstream tax journal posting
+// (transaction.service skips a tax line whose account can't be resolved).
+// Requiring the model modules directly also guarantees registration.
+const ChartOfAccount = require('../models/ChartOfAccount.model');
+const Business       = require('../models/Business.model');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal rounding helper
@@ -117,7 +122,7 @@ async function resolveApplicableTaxes(options) {
   } = options;
 
   // ── 1. Load business tax config ──────────────────────────────────────────
-  const business = await Business().findById(businessId).lean();
+  const business = await Business.findById(businessId).lean();
   if (!business) {
     throw new Error(`Business ${businessId} not found`);
   }
@@ -338,10 +343,10 @@ async function ensureTaxAccounts(businessId, countryCode = 'PK') {
   let created = 0, skipped = 0;
 
   for (const acc of accounts) {
-    const exists = await Account().findOne({ businessId, accountCode: acc.accountCode });
+    const exists = await ChartOfAccount.findOne({ businessId, accountCode: acc.accountCode });
     if (exists) { skipped++; continue; }
 
-    await Account().create({
+    await ChartOfAccount.create({
       businessId,
       accountCode:    acc.accountCode,
       accountName:    acc.accountName,
@@ -349,7 +354,7 @@ async function ensureTaxAccounts(businessId, countryCode = 'PK') {
       accountSubtype: acc.accountSubtype,
       normalBalance:  acc.normalBalance,
       isDefault:      acc.isDefault,
-      balance:        0,
+      runningBalance: 0,
     });
     created++;
     logger.info(`[TaxEngine] Created tax account ${acc.accountCode} (${acc.accountName}) for business ${businessId}`);
@@ -370,7 +375,7 @@ async function ensureTaxAccounts(businessId, countryCode = 'PK') {
  * @returns {Promise<{ config: object, profile: object }>}
  */
 async function getBusinessTaxConfig(businessId) {
-  const business = await Business().findById(businessId, 'taxConfig currency').lean();
+  const business = await Business.findById(businessId, 'taxConfig currency').lean();
   const taxCfg   = business?.taxConfig || {};
   const country  = taxCfg.country || 'PK';
   const profile  = getProfile(country);
@@ -383,7 +388,7 @@ async function getBusinessTaxConfig(businessId) {
  * @returns {Promise<boolean>}
  */
 async function isTaxEnabled(businessId) {
-  const business = await Business().findById(businessId, 'taxConfig').lean();
+  const business = await Business.findById(businessId, 'taxConfig').lean();
   const cfg      = business?.taxConfig || {};
   return !!(cfg.gstEnabled || cfg.vatEnabled || cfg.whtEnabled);
 }
