@@ -66,6 +66,13 @@ const startServer = async () => {
       logger.warn(`⚠️ Forecast retrain job failed to schedule (non-fatal): ${err.message}`);
     }
 
+    // Forecast Platform F2: nightly multi-source feature materialization (02:00)
+    try {
+      if (config.FORECAST_MATERIALIZE_ENABLED) require('./jobs/forecastMaterialize.job').scheduleForecastMaterialize();
+    } catch (err) {
+      logger.warn(`⚠️ Forecast materialization job failed to schedule (non-fatal): ${err.message}`);
+    }
+
     // Step 3c: Schedule AP automation jobs (Phase 3.3)
     try {
       const cron = require('node-cron');

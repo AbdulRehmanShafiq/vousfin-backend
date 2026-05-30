@@ -53,6 +53,12 @@ function computeFeatures(rows) {
       // AR/AP exposure
       ar_new: row.arNew || 0, ap_new: row.apNew || 0,
       ar_minus_ap: r2((row.arNew || 0) - (row.apNew || 0)),
+      // F2 — multi-source period features (cash, payroll, party activity)
+      cash_inflow: row.cashInflow || 0, cash_outflow: row.cashOutflow || 0,
+      net_cash_movement: r2((row.cashInflow || 0) - (row.cashOutflow || 0)),
+      payroll_expense: row.payrollExpense || 0,
+      active_customers: row.activeCustomers || 0, active_vendors: row.activeVendors || 0,
+      new_invoices: row.newInvoices || 0, new_bills: row.newBills || 0,
       // activity
       entries: row.entries || 0,
       // calendar

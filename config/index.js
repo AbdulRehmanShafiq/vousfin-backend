@@ -74,4 +74,6 @@ module.exports = {
   /** F5 — weekly + drift-triggered incremental retraining with champion/
    *  challenger promotion. Default on. */
   FORECAST_RETRAIN_ENABLED: process.env.FORECAST_RETRAIN_ENABLED !== 'false',
+  /** F2 — nightly pre-warm of multi-source feature snapshots. Default on. */
+  FORECAST_MATERIALIZE_ENABLED: process.env.FORECAST_MATERIALIZE_ENABLED !== 'false',
 };

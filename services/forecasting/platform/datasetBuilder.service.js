@@ -23,6 +23,9 @@ const crypto = require('crypto');
 const JournalEntry = require('../../../models/JournalEntry.model');
 const Invoice = require('../../../models/Invoice.model');
 const Bill = require('../../../models/Bill.model');
+const Payment = require('../../../models/Payment.model');                 // F2
+const ChartOfAccount = require('../../../models/ChartOfAccount.model');   // F2 — assets/liabilities snapshot
+const InventoryItem = require('../../../models/InventoryItem.model');     // F2 — inventory snapshot
 const CurrencyNormalizer = require('./currencyNormalizer');
 const tz = require('./timezone');
 const { validateDataset } = require('./dataValidation');
@@ -30,11 +33,16 @@ const { assertTenant, scopeFilter } = require('./tenantScope');
 const { JOURNAL_STATUS } = require('../../../config/constants');
 const logger = require('../../../config/logger');
 
-const LIVE_SOURCES = ['journal_entries', 'invoices', 'bills'];
-const DECLARED_SOURCES = [
-  'payments', 'payroll', 'assets', 'liabilities', 'inventory',
-  'customer_behavior', 'vendor_behavior', 'macro_indicators',
+// F2 — flow sources produce clean per-period time series; snapshot sources
+// attach current-state context to the latest period. macro stays declared
+// (external connector — F8). All opt-in; the default set is unchanged.
+const LIVE_SOURCES = [
+  'journal_entries', 'invoices', 'bills',          // F1
+  'payments', 'payroll', 'customer_behavior', 'vendor_behavior', // F2 flow
+  'assets', 'liabilities', 'inventory',            // F2 snapshot
 ];
+const DECLARED_SOURCES = ['macro_indicators'];
+const SNAPSHOT_SOURCES = ['assets', 'liabilities', 'inventory'];
 const ALL_SOURCES = [...LIVE_SOURCES, ...DECLARED_SOURCES];
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -85,6 +93,76 @@ async function _extractDocDaily(Model, businessId, rangeStart, asOf, amountField
   ]);
 }
 
+/* ── F2 flow extractors ───────────────────────────────────────────────────── */
+
+/** Payments → daily×currency cash inflow (inbound) / outflow (outbound). */
+async function _extractPaymentsDaily(businessId, rangeStart, asOf) {
+  const id = assertTenant(businessId);
+  return Payment.aggregate([
+    { $match: { businessId: id, paymentDate: { $gte: rangeStart, $lt: asOf } } },
+    { $group: {
+      _id: { y: { $year: '$paymentDate' }, m: { $month: '$paymentDate' }, d: { $dayOfMonth: '$paymentDate' },
+        ccy: { $ifNull: ['$currencyCode', 'USD'] }, dir: '$direction' },
+      date: { $first: '$paymentDate' }, amount: { $sum: '$amount' },
+    } },
+    { $sort: { date: 1 } },
+  ]);
+}
+
+/** Payroll → daily×currency total of postings debiting a salary/wage/payroll account. */
+async function _extractPayrollDaily(businessId, rangeStart, asOf) {
+  const id = assertTenant(businessId);
+  return JournalEntry.aggregate([
+    { $match: { businessId: id, transactionDate: { $gte: rangeStart, $lt: asOf }, isArchived: { $ne: true } } },
+    { $lookup: { from: 'chartofaccounts', localField: 'debitAccountId', foreignField: '_id', as: 'da' } },
+    { $unwind: { path: '$da', preserveNullAndEmptyArrays: true } },
+    { $match: { 'da.accountName': { $regex: 'salar|wage|payroll', $options: 'i' } } },
+    { $group: {
+      _id: { y: { $year: '$transactionDate' }, m: { $month: '$transactionDate' }, d: { $dayOfMonth: '$transactionDate' },
+        ccy: { $ifNull: ['$currencyCode', 'USD'] } },
+      date: { $first: '$transactionDate' }, amount: { $sum: '$amount' },
+    } },
+    { $sort: { date: 1 } },
+  ]);
+}
+
+/** Party activity → daily distinct party set + document count (customer/vendor behavior). */
+async function _extractPartyDaily(Model, businessId, rangeStart, asOf, partyField) {
+  const id = assertTenant(businessId);
+  return Model.aggregate([
+    { $match: { businessId: id, issueDate: { $gte: rangeStart, $lt: asOf }, isArchived: { $ne: true } } },
+    { $group: {
+      _id: { y: { $year: '$issueDate' }, m: { $month: '$issueDate' }, d: { $dayOfMonth: '$issueDate' } },
+      date: { $first: '$issueDate' }, parties: { $addToSet: `$${partyField}` }, count: { $sum: 1 },
+    } },
+    { $sort: { date: 1 } },
+  ]);
+}
+
+/* ── F2 snapshot extractors (current state → attached to the latest period) ── */
+
+async function _extractBalanceSnapshot(businessId) {
+  const id = assertTenant(businessId);
+  return ChartOfAccount.aggregate([
+    { $match: { businessId: id } },
+    { $group: { _id: '$accountType', total: { $sum: '$runningBalance' } } },
+  ]);
+}
+
+async function _extractInventorySnapshot(businessId) {
+  const id = assertTenant(businessId);
+  const rows = await InventoryItem.aggregate([
+    { $match: { businessId: id } },
+    { $group: {
+      _id: null,
+      stockValue: { $sum: { $multiply: ['$currentStock', '$unitCostPrice'] } },
+      items: { $sum: 1 },
+      lowStock: { $sum: { $cond: [{ $lte: ['$currentStock', '$reorderLevel'] }, 1, 0] } },
+    } },
+  ]);
+  return rows[0] || { stockValue: 0, items: 0, lowStock: 0 };
+}
+
 class DatasetBuilderService {
   /**
    * Build a normalized forecasting dataset.
@@ -115,6 +193,8 @@ class DatasetBuilderService {
 
     // ── period bucket accumulator ───────────────────────────────────────────
     const periods = new Map(); // periodKey → row
+    const custSets = new Map(); // periodKey → Set(customerId)  (distinct active customers)
+    const vendSets = new Map(); // periodKey → Set(vendorId)
     const ensure = (key, date) => {
       if (!periods.has(key)) {
         const b = tz.periodBounds(date, granularity, tzOffsetMinutes);
@@ -122,6 +202,9 @@ class DatasetBuilderService {
           periodKey: key, periodStart: b.start, periodEnd: b.end, baseCurrency,
           revenue: 0, expenses: 0, netCashFlow: 0, entries: 0,
           arNew: 0, arCount: 0, apNew: 0, apCount: 0,
+          // F2 flow fields
+          cashInflow: 0, cashOutflow: 0, payrollExpense: 0,
+          newInvoices: 0, newBills: 0, activeCustomers: 0, activeVendors: 0,
         });
       }
       return periods.get(key);
@@ -157,6 +240,44 @@ class DatasetBuilderService {
         row.apNew += amt; row.apCount += d.count;
       }
     }
+    // 4) Payments → cash inflow / outflow (F2)
+    if (liveSources.includes('payments')) {
+      const daily = await _extractPaymentsDaily(businessId, rangeStart, asOf);
+      for (const d of daily) {
+        const amt = await normalizer.toBase(d.amount, d._id.ccy, d.date);
+        const row = ensure(tz.periodKey(d.date, granularity, tzOffsetMinutes), d.date);
+        if (d._id.dir === 'inbound') row.cashInflow += amt; else row.cashOutflow += amt;
+      }
+    }
+    // 5) Payroll → payroll expense (F2)
+    if (liveSources.includes('payroll')) {
+      const daily = await _extractPayrollDaily(businessId, rangeStart, asOf);
+      for (const d of daily) {
+        const amt = await normalizer.toBase(d.amount, d._id.ccy, d.date);
+        const row = ensure(tz.periodKey(d.date, granularity, tzOffsetMinutes), d.date);
+        row.payrollExpense += amt;
+      }
+    }
+    // 6) Customer behavior → distinct active customers + new invoices (F2)
+    if (liveSources.includes('customer_behavior')) {
+      const daily = await _extractPartyDaily(Invoice, businessId, rangeStart, asOf, 'customerId');
+      for (const d of daily) {
+        const key = tz.periodKey(d.date, granularity, tzOffsetMinutes);
+        const row = ensure(key, d.date); row.newInvoices += d.count;
+        if (!custSets.has(key)) custSets.set(key, new Set());
+        for (const p of d.parties || []) if (p) custSets.get(key).add(String(p));
+      }
+    }
+    // 7) Vendor behavior → distinct active vendors + new bills (F2)
+    if (liveSources.includes('vendor_behavior')) {
+      const daily = await _extractPartyDaily(Bill, businessId, rangeStart, asOf, 'vendorId');
+      for (const d of daily) {
+        const key = tz.periodKey(d.date, granularity, tzOffsetMinutes);
+        const row = ensure(key, d.date); row.newBills += d.count;
+        if (!vendSets.has(key)) vendSets.set(key, new Set());
+        for (const p of d.parties || []) if (p) vendSets.get(key).add(String(p));
+      }
+    }
 
     // ── finalize numbers + derive cashflow ────────────────────────────────────
     for (const row of periods.values()) {
@@ -164,6 +285,10 @@ class DatasetBuilderService {
       row.expenses = r2(row.expenses);
       row.netCashFlow = r2(row.revenue - row.expenses);
       row.arNew = r2(row.arNew); row.apNew = r2(row.apNew);
+      row.cashInflow = r2(row.cashInflow); row.cashOutflow = r2(row.cashOutflow);
+      row.payrollExpense = r2(row.payrollExpense);
+      row.activeCustomers = custSets.get(row.periodKey)?.size || 0;
+      row.activeVendors = vendSets.get(row.periodKey)?.size || 0;
     }
 
     // ── gap-fill the period axis so the series is contiguous ──────────────────
@@ -179,9 +304,31 @@ class DatasetBuilderService {
         return {
           periodKey: key, periodStart: b.start, periodEnd: b.end, baseCurrency,
           revenue: 0, expenses: 0, netCashFlow: 0, entries: 0,
-          arNew: 0, arCount: 0, apNew: 0, apCount: 0, imputed: true,
+          arNew: 0, arCount: 0, apNew: 0, apCount: 0,
+          cashInflow: 0, cashOutflow: 0, payrollExpense: 0,
+          newInvoices: 0, newBills: 0, activeCustomers: 0, activeVendors: 0, imputed: true,
         };
       });
+    }
+
+    // ── F2 snapshot sources → attach current-state context to the latest period ─
+    if (rows.length && SNAPSHOT_SOURCES.some((s) => liveSources.includes(s))) {
+      const latest = rows[rows.length - 1];
+      if (liveSources.includes('assets') || liveSources.includes('liabilities')) {
+        const bal = await _extractBalanceSnapshot(businessId);
+        const byType = {}; for (const b of bal) byType[b._id] = r2(b.total);
+        if (liveSources.includes('assets')) latest.totalAssets = byType.Asset || 0;
+        if (liveSources.includes('liabilities')) {
+          latest.totalLiabilities = byType.Liability || 0;
+          latest.equity = byType.Equity || 0;
+        }
+      }
+      if (liveSources.includes('inventory')) {
+        const inv = await _extractInventorySnapshot(businessId);
+        latest.inventoryValue = r2(inv.stockValue);
+        latest.lowStockCount = inv.lowStock;
+        latest.inventoryItems = inv.items;
+      }
     }
 
     // ── validate ──────────────────────────────────────────────────────────────
