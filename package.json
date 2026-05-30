@@ -7,6 +7,7 @@
     "dev": "nodemon server.js",
     "test:api": "node scripts/test-all-apis.js",
     "seed:codehub": "node scripts/seedCodeHubDemo.js",
+    "migrate:backfill-payments": "node migrations/backfill_doc_payment_state.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest tests/unit --forceExit --detectOpenHandles",
     "test:integration": "jest tests/integration --forceExit --detectOpenHandles",

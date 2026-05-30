@@ -731,6 +731,26 @@ class TransactionService {
       });
     }
 
+    // 7. AR/AP refactor M1 — broadcast PAYMENT_RECORDED so the linked Invoice/Bill
+    //    document is reconciled FROM the ledger (paidAmount / remainingBalance /
+    //    state). Fire-and-forget + idempotent: the JournalEntry stays the source
+    //    of truth and a subscriber failure can never block or unwind the payment.
+    businessEvents.emit(EVENTS.PAYMENT_RECORDED, {
+      businessId:           String(businessId),
+      userId,
+      entityType:           ENTITY_TYPES.JOURNAL_ENTRY,
+      entityId:             parent._id,
+      parentJournalEntryId: parent._id,
+      childTransactionId:   childTx._id,
+      amount:               paymentData.amount,
+      remainingBalance:     newRemainingBalance,
+      paymentStatus:        newPaymentStatus,
+      isReceivable,
+      invoiceNumber:        parent.invoiceNumber || null,
+      customerId:           parent.customerId ? (parent.customerId._id || parent.customerId) : null,
+      vendorId:             parent.vendorId ? (parent.vendorId._id || parent.vendorId) : null,
+    });
+
     return childTx;
   }
 

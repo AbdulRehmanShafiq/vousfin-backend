@@ -30,6 +30,11 @@ jest.mock('../../../services/inventory.service', () => ({
   reduceStock: jest.fn(),
   resolveCostAccounts: jest.fn(),
 }));
+// AR/AP M1 — mock the reconciler at its boundary so we can assert the
+// payment.recorded subscriber actually drives ledger→document reconciliation.
+jest.mock('../../../services/arApReconciliation.service', () => ({
+  reconcileByJournalEntryId: jest.fn().mockResolvedValue({ reconciled: true }),
+}));
 
 // ── Real integration fabric ──────────────────────────────────────────────────
 const { businessEvents, EVENTS } = require('../../../services/businessEventEngine.service');
@@ -50,6 +55,7 @@ const auditLogRepository = require('../../../repositories/auditLog.repository');
 const JournalEntry       = require('../../../models/JournalEntry.model');
 const ChartOfAccount     = require('../../../models/ChartOfAccount.model');
 const inventoryService   = require('../../../services/inventory.service');
+const arApReconciliation = require('../../../services/arApReconciliation.service');
 const { getProfile }     = require('../../../config/countryTaxProfiles');
 
 const BIZ_A = '507f1f77bcf86cd799439001';
@@ -253,5 +259,21 @@ describe('Scenario 10 — The event engine refuses an event with no businessId',
 
     const id = businessEvents.emit(EVENTS.TRANSACTION_CREATED, { businessId: BIZ_A, entityId: 'x' });
     expect(typeof id).toBe('string');
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  GROUP H — AR/AP M1: ledger payment → document reconciliation
+// ════════════════════════════════════════════════════════════════════════════
+describe('Scenario 11 — payment.recorded reconciles the linked document + refreshes analytics', () => {
+  it('drives arApReconciliation AND invalidates the cache from one event', async () => {
+    await businessEvents.emitAndWait(EVENTS.PAYMENT_RECORDED, {
+      businessId: BIZ_A, parentJournalEntryId: 'je-parent', userId: USER._id, amount: 100,
+    });
+
+    expect(arApReconciliation.reconcileByJournalEntryId).toHaveBeenCalledWith(
+      BIZ_A, 'je-parent', expect.objectContaining({ userId: USER._id })
+    );
+    expect(reportCache.invalidate).toHaveBeenCalledWith(BIZ_A);
   });
 });

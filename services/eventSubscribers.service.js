@@ -100,8 +100,24 @@ function registerAll() {
     });
   }
 
+  // ── AR/AP refactor M1 — ledger → document payment reconciliation ──────────
+  // When a payment settles a JournalEntry, project its authoritative
+  // paidAmount / remainingBalance / state onto the linked Invoice / Bill so the
+  // document never goes stale (closes the split-brain, finding P1). Idempotent
+  // and fire-and-forget: a failure here can never block or unwind the payment.
+  // lazy-require avoids pulling the document models into this lightweight module
+  // at load time and sidesteps any require-cycle.
+  businessEvents.on(EVENTS.PAYMENT_RECORDED, async (evt) => {
+    if (!evt || !evt.businessId || !evt.parentJournalEntryId) return;
+    const arApReconciliation = require('./arApReconciliation.service');
+    await arApReconciliation.reconcileByJournalEntryId(
+      evt.businessId, evt.parentJournalEntryId, { userId: evt.userId }
+    );
+  }, { name: 'ar-ap-document-reconcile' });
+
   logger.info(
-    `[eventSubscribers] analytics cache-sync registered on ${CACHE_INVALIDATING_EVENTS.length} event types`
+    `[eventSubscribers] analytics cache-sync on ${CACHE_INVALIDATING_EVENTS.length} event types ` +
+    `+ AR/AP document reconciliation on payment.recorded`
   );
   return true;
 }
