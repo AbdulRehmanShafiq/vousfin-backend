@@ -350,6 +350,13 @@ billSchema.methods.recordFieldChange = function (field, before, after, actorId) 
 };
 
 // ── Pre-save: compute totals from lineItems (Phase 2) ────────────────────────
+// ── M4 — cross-field validation (model layer, defense in depth) ─────────────
+billSchema.pre('validate', function () {
+  if (this.issueDate && this.dueDate && new Date(this.dueDate) < new Date(this.issueDate)) {
+    this.invalidate('dueDate', 'dueDate cannot be earlier than issueDate');
+  }
+});
+
 billSchema.pre('save', function () {
   const r2 = (v) => Math.round(v * 100) / 100;
 

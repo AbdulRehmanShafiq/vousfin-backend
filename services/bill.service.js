@@ -17,6 +17,7 @@ const partyBalanceService = require('./partyBalance.service');     // ERP Step 4
 const { postBalancedJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync
 const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // ERP Step 4 — event broadcasts
 const { ApiError } = require('../utils/ApiError');
+const { validateDocumentData, assertNoDuplicateNumber, assertPartyExists } = require('../utils/arApValidation'); // M4
 const logger = require('../config/logger');
 const {
   BILL_STATES,
@@ -94,12 +95,11 @@ class BillService {
 
   async createDraft(data, user, ipAddress) {
     const hasLines = Array.isArray(data.lineItems) && data.lineItems.length > 0;
-    if (!data.businessId || !data.billNumber || !data.issueDate) {
-      throw new ApiError(400, 'createDraft requires: businessId, billNumber, issueDate');
-    }
-    if (!hasLines && (!data.amount || data.amount <= 0)) {
-      throw new ApiError(400, 'Bill amount must be greater than zero (or provide lineItems)');
-    }
+
+    // ── M4 enterprise validation (service layer) ─────────────────────────────
+    validateDocumentData(data, { kind: 'bill', isUpdate: false });
+    await assertNoDuplicateNumber(Bill, data.businessId, data.billNumber, 'billNumber');
+    await assertPartyExists(vendorRepository, data.businessId, data.vendorId, 'Vendor');
 
     const snap = await this._vendorSnapshot(data.businessId, data.vendorId);
 
@@ -264,6 +264,18 @@ class BillService {
     const bill = await this._loadOrThrow(id);
     if (bill.state !== BILL_STATES.DRAFT) {
       throw new ApiError(409, 'Only draft bills can be edited');
+    }
+
+    // ── M4 enterprise validation (service layer) ─────────────────────────────
+    validateDocumentData(
+      { ...data, issueDate: data.issueDate || bill.issueDate },
+      { kind: 'bill', isUpdate: true }
+    );
+    if (data.billNumber && data.billNumber !== bill.billNumber) {
+      await assertNoDuplicateNumber(Bill, bill.businessId, data.billNumber, 'billNumber', bill._id);
+    }
+    if (data.vendorId) {
+      await assertPartyExists(vendorRepository, bill.businessId, data.vendorId, 'Vendor');
     }
     const editable = [
       'billNumber', 'vendorReferenceNumber', 'vendorId', 'lineItems', 'amount', 'taxAmount',

@@ -33,6 +33,7 @@ const partyBalanceService = require('./partyBalance.service');     // ERP Step 4
 const { postBalancedJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync
 const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // ERP Step 4 — event broadcasts
 const { ApiError } = require('../utils/ApiError');
+const { validateDocumentData, assertNoDuplicateNumber, assertPartyExists } = require('../utils/arApValidation'); // M4
 const logger = require('../config/logger');
 const {
   INVOICE_STATES,
@@ -121,12 +122,11 @@ class InvoiceService {
    */
   async createDraft(data, user, ipAddress) {
     const hasLines = Array.isArray(data.lineItems) && data.lineItems.length > 0;
-    if (!data.businessId || !data.invoiceNumber || !data.issueDate) {
-      throw new ApiError(400, 'createDraft requires: businessId, invoiceNumber, issueDate');
-    }
-    if (!hasLines && (!data.amount || data.amount <= 0)) {
-      throw new ApiError(400, 'Invoice amount must be greater than zero (or provide lineItems)');
-    }
+
+    // ── M4 enterprise validation (service layer) ─────────────────────────────
+    validateDocumentData(data, { kind: 'invoice', isUpdate: false });
+    await assertNoDuplicateNumber(Invoice, data.businessId, data.invoiceNumber, 'invoiceNumber');
+    await assertPartyExists(customerRepository, data.businessId, data.customerId, 'Customer');
 
     const snap = await this._customerSnapshot(data.businessId, data.customerId);
 
@@ -226,6 +226,19 @@ class InvoiceService {
     const invoice = await this._loadOrThrow(id);
     if (invoice.state !== INVOICE_STATES.DRAFT) {
       throw new ApiError(409, 'Only draft invoices can be edited');
+    }
+
+    // ── M4 enterprise validation (service layer) ─────────────────────────────
+    // Cross-field rules respect the document's own dates when not being changed.
+    validateDocumentData(
+      { ...data, issueDate: data.issueDate || invoice.issueDate },
+      { kind: 'invoice', isUpdate: true }
+    );
+    if (data.invoiceNumber && data.invoiceNumber !== invoice.invoiceNumber) {
+      await assertNoDuplicateNumber(Invoice, invoice.businessId, data.invoiceNumber, 'invoiceNumber', invoice._id);
+    }
+    if (data.customerId) {
+      await assertPartyExists(customerRepository, invoice.businessId, data.customerId, 'Customer');
     }
 
     // Editable fields whitelist

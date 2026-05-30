@@ -7,11 +7,13 @@ const router = express.Router();
 const invoiceController = require('../../controllers/invoice.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const validate = require('../../middleware/validate.middleware'); // M4
+const { createInvoiceSchema, updateInvoiceSchema } = require('../../validations/invoice.validation'); // M4
 
 router.use(authMiddleware, requireBusiness);
 
 // Listing + creation
-router.post('/', invoiceController.createDraft);
+router.post('/', validate(createInvoiceSchema), invoiceController.createDraft);
 router.get('/',  invoiceController.list);
 
 // Detail + timeline + PDF
@@ -20,7 +22,7 @@ router.get('/:id/timeline', invoiceController.getTimeline);
 router.get('/:id/pdf',      invoiceController.downloadPdf);
 
 // Phase 2: Update draft
-router.put('/:id', invoiceController.updateDraft);
+router.put('/:id', validate(updateInvoiceSchema), invoiceController.updateDraft);
 
 // Approval workflow
 router.post('/:id/submit',  invoiceController.submitForApproval);

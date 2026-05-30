@@ -7,11 +7,13 @@ const router = express.Router();
 const billController = require('../../controllers/bill.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const validate = require('../../middleware/validate.middleware'); // M4
+const { createBillSchema, updateBillSchema } = require('../../validations/bill.validation'); // M4
 
 router.use(authMiddleware, requireBusiness);
 
 // Listing + creation
-router.post('/', billController.createDraft);
+router.post('/', validate(createBillSchema), billController.createDraft);
 router.get('/',  billController.list);
 
 // Detail + timeline
@@ -19,7 +21,7 @@ router.get('/:id',          billController.getById);
 router.get('/:id/timeline', billController.getTimeline);
 
 // Phase 2: Update draft
-router.put('/:id', billController.updateDraft);
+router.put('/:id', validate(updateBillSchema), billController.updateDraft);
 
 // Approval workflow
 router.post('/:id/submit',  billController.submitForApproval);

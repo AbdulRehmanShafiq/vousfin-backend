@@ -361,6 +361,13 @@ invoiceSchema.methods.recordFieldChange = function (field, before, after, actorI
 };
 
 // ── Pre-save: compute totals from lineItems (Phase 2) + derive remainingBalance
+// ── M4 — cross-field validation (model layer, defense in depth) ─────────────
+invoiceSchema.pre('validate', function () {
+  if (this.issueDate && this.dueDate && new Date(this.dueDate) < new Date(this.issueDate)) {
+    this.invalidate('dueDate', 'dueDate cannot be earlier than issueDate');
+  }
+});
+
 invoiceSchema.pre('save', function () {
   const r2 = (v) => Math.round(v * 100) / 100;
 
