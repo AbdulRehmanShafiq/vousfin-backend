@@ -27,6 +27,7 @@ const { JOURNAL_STATUS } = require('../../config/constants');
 const config        = require('../../config');                 // F3 — registry flag
 const forecastStore = require('./forecastStore.service');      // F3 — persist + baseline gate
 const classical     = require('./classical');                  // F3 — backtestable model under test
+const ensembleForecast = require('./ensembleForecast.service'); // F4 — multi-model ensemble + conformal
 
 /* ── Python LSTM microservice config ── */
 const LSTM_API_URL          = process.env.LSTM_API_URL  || 'http://localhost:8000';
@@ -933,7 +934,7 @@ async function generateLSTMForecast(businessId, target = 'Revenue', horizonMonth
   }
 
   // ── Inverse transform ──
-  const predicted = scaledPredicted.map(sv => Math.round(Math.max(0, inverseScale(sv, min, range))));
+  let predicted = scaledPredicted.map(sv => Math.round(Math.max(0, inverseScale(sv, min, range))));
 
   // ── Historical slice ──
   const histCount  = Math.min(6, rawSeries.length);
@@ -959,8 +960,28 @@ async function generateLSTMForecast(businessId, target = 'Revenue', horizonMonth
   const tierBandWidth = { insufficient: 0.30, sparse: 0.20, adequate: 0.12, rich: 0.06 }[tier] || 0.10;
   const baseUncertainty = tierBandWidth + anomalyRisk.riskScore * 0.04;
   const uncertainty = predicted.map((_, i) => baseUncertainty + i * 0.02);
-  const upper       = predicted.map((v, i) => Math.round(v * (1 + uncertainty[i])));
-  const lower       = predicted.map((v, i) => Math.round(Math.max(0, v * (1 - uncertainty[i]))));
+  let upper       = predicted.map((v, i) => Math.round(v * (1 + uncertainty[i])));
+  let lower       = predicted.map((v, i) => Math.round(Math.max(0, v * (1 - uncertainty[i]))));
+
+  // ── F4 — replace the single-model point + heuristic bands with the MULTI-MODEL
+  //     ENSEMBLE + conformal-calibrated intervals. Defensive: any failure keeps
+  //     the Holt-Winters result, so the forecast never breaks. ──
+  let ensembleMeta = null;
+  if (config.FORECAST_ENSEMBLE_ENABLED) {
+    try {
+      const period = tier === 'rich' ? 3 : tier === 'adequate' ? 2 : 1;
+      const er = ensembleForecast.computeFromSeries(rawSeries, { horizon: horizonMonths, period, alpha: 0.1 });
+      if (er && er.predicted.length === horizonMonths) {
+        predicted = er.predicted;
+        upper = er.upper;
+        lower = er.lower;
+        modelType = er.modelType;
+        ensembleMeta = { weights: er.weights, widths: er.widths, coverageTarget: er.coverageTarget };
+      }
+    } catch (e) {
+      console.warn('[lstmForecastService] ensemble path failed, kept Holt-Winters:', e.message);
+    }
+  }
 
   // ── Data sufficiency object (sent to frontend) ──
   const dataSufficiency = {
@@ -1009,6 +1030,7 @@ async function generateLSTMForecast(businessId, target = 'Revenue', horizonMonth
     confidence,
     dataSource,
     modelType,
+    ensemble:        ensembleMeta,   // F4 — member weights + conformal coverage (null if HW path)
     lookBack:        LOOK_BACK,
     sequencesUsed:   scaled.length,
     scalerParams:    { min, range },

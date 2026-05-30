@@ -6,6 +6,7 @@ const ModelRegistry = require('../models/ModelRegistry.model');
 const ForecastAccuracy = require('../models/ForecastAccuracy.model');
 const forecastStore = require('../services/forecasting/forecastStore.service');
 const classical = require('../services/forecasting/classical');
+const ensembleForecast = require('../services/forecasting/ensembleForecast.service');
 const lstm = require('../services/forecasting/lstmForecastService');
 const { runAccuracyCapture } = require('../jobs/forecastAccuracy.job');
 const ApiResponse = require('../utils/ApiResponse');
@@ -78,6 +79,18 @@ exports.backtest = async (req, res, next) => {
       modelType: 'Holt-Winters', createdBy: req.user._id,
     });
     ApiResponse.success(res, verdict, 'Backtest complete');
+  } catch (err) { next(err); }
+};
+
+// GET /forecast-registry/ensemble — standalone multi-model ensemble forecast
+// with conformal-calibrated intervals + member weights + gate verdict.
+exports.ensemble = async (req, res, next) => {
+  try {
+    const target = req.query.target || 'Revenue';
+    const granularity = req.query.granularity || 'monthly';
+    const horizon = Number(req.query.horizon) || 6;
+    const result = await ensembleForecast.forecast(biz(req), target, granularity, horizon);
+    ApiResponse.success(res, result, 'Ensemble forecast');
   } catch (err) { next(err); }
 };
 

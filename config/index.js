@@ -68,4 +68,7 @@ module.exports = {
   /** Persist every forecast to ForecastRun, register model versions, and apply
    *  the seasonal-naive baseline gate. Default on; set 'false' to disable. */
   FORECAST_REGISTRY_ENABLED: process.env.FORECAST_REGISTRY_ENABLED !== 'false',
+  /** F4 — serve the multi-model ensemble + conformal-calibrated intervals from
+   *  the classical fallback path (replaces single Holt-Winters). Default on. */
+  FORECAST_ENSEMBLE_ENABLED: process.env.FORECAST_ENSEMBLE_ENABLED !== 'false',
 };

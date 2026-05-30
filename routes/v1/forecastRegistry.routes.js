@@ -11,6 +11,7 @@ router.use(authMiddleware, requireBusiness);
 router.get('/runs',          ctrl.listRuns);
 router.get('/models',        ctrl.listModels);
 router.get('/accuracy',      ctrl.accuracySummary);
+router.get('/ensemble',      ctrl.ensemble);
 router.post('/backtest',     ctrl.backtest);
 router.post('/accuracy/run', ctrl.runAccuracy);
 
