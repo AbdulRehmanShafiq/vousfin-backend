@@ -34,6 +34,7 @@ const arApReportRoutes = require('./v1/arApReport.routes'); // AR/AP M7 — unif
 const invoiceScheduleRoutes = require('./v1/invoiceSchedule.routes'); // AR/AP M8 — recurring invoices
 const dunningRoutes = require('./v1/dunning.routes'); // AR/AP M8 — dunning / collections
 const arApIntegrityRoutes = require('./v1/arApIntegrity.routes'); // AR/AP M9 — event log / replay / rebuild / verify
+const forecastPlatformRoutes = require('./v1/forecastPlatform.routes'); // Forecast Platform F1 — foundation data layer
 
 // Mount v1 routes under /api/v1
 router.use('/auth', authRoutes);
@@ -67,6 +68,7 @@ router.use('/ar-ap',                 arApReportRoutes);           // AR/AP M7 �
 router.use('/invoice-schedules',     invoiceScheduleRoutes);      // AR/AP M8 — recurring invoices
 router.use('/dunning',               dunningRoutes);              // AR/AP M8 — dunning / collections
 router.use('/ar-ap-integrity',       arApIntegrityRoutes);        // AR/AP M9 — event log / replay / rebuild / verify
+router.use('/forecast-platform',     forecastPlatformRoutes);     // Forecast Platform F1 — foundation data layer
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
