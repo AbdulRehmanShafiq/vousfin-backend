@@ -556,6 +556,35 @@ module.exports = {
    */
   DEFAULT_APPROVAL_THRESHOLD: 50000,
 
+  // ===============================
+  // AR/AP Refactor M6 — Multi-level approval ladder
+  // ===============================
+  APPROVAL_LEVELS: {
+    LEVEL_1:    { key: 'level_1',    name: 'Level 1',    rank: 1 },
+    LEVEL_2:    { key: 'level_2',    name: 'Level 2',    rank: 2 },
+    FINANCE:    { key: 'finance',    name: 'Finance',    rank: 3 },
+    CONTROLLER: { key: 'controller', name: 'Controller', rank: 4 },
+    CFO:        { key: 'cfo',        name: 'CFO',        rank: 5 },
+  },
+
+  // Amount tiers → which approval levels the chain requires (first match by maxAmount).
+  // Business overrides can be supplied at runtime; this is the sensible default.
+  APPROVAL_TIERS: [
+    { maxAmount: 50000,    levels: ['level_1'] },
+    { maxAmount: 250000,   levels: ['level_1', 'level_2'] },
+    { maxAmount: 1000000,  levels: ['level_1', 'finance', 'controller'] },
+    { maxAmount: Infinity, levels: ['level_1', 'finance', 'controller', 'cfo'] },
+  ],
+
+  APPROVAL_STEP_STATUS: {
+    PENDING:    'pending',
+    APPROVED:   'approved',
+    REJECTED:   'rejected',
+    REASSIGNED: 'reassigned',
+    ESCALATED:  'escalated',
+    SKIPPED:    'skipped',
+  },
+
 
   // ===============================
   // Anomaly Alert Constants

@@ -66,7 +66,7 @@ exports.getById = async (req, res, next) => {
 
 exports.submitForApproval = async (req, res, next) => {
   try {
-    const bill = await billService.submitForApproval(req.params.id, actor(req), req.ip);
+    const bill = await billService.submitForApproval(req.params.id, actor(req), req.ip, { multiLevel: req.body?.multiLevel === true });
     ApiResponse.success(res, bill, 'Bill submitted for approval');
   } catch (err) { next(err); }
 };
@@ -116,6 +116,21 @@ exports.applyCreditMemo = async (req, res, next) => {
   try {
     const bill = await billService.applyCreditMemo(req.params.id, req.body?.amount, req.body?.reason, actor(req), req.ip);
     ApiResponse.success(res, bill, 'Credit memo applied');
+  } catch (err) { next(err); }
+};
+
+// M6 — multi-level approval actions
+exports.reassignApproval = async (req, res, next) => {
+  try {
+    const bill = await billService.actOnApproval(req.params.id, 'reassign', actor(req), { note: req.body?.note, level: req.body?.level }, req.ip);
+    ApiResponse.success(res, bill, 'Approval step reassigned');
+  } catch (err) { next(err); }
+};
+
+exports.escalateApproval = async (req, res, next) => {
+  try {
+    const bill = await billService.actOnApproval(req.params.id, 'escalate', actor(req), { note: req.body?.note }, req.ip);
+    ApiResponse.success(res, bill, 'Approval step escalated');
   } catch (err) { next(err); }
 };
 

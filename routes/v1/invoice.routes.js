@@ -34,6 +34,8 @@ router.post('/:id/send',       invoiceController.send);
 router.post('/:id/cancel',     invoiceController.cancel);
 router.post('/:id/void',        invoiceController.void);         // M5 — GL-correct void
 router.post('/:id/credit-memo', invoiceController.applyCreditMemo); // M5 — customer credit memo
+router.post('/:id/reassign-approval', invoiceController.reassignApproval); // M6
+router.post('/:id/escalate-approval', invoiceController.escalateApproval); // M6
 router.post('/:id/dispute',    invoiceController.dispute);
 router.post('/:id/write-off',  invoiceController.writeOff);
 router.post('/:id/transition', invoiceController.transitionState);

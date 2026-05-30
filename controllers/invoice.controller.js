@@ -91,7 +91,7 @@ exports.getById = async (req, res, next) => {
 
 exports.submitForApproval = async (req, res, next) => {
   try {
-    const invoice = await invoiceService.submitForApproval(req.params.id, actor(req), req.ip);
+    const invoice = await invoiceService.submitForApproval(req.params.id, actor(req), req.ip, { multiLevel: req.body?.multiLevel === true });
     ApiResponse.success(res, invoice, 'Invoice submitted for approval');
   } catch (err) { next(err); }
 };
@@ -136,6 +136,21 @@ exports.applyCreditMemo = async (req, res, next) => {
   try {
     const invoice = await invoiceService.applyCreditMemo(req.params.id, req.body?.amount, req.body?.reason, actor(req), req.ip);
     ApiResponse.success(res, invoice, 'Credit memo applied');
+  } catch (err) { next(err); }
+};
+
+// M6 — multi-level approval actions
+exports.reassignApproval = async (req, res, next) => {
+  try {
+    const invoice = await invoiceService.actOnApproval(req.params.id, 'reassign', actor(req), { note: req.body?.note, level: req.body?.level }, req.ip);
+    ApiResponse.success(res, invoice, 'Approval step reassigned');
+  } catch (err) { next(err); }
+};
+
+exports.escalateApproval = async (req, res, next) => {
+  try {
+    const invoice = await invoiceService.actOnApproval(req.params.id, 'escalate', actor(req), { note: req.body?.note }, req.ip);
+    ApiResponse.success(res, invoice, 'Approval step escalated');
   } catch (err) { next(err); }
 };
 

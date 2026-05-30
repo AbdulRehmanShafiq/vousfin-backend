@@ -276,6 +276,19 @@ const invoiceSchema = new mongoose.Schema(
       role:   { type: String, enum: Object.values(APPROVER_ROLES) },
     }],
     approvalLog: [approvalLogEntrySchema],
+    // ── AR/AP M6 — multi-level approval chain ─────────────────────────────────
+    approvalChain: [{
+      sequence:     { type: Number },
+      level:        { type: String },
+      name:         { type: String },
+      requiredRole: { type: String },
+      status:       { type: String, default: 'pending' },
+      actorId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+      actorName:    { type: String, default: null },
+      actedAt:      { type: Date, default: null },
+      note:         { type: String, default: null },
+      history:      { type: [mongoose.Schema.Types.Mixed], default: [] },
+    }],
     approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     approvedAt: { type: Date, default: null },
 

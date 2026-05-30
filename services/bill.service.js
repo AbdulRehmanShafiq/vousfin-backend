@@ -162,7 +162,7 @@ class BillService {
   // Approval workflow
   // ───────────────────────────────────────────────────────────────────────────
 
-  async submitForApproval(id, user, ipAddress) {
+  async submitForApproval(id, user, ipAddress, opts = {}) {
     const bill = await this._loadOrThrow(id);
     if (!bill.approvalRequired) {
       return this._applyStateChange(bill, BILL_STATES.APPROVED, user, {
@@ -178,11 +178,49 @@ class BillService {
       timestamp: new Date(),
     });
     bill.approvalStatus = APPROVAL_STATUS.PENDING;
+    // M6 — build the multi-level approval chain when explicitly requested (opt-in).
+    if (opts.multiLevel && (!bill.approvalChain || bill.approvalChain.length === 0)) {
+      const approvalEngine = require('./approvalEngine.service');
+      bill.approvalChain = approvalEngine.buildChain(bill.totalAmount || bill.amount || 0, opts);
+    }
     return this._applyStateChange(bill, BILL_STATES.AWAITING_APPROVAL, user, { ipAddress });
+  }
+
+  /** M6 — act on the multi-level approval chain (reject/reassign/escalate). */
+  async actOnApproval(id, action, user, { note, level } = {}, ipAddress) {
+    const bill = await this._loadOrThrow(id);
+    const approvalEngine = require('./approvalEngine.service');
+    if (!bill.approvalChain || bill.approvalChain.length === 0) {
+      throw new ApiError(409, 'This bill has no approval chain');
+    }
+    if (action === 'reject') {
+      approvalEngine.rejectStep(bill, user, note);
+      bill.approvalStatus = APPROVAL_STATUS.REJECTED;
+      return this._applyStateChange(bill, BILL_STATES.DRAFT, user, { reason: note || 'Rejected', ipAddress });
+    }
+    if (action === 'reassign') { approvalEngine.reassignStep(bill, level, user, note); }
+    else if (action === 'escalate') { approvalEngine.escalateStep(bill, user, note); }
+    else throw new ApiError(400, `Unknown approval action "${action}"`);
+    bill.lastModifiedBy = user._id;
+    await bill.save();
+    return bill;
   }
 
   async approve(id, user, note, ipAddress) {
     const bill = await this._loadOrThrow(id);
+
+    // ── M6: multi-level approval — advance the chain one step ────────────────
+    const approvalEngine = require('./approvalEngine.service');
+    if (Array.isArray(bill.approvalChain) && approvalEngine.currentStep(bill.approvalChain)) {
+      const res = approvalEngine.approveStep(bill, user, note); // role + SoD validated
+      bill.approvalLog.push({ action: 'approved', actorId: user._id, actorName: user.fullName || user.email || 'Unknown', actorRole: user.role || null, note: note || null, timestamp: new Date() });
+      if (!res.fullyApproved) {
+        bill.lastModifiedBy = user._id;
+        await bill.save();
+        return bill;
+      }
+    }
+
     bill.approvalLog.push({
       action: 'approved',
       actorId: user._id,

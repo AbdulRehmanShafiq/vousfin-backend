@@ -297,7 +297,7 @@ class InvoiceService {
   // Approval workflow
   // ───────────────────────────────────────────────────────────────────────────
 
-  async submitForApproval(id, user, ipAddress) {
+  async submitForApproval(id, user, ipAddress, opts = {}) {
     const invoice = await this._loadOrThrow(id);
     if (!invoice.approvalRequired) {
       // Auto-promote to approved when approval is not required
@@ -314,11 +314,53 @@ class InvoiceService {
       timestamp: new Date(),
     });
     invoice.approvalStatus = APPROVAL_STATUS.PENDING;
+    // M6 — build the multi-level approval chain when explicitly requested
+    // (opt-in; default preserves the single-step approve flow). The same engine
+    // also engages whenever a chain already exists on the document.
+    if (opts.multiLevel && (!invoice.approvalChain || invoice.approvalChain.length === 0)) {
+      const approvalEngine = require('./approvalEngine.service');
+      invoice.approvalChain = approvalEngine.buildChain(invoice.totalAmount || invoice.amount || 0, opts);
+    }
     return this._applyStateChange(invoice, INVOICE_STATES.PENDING_APPROVAL, user, { ipAddress });
+  }
+
+  /** M6 — advance/act on the multi-level approval chain (reject/reassign/escalate). */
+  async actOnApproval(id, action, user, { note, level } = {}, ipAddress) {
+    const invoice = await this._loadOrThrow(id);
+    const approvalEngine = require('./approvalEngine.service');
+    if (!invoice.approvalChain || invoice.approvalChain.length === 0) {
+      throw new ApiError(409, 'This invoice has no approval chain');
+    }
+    if (action === 'reject') {
+      approvalEngine.rejectStep(invoice, user, note);
+      invoice.approvalStatus = APPROVAL_STATUS.REJECTED;
+      return this._applyStateChange(invoice, INVOICE_STATES.DRAFT, user, { reason: note || 'Rejected', ipAddress });
+    }
+    if (action === 'reassign') { approvalEngine.reassignStep(invoice, level, user, note); }
+    else if (action === 'escalate') { approvalEngine.escalateStep(invoice, user, note); }
+    else throw new ApiError(400, `Unknown approval action "${action}"`);
+    invoice.lastModifiedBy = user._id;
+    await invoice.save();
+    return invoice;
   }
 
   async approve(id, user, note, ipAddress) {
     const invoice = await this._loadOrThrow(id);
+
+    // ── M6: multi-level approval — advance the chain one step ────────────────
+    const approvalEngine = require('./approvalEngine.service');
+    if (Array.isArray(invoice.approvalChain) && approvalEngine.currentStep(invoice.approvalChain)) {
+      const res = approvalEngine.approveStep(invoice, user, note); // role + SoD validated
+      invoice.approvalLog.push({ action: 'approved', actorId: user._id, actorName: user.fullName || user.email || 'Unknown', actorRole: user.role || null, note: note || null, timestamp: new Date() });
+      if (!res.fullyApproved) {
+        // Intermediate step — stay in pending_approval until the chain completes.
+        invoice.lastModifiedBy = user._id;
+        await invoice.save();
+        return invoice;
+      }
+      // Final step approved → fall through to finalize (post recognition JE).
+    }
+
     invoice.approvalLog.push({
       action:    'approved',
       actorId:   user._id,
