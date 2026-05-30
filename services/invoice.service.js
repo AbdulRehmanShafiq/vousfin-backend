@@ -388,6 +388,20 @@ class InvoiceService {
     return this._applyStateChange(invoice, INVOICE_STATES.CANCELLED, user, { reason, ipAddress });
   }
 
+  /** M5 — GL-correct void (reverses recognition + refunds payments; never deletes). */
+  async void(id, reason, user, ipAddress) {
+    const invoice = await this._loadOrThrow(id);
+    const arApVoidCredit = require('./arApVoidCredit.service');
+    return arApVoidCredit.voidDocument('invoice', invoice, reason, user, ipAddress);
+  }
+
+  /** M5 — apply a customer credit memo (DR Sales Returns / CR AR) to this invoice. */
+  async applyCreditMemo(id, amount, reason, user, ipAddress) {
+    const invoice = await this._loadOrThrow(id);
+    const arApVoidCredit = require('./arApVoidCredit.service');
+    return arApVoidCredit.applyCreditMemo('invoice', invoice, amount, reason, user, ipAddress);
+  }
+
   async dispute(id, user, reason, ipAddress) {
     const invoice = await this._loadOrThrow(id);
     invoice.disputeReason = reason || null;

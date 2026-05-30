@@ -104,6 +104,21 @@ exports.cancel = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// M5 — GL-correct void + vendor credit memo
+exports.void = async (req, res, next) => {
+  try {
+    const bill = await billService.void(req.params.id, req.body?.reason, actor(req), req.ip);
+    ApiResponse.success(res, bill, 'Bill voided');
+  } catch (err) { next(err); }
+};
+
+exports.applyCreditMemo = async (req, res, next) => {
+  try {
+    const bill = await billService.applyCreditMemo(req.params.id, req.body?.amount, req.body?.reason, actor(req), req.ip);
+    ApiResponse.success(res, bill, 'Credit memo applied');
+  } catch (err) { next(err); }
+};
+
 exports.softDelete = async (req, res, next) => {
   try {
     const bill = await billService.softDelete(req.params.id, actor(req), req.ip);

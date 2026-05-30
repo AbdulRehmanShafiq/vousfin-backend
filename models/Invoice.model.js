@@ -155,6 +155,18 @@ const invoiceSchema = new mongoose.Schema(
       index: true,
     },
 
+    // ── AR/AP M5 — GL-correct void + credit memos ─────────────────────────────
+    voidedAt:           { type: Date, default: null },
+    voidReason:         { type: String, default: null, maxlength: 500 },
+    voidJournalEntryIds:[{ type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry' }],
+    creditMemos: [{
+      amount:         { type: Number, required: true, min: 0.01 },
+      reason:         { type: String, default: null, maxlength: 500 },
+      journalEntryId: { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry', default: null },
+      appliedAt:      { type: Date, default: Date.now },
+      createdBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    }],
+
     // ── Customer side (AR) ────────────────────────────────────────────────────
     customerId: {
       type: mongoose.Schema.Types.ObjectId,

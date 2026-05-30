@@ -81,6 +81,9 @@ const EVENTS = Object.freeze({
   INVOICE_APPROVED:             'invoice.approved',
   INVOICE_PAID:                 'invoice.paid',
   INVOICE_CANCELLED:            'invoice.cancelled',
+  INVOICE_VOIDED:               'invoice.voided',     // AR/AP M5 — GL-correct void
+  BILL_VOIDED:                  'bill.voided',
+  CREDIT_MEMO_APPLIED:          'credit_memo.applied',
 
   // ── Parties ───────────────────────────────────────────────────────────────
   VENDOR_BALANCE_CHANGED:       'vendor.balance_changed',

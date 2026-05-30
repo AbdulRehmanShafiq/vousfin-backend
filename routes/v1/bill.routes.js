@@ -31,6 +31,8 @@ router.post('/:id/reject',  billController.reject);
 // Lifecycle
 router.post('/:id/schedule',   billController.schedule);
 router.post('/:id/cancel',     billController.cancel);
+router.post('/:id/void',        billController.void);            // M5 — GL-correct void
+router.post('/:id/credit-memo', billController.applyCreditMemo); // M5 — vendor credit memo
 router.post('/:id/transition', billController.transitionState);
 
 // Soft delete

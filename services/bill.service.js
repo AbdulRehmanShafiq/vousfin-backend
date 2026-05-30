@@ -257,6 +257,20 @@ class BillService {
     return this._applyStateChange(bill, BILL_STATES.CANCELLED, user, { reason, ipAddress });
   }
 
+  /** M5 — GL-correct void (reverses recognition + reclaims payments; never deletes). */
+  async void(id, reason, user, ipAddress) {
+    const bill = await this._loadOrThrow(id);
+    const arApVoidCredit = require('./arApVoidCredit.service');
+    return arApVoidCredit.voidDocument('bill', bill, reason, user, ipAddress);
+  }
+
+  /** M5 — apply a vendor credit memo (DR AP / CR Expense) to this bill. */
+  async applyCreditMemo(id, amount, reason, user, ipAddress) {
+    const bill = await this._loadOrThrow(id);
+    const arApVoidCredit = require('./arApVoidCredit.service');
+    return arApVoidCredit.applyCreditMemo('bill', bill, amount, reason, user, ipAddress);
+  }
+
   /**
    * Phase 2 — update a draft bill (only drafts can be edited).
    */

@@ -426,6 +426,9 @@ module.exports = {
     // ── AR/AP Refactor M2 ─────────────────────────────────────────────────────
     PAYMENT_APPLIED: 'Payment Applied',
     PAYMENT_VOIDED:  'Payment Voided',
+    // ── AR/AP Refactor M5 ─────────────────────────────────────────────────────
+    VOIDED:          'Voided',
+    CREDIT_APPLIED:  'Credit Memo Applied',
   },
 
   ENTITY_TYPES: {
@@ -485,7 +488,7 @@ module.exports = {
     approved:          ['sent', 'partially_paid', 'paid', 'cancelled', 'disputed', 'overdue', 'voided'],
     sent:              ['partially_paid', 'paid', 'overdue', 'disputed', 'cancelled', 'voided'],
     partially_paid:    ['paid', 'overdue', 'disputed', 'written_off', 'voided'],
-    paid:              [], // terminal
+    paid:              ['voided'], // terminal except a GL-correct void (M5)
     overdue:           ['partially_paid', 'paid', 'disputed', 'written_off', 'cancelled', 'voided'],
     cancelled:         [], // terminal
     disputed:          ['approved', 'sent', 'partially_paid', 'paid', 'written_off', 'cancelled', 'voided'],
@@ -520,7 +523,7 @@ module.exports = {
     approved:            ['scheduled', 'partially_paid', 'paid', 'cancelled', 'overdue', 'voided'],
     scheduled:           ['partially_paid', 'paid', 'overdue', 'cancelled', 'voided'],
     partially_paid:      ['paid', 'overdue', 'cancelled', 'voided'],
-    paid:                [], // terminal
+    paid:                ['voided'], // terminal except a GL-correct void (M5)
     overdue:             ['partially_paid', 'paid', 'cancelled', 'voided'],
     cancelled:           [], // terminal
     rejected:            ['draft', 'cancelled', 'voided'],

@@ -124,6 +124,21 @@ exports.cancel = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// M5 — GL-correct void + customer credit memo
+exports.void = async (req, res, next) => {
+  try {
+    const invoice = await invoiceService.void(req.params.id, req.body?.reason, actor(req), req.ip);
+    ApiResponse.success(res, invoice, 'Invoice voided');
+  } catch (err) { next(err); }
+};
+
+exports.applyCreditMemo = async (req, res, next) => {
+  try {
+    const invoice = await invoiceService.applyCreditMemo(req.params.id, req.body?.amount, req.body?.reason, actor(req), req.ip);
+    ApiResponse.success(res, invoice, 'Credit memo applied');
+  } catch (err) { next(err); }
+};
+
 exports.dispute = async (req, res, next) => {
   try {
     const invoice = await invoiceService.dispute(req.params.id, actor(req), req.body?.reason, req.ip);
