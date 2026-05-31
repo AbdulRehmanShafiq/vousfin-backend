@@ -21,6 +21,11 @@ Contract (stable — Node depends on it):
 """
 from __future__ import annotations
 
+# IMPORTANT (Windows): lightgbm must load its OpenMP runtime BEFORE statsforecast/
+# mlforecast (numba/coreforecast) load theirs, or the duplicate OpenMP runtimes
+# cause a native access violation (0xC0000005) at import. Keep this first.
+import lightgbm  # noqa: F401
+
 from typing import List, Dict, Any
 import numpy as np
 from fastapi import FastAPI

@@ -21,9 +21,14 @@ The Node backend (`services/forecasting/infra/inferenceClient.js` + `lstmForecas
 ```bash
 cd ml-worker
 pip install -r requirements.txt
+python selftest.py                 # optional: verifies libs + global model end-to-end
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 Point the backend at it: set `LSTM_API_URL=http://localhost:8000` (or `INFERENCE_URL`). The Node side auto-detects it via the health probe and starts using it.
+
+> **Windows note:** `app.py` imports `lightgbm` first on purpose — loading its
+> OpenMP runtime before statsforecast/mlforecast avoids a native access-violation
+> crash (0xC0000005) from duplicate OpenMP runtimes. Keep that import first.
 
 ## Train the global model
 1. The running worker **accumulates** every forecasted series (de-identified) into `data/panel.parquet`.
