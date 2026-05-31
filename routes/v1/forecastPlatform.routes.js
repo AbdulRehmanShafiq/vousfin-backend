@@ -13,5 +13,7 @@ router.post('/datasets/build',       ctrl.buildDataset);
 router.get('/datasets',              ctrl.listRegistry);
 router.post('/features/materialize', ctrl.materialize);
 router.get('/features',              ctrl.listFeatures);
+router.get('/feature-catalog',       ctrl.featureCatalog);   // FE framework
+router.post('/features/engineer',    ctrl.engineerFeatures); // FE framework
 
 module.exports = router;

@@ -3,6 +3,7 @@
 'use strict';
 const datasetBuilder = require('../services/forecasting/platform/datasetBuilder.service');
 const featureStore = require('../services/forecasting/platform/featureStore.service');
+const fe = require('../services/forecasting/featureEngineering'); // feature engineering framework
 const ForecastDatasetRegistry = require('../models/ForecastDatasetRegistry.model');
 const ApiResponse = require('../utils/ApiResponse');
 
@@ -58,5 +59,28 @@ exports.listRegistry = async (req, res, next) => {
 exports.listSources = async (req, res, next) => {
   try {
     ApiResponse.success(res, datasetBuilder.sources, 'Forecast platform sources');
+  } catch (err) { next(err); }
+};
+
+// GET /forecast-platform/feature-catalog — the feature families framework.
+exports.featureCatalog = async (req, res, next) => {
+  try {
+    ApiResponse.success(res, { families: fe.catalog.FAMILIES, count: fe.catalog.count() }, 'Feature families catalog');
+  } catch (err) { next(err); }
+};
+
+// POST /forecast-platform/features/engineer — build → engineer the full family
+// matrix → rank features against the revenue target (MI). Leakage-safe.
+exports.engineerFeatures = async (req, res, next) => {
+  try {
+    const { rows } = await datasetBuilder.buildDataset(biz(req), buildOpts(req.body));
+    const eng = fe.pipeline.engineer(rows, { anomalyRisk: req.body?.anomalyRisk });
+    const target = rows.map((r) => r.revenue || 0);
+    const ranking = fe.selection.selectFeatures(eng.columns, target, { method: 'mi', topK: 15 });
+    ApiResponse.success(res, {
+      leakageSafe: eng.leakageSafe, families: eng.families,
+      rowCount: eng.features.length, sample: eng.features.slice(-3),
+      topFeatures: ranking.selected,
+    }, 'Engineered feature matrix');
   } catch (err) { next(err); }
 };
