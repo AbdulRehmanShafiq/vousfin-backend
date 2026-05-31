@@ -9,6 +9,7 @@ const classical = require('../services/forecasting/classical');
 const ensembleForecast = require('../services/forecasting/ensembleForecast.service');
 const championChallenger = require('../services/forecasting/championChallenger.service');
 const driftMonitor = require('../services/forecasting/driftMonitor.service');
+const explainability = require('../services/forecasting/explainability.service');
 const lstm = require('../services/forecasting/lstmForecastService');
 const { runAccuracyCapture } = require('../jobs/forecastAccuracy.job');
 const ApiResponse = require('../utils/ApiResponse');
@@ -119,6 +120,23 @@ exports.drift = async (req, res, next) => {
       target: req.query.target || 'Revenue', granularity: req.query.granularity || 'monthly',
     });
     ApiResponse.success(res, result, 'Drift check');
+  } catch (err) { next(err); }
+};
+
+// GET /forecast-registry/explain — member + driver attribution + narrative (F7).
+exports.explain = async (req, res, next) => {
+  try {
+    const result = await explainability.explain(biz(req), req.query.target || 'Revenue', Number(req.query.horizon) || 6);
+    ApiResponse.success(res, result, 'Forecast explanation');
+  } catch (err) { next(err); }
+};
+
+// POST /forecast-registry/scenario — what-if shocked forecast vs base (F7).
+exports.scenario = async (req, res, next) => {
+  try {
+    const { target = 'Revenue', horizon = 6, revenueMultiplier, expenseMultiplier } = req.body || {};
+    const result = await explainability.scenario(biz(req), target, Number(horizon) || 6, { revenueMultiplier, expenseMultiplier });
+    ApiResponse.success(res, result, 'Scenario forecast');
   } catch (err) { next(err); }
 };
 

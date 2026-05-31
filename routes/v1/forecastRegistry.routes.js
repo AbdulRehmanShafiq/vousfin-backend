@@ -14,8 +14,10 @@ router.get('/accuracy',      ctrl.accuracySummary);
 router.get('/ensemble',      ctrl.ensemble);
 router.get('/drift',         ctrl.drift);         // F5
 router.get('/champion',      ctrl.champion);      // F5
+router.get('/explain',       ctrl.explain);       // F7
 router.post('/backtest',     ctrl.backtest);
 router.post('/retrain',      ctrl.retrain);       // F5
+router.post('/scenario',     ctrl.scenario);      // F7
 router.post('/accuracy/run', ctrl.runAccuracy);
 
 module.exports = router;
