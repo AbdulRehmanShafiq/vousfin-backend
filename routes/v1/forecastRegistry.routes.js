@@ -11,6 +11,7 @@ router.use(authMiddleware, requireBusiness);
 router.get('/runs',          ctrl.listRuns);
 router.get('/models',        ctrl.listModels);
 router.get('/accuracy',      ctrl.accuracySummary);
+router.get('/accuracy-score', ctrl.accuracyScore);  // A1 — measured accuracy% + confidence
 router.get('/ensemble',      ctrl.ensemble);
 router.get('/drift',         ctrl.drift);         // F5
 router.get('/champion',      ctrl.champion);      // F5

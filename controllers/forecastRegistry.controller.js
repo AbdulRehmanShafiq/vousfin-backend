@@ -10,6 +10,7 @@ const ensembleForecast = require('../services/forecasting/ensembleForecast.servi
 const championChallenger = require('../services/forecasting/championChallenger.service');
 const driftMonitor = require('../services/forecasting/driftMonitor.service');
 const explainability = require('../services/forecasting/explainability.service');
+const accuracyScore = require('../services/forecasting/accuracyScore.service');
 const lstm = require('../services/forecasting/lstmForecastService');
 const { runAccuracyCapture } = require('../jobs/forecastAccuracy.job');
 const ApiResponse = require('../utils/ApiResponse');
@@ -135,6 +136,14 @@ exports.drift = async (req, res, next) => {
       target: req.query.target || 'Revenue', granularity: req.query.granularity || 'monthly',
     });
     ApiResponse.success(res, result, 'Drift check');
+  } catch (err) { next(err); }
+};
+
+// GET /forecast-registry/accuracy-score — measured accuracy % + confidence (A1).
+exports.accuracyScore = async (req, res, next) => {
+  try {
+    const result = await accuracyScore.score(biz(req), req.query.target || 'Revenue', req.query.granularity || 'monthly');
+    ApiResponse.success(res, result, 'Forecast accuracy & confidence');
   } catch (err) { next(err); }
 };
 
