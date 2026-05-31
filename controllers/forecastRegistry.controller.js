@@ -11,6 +11,7 @@ const championChallenger = require('../services/forecasting/championChallenger.s
 const driftMonitor = require('../services/forecasting/driftMonitor.service');
 const explainability = require('../services/forecasting/explainability.service');
 const accuracyScore = require('../services/forecasting/accuracyScore.service');
+const hierarchical = require('../services/forecasting/hierarchical.service');
 const governance = require('../services/forecasting/governance.service');
 const usageMeter = require('../services/forecasting/usageMeter.service');
 const lstm = require('../services/forecasting/lstmForecastService');
@@ -138,6 +139,14 @@ exports.drift = async (req, res, next) => {
       target: req.query.target || 'Revenue', granularity: req.query.granularity || 'monthly',
     });
     ApiResponse.success(res, result, 'Drift check');
+  } catch (err) { next(err); }
+};
+
+// GET /forecast-registry/hierarchical — by-stream forecast reconciled to the total (B1).
+exports.hierarchical = async (req, res, next) => {
+  try {
+    const result = await hierarchical.forecast(biz(req), { target: req.query.target || 'Revenue', horizon: Number(req.query.horizon) || 6 });
+    ApiResponse.success(res, result, 'Hierarchical forecast');
   } catch (err) { next(err); }
 };
 

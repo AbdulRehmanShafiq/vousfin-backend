@@ -10,6 +10,7 @@
 //
 'use strict';
 const t = require('./transforms');
+const calendar = require('./calendar');
 
 const r4 = (v) => (v == null ? null : Math.round(v * 10000) / 10000);
 const safeDiv = (a, b) => (b ? a / b : null);
@@ -80,6 +81,12 @@ function engineer(rows, opts = {}) {
     const f = { periodKey: row.periodKey, knowledgeDate: row.periodEnd };
     for (const [name, arr] of Object.entries(cols)) f[name] = arr[i];
     Object.assign(f, fourier[i]);
+    // B2 — calendar/seasonality regressors (causal: derived only from the date)
+    const ps = new Date(row.periodStart);
+    const mm = ps.getUTCMonth() + 1;
+    f.is_quarter_end_month = mm % 3 === 0 ? 1 : 0;
+    f.is_year_end_month = mm === 12 ? 1 : 0;
+    f.holiday_count = calendar.holidaysInMonth(ps.getUTCFullYear(), mm).length;
     // snapshot (stock) features only where genuinely known (no back-fill → no leakage)
     if (row.totalAssets != null) f.debt_ratio = safeDiv(row.totalLiabilities || 0, row.totalAssets) != null ? r4((row.totalLiabilities || 0) / row.totalAssets) : null;
     if (row.totalAssets != null && row.totalLiabilities != null) {

@@ -6,4 +6,5 @@ module.exports = {
   selection:  require('./selection'),
   catalog:    require('./catalog'),
   pipeline:   require('./pipeline'),
+  calendar:   require('./calendar'),
 };

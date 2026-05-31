@@ -17,6 +17,7 @@ router.get('/governance/dashboard', ctrl.governanceDashboard); // F9
 router.post('/governance/rollback', ctrl.rollback);            // F9
 router.get('/usage',         ctrl.usage);                      // F9
 router.get('/ensemble',      ctrl.ensemble);
+router.get('/hierarchical',  ctrl.hierarchical);  // B1 — by-stream + reconciliation
 router.get('/drift',         ctrl.drift);         // F5
 router.get('/champion',      ctrl.champion);      // F5
 router.get('/explain',       ctrl.explain);       // F7
