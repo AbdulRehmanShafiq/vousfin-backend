@@ -36,6 +36,7 @@ const dunningRoutes = require('./v1/dunning.routes'); // AR/AP M8 — dunning / 
 const arApIntegrityRoutes = require('./v1/arApIntegrity.routes'); // AR/AP M9 — event log / replay / rebuild / verify
 const forecastPlatformRoutes = require('./v1/forecastPlatform.routes'); // Forecast Platform F1 — foundation data layer
 const forecastRegistryRoutes = require('./v1/forecastRegistry.routes'); // Forecast Platform F3 — registry/persistence/baseline gate
+const forecastDomainRoutes = require('./v1/forecastDomain.routes'); // Forecast Platform F6 — domain forecasts
 
 // Mount v1 routes under /api/v1
 router.use('/auth', authRoutes);
@@ -71,6 +72,7 @@ router.use('/dunning',               dunningRoutes);              // AR/AP M8 �
 router.use('/ar-ap-integrity',       arApIntegrityRoutes);        // AR/AP M9 — event log / replay / rebuild / verify
 router.use('/forecast-platform',     forecastPlatformRoutes);     // Forecast Platform F1 — foundation data layer
 router.use('/forecast-registry',     forecastRegistryRoutes);     // Forecast Platform F3 — registry/persistence/baseline gate
+router.use('/forecast-domains',      forecastDomainRoutes);       // Forecast Platform F6 — domain forecasts
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
