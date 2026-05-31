@@ -15,6 +15,8 @@ const backtest = require('./backtest');
 const baselines = require('./baselines');
 const classical = require('./classical');
 const regression = require('./regression');
+const { elasticNetForecaster } = require('./elasticNet');
+const { etsForecaster } = require('./ets');
 
 /** Default member set (all share (train, horizon, opts) -> number[]). */
 function defaultMembers(period = 3) {
@@ -22,7 +24,9 @@ function defaultMembers(period = 3) {
     seasonalNaive: (tr, h) => baselines.seasonalNaive(tr, h, { period }),
     drift:         (tr, h) => baselines.drift(tr, h),
     holtWinters:   (tr, h) => classical.holtWintersForecaster(tr, h, { period }),
+    ets:           (tr, h) => etsForecaster(tr, h, { period }),
     arRegression:  (tr, h) => regression.arForecaster(tr, h, { p: 2 }),
+    elasticNet:    (tr, h) => elasticNetForecaster(tr, h, { p: 3, alpha: 0.1, l1Ratio: 0.5 }),
   };
 }
 

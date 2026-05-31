@@ -9,8 +9,8 @@
 ## Where each model runs
 | Model | Runtime | Status |
 |---|---|---|
-| AR ridge-OLS (linear ML member) | Node (`regression.js`) | ✅ shipped |
-| ElasticNet | Node (planned) | ▶ next |
+| AR ridge-OLS (linear ML member) | Node (`regression.js`) | ✅ shipped (ensemble member) |
+| **ElasticNet** (coordinate descent) | Node (`elasticNet.js`) | ✅ shipped (ensemble member) |
 | XGBoost · LightGBM · CatBoost · RandomForest · ExtraTrees · GradientBoosting | Python worker | F8 contract ready |
 
 ## Per-model specification (use case · strengths · weaknesses · hyperparameters)

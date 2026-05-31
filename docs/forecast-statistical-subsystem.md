@@ -9,7 +9,8 @@
 | Model | Runtime | Status |
 |---|---|---|
 | Holt-Winters, Holt's Double ES | Node (`classical.js`) | ✅ shipped (ensemble member) |
-| ETS, ARIMA, differenced-AR | Node (planned, JS-feasible) | ▶ next |
+| **ETS** (auto-form by AICc) | Node (`ets.js`) | ✅ shipped (ensemble member) |
+| ARIMA / differenced-AR | Node (`regression.js` AR member) | ✅ AR shipped; full ARIMA ▶ |
 | SARIMA, VAR, Prophet, BSTS | Python worker (FastAPI) | contract ready (F8) |
 
 ## Per-model specification

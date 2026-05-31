@@ -103,6 +103,7 @@ class ExplainabilityService {
     return ({
       holtWinters: 'Holt-Winters seasonal', drift: 'trend (drift)',
       seasonalNaive: 'seasonal-naive', arRegression: 'autoregressive (AR)',
+      ets: 'auto-ETS', elasticNet: 'ElasticNet',
     })[name] || name;
   }
 }
