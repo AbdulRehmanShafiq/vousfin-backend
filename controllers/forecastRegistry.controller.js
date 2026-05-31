@@ -103,6 +103,21 @@ exports.runAccuracy = async (req, res, next) => {
   catch (err) { next(err); }
 };
 
+// GET /forecast-registry/infra — cache/queue/inference health + tipping-point signals (F8).
+exports.infra = async (req, res, next) => {
+  try {
+    const { cache } = require('../services/forecasting/infra/cache');
+    const { queue } = require('../services/forecasting/infra/jobQueue');
+    const { inferenceClient } = require('../services/forecasting/infra/inferenceClient');
+    const config = require('../config');
+    ApiResponse.success(res, {
+      cache: { backend: config.FORECAST_CACHE_BACKEND, ...cache.getStats() },
+      queue: { backend: config.FORECAST_QUEUE_BACKEND, ...queue.getStats() },
+      inference: inferenceClient.getState(),
+    }, 'Forecast infra stats');
+  } catch (err) { next(err); }
+};
+
 // POST /forecast-registry/retrain — retrain + champion/challenger decision (F5).
 exports.retrain = async (req, res, next) => {
   try {

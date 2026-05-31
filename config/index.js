@@ -76,4 +76,12 @@ module.exports = {
   FORECAST_RETRAIN_ENABLED: process.env.FORECAST_RETRAIN_ENABLED !== 'false',
   /** F2 — nightly pre-warm of multi-source feature snapshots. Default on. */
   FORECAST_MATERIALIZE_ENABLED: process.env.FORECAST_MATERIALIZE_ENABLED !== 'false',
+
+  // ── Forecast Platform F8 — scale-out backends (swap via env, no code change) ─
+  /** 'memory' (default) | 'redis' — forecast cache backend. */
+  FORECAST_CACHE_BACKEND: process.env.CACHE_BACKEND || 'memory',
+  /** 'inprocess' (default) | 'rabbitmq' — inference job-queue backend. */
+  FORECAST_QUEUE_BACKEND: process.env.QUEUE_BACKEND || 'inprocess',
+  /** Python ML inference worker base URL (LSTM/GBM/SHAP). */
+  INFERENCE_URL: process.env.INFERENCE_URL || process.env.LSTM_API_URL || 'http://localhost:8000',
 };

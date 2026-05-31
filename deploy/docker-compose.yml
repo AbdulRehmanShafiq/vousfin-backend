@@ -1,0 +1,48 @@
+# VousFin AI Forecasting Platform — full local/staging stack.
+#   docker compose -f deploy/docker-compose.yml up
+# Maps to the F8 target architecture: stateless Node API + Python inference
+# worker pool, Redis cache, RabbitMQ queue, Mongo (OLTP) + Timescale (feature store).
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    volumes: [mongo_data:/data/db]
+    ports: ["27017:27017"]
+
+  redis:                               # forecast cache (CACHE_BACKEND=redis)
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+
+  rabbitmq:                            # inference job queue (QUEUE_BACKEND=rabbitmq)
+    image: rabbitmq:3-management-alpine
+    ports: ["5672:5672", "15672:15672"]
+
+  timescale:                           # feature store at scale (graduates from Mongo)
+    image: timescale/timescaledb:latest-pg16
+    environment: { POSTGRES_PASSWORD: vousfin, POSTGRES_DB: features }
+    ports: ["5432:5432"]
+    volumes: [ts_data:/var/lib/postgresql/data]
+
+  backend:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    environment:
+      MONGO_URI: mongodb://mongo:27017/vousfin
+      CACHE_BACKEND: redis
+      REDIS_URL: redis://redis:6379
+      QUEUE_BACKEND: rabbitmq
+      RABBITMQ_URL: amqp://rabbitmq:5672
+      INFERENCE_URL: http://ml-worker:8000
+    depends_on: [mongo, redis, rabbitmq]
+    ports: ["5000:5000"]
+    deploy: { replicas: 2 }            # stateless → scale horizontally
+
+  ml-worker:
+    build: { context: ../ml-worker, dockerfile: ../deploy/Dockerfile.worker }
+    environment: { LSTM_MODEL_DIR: /app/models }
+    ports: ["8000:8000"]
+    deploy: { replicas: 2 }            # scale on queue depth (GPU pool for TFT)
+
+volumes:
+  mongo_data:
+  ts_data:

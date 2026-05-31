@@ -1,0 +1,20 @@
+# VousFin ML inference worker (Python/FastAPI) — LSTM / GBM / SHAP.
+# Build:  docker build -f deploy/Dockerfile.worker -t vousfin-ml-worker ./ml-worker
+FROM python:3.11-slim AS base
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+COPY . .
+
+RUN useradd -m worker && chown -R worker /app
+USER worker
+
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/vousfin/health').status==200 else 1)"
+
+# Multiple Uvicorn workers per pod; scale pods horizontally for throughput.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

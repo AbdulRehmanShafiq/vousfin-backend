@@ -1,0 +1,82 @@
+# VousFin AI Forecasting Platform — Kubernetes manifests (F8).
+# Stateless Node API (HPA on CPU) + Python ML worker pool (HPA on CPU/queue).
+# Redis/RabbitMQ/Timescale assumed managed (or add StatefulSets); secrets via
+# `vousfin-secrets`. Apply:  kubectl apply -f deploy/k8s/forecast-platform.yaml
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vousfin-backend, labels: { app: vousfin-backend } }
+spec:
+  replicas: 3
+  selector: { matchLabels: { app: vousfin-backend } }
+  template:
+    metadata: { labels: { app: vousfin-backend } }
+    spec:
+      containers:
+        - name: backend
+          image: vousfin-backend:latest
+          ports: [{ containerPort: 5000 }]
+          envFrom: [{ secretRef: { name: vousfin-secrets } }]
+          env:
+            - { name: CACHE_BACKEND, value: "redis" }
+            - { name: QUEUE_BACKEND, value: "rabbitmq" }
+            - { name: INFERENCE_URL, value: "http://vousfin-ml-worker:8000" }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits:   { cpu: "1",    memory: "512Mi" }
+          readinessProbe: { httpGet: { path: /api/v1/health, port: 5000 }, initialDelaySeconds: 5, periodSeconds: 10 }
+          livenessProbe:  { httpGet: { path: /api/v1/health, port: 5000 }, initialDelaySeconds: 15, periodSeconds: 20 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vousfin-backend }
+spec:
+  selector: { app: vousfin-backend }
+  ports: [{ port: 80, targetPort: 5000 }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: vousfin-backend-hpa }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: vousfin-backend }
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 65 } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: vousfin-ml-worker, labels: { app: vousfin-ml-worker } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: vousfin-ml-worker } }
+  template:
+    metadata: { labels: { app: vousfin-ml-worker } }
+    spec:
+      containers:
+        - name: ml-worker
+          image: vousfin-ml-worker:latest
+          ports: [{ containerPort: 8000 }]
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits:   { cpu: "2",    memory: "2Gi" }   # add nvidia.com/gpu: 1 for TFT
+          readinessProbe: { httpGet: { path: /api/v1/vousfin/health, port: 8000 }, initialDelaySeconds: 10, periodSeconds: 15 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: vousfin-ml-worker }
+spec:
+  selector: { app: vousfin-ml-worker }
+  ports: [{ port: 8000, targetPort: 8000 }]
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: vousfin-ml-worker-hpa }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: vousfin-ml-worker }
+  minReplicas: 2
+  maxReplicas: 12
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }

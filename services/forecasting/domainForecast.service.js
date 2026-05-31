@@ -18,6 +18,7 @@ const liquidity = require('./domains/liquidityStress');
 const survival = require('./domains/survival');
 const { croston } = require('./domains/croston');
 const sensitivity = require('./domains/sensitivity');
+const { cache } = require('./infra/cache');           // F8 — tenant-namespaced cache
 const logger = require('../../config/logger');
 
 const MS_DAY = 86400000;
@@ -175,6 +176,12 @@ class DomainForecastService {
   }
 
   async forecast(businessId, domain, horizon = 6) {
+    // F8 — cache-aside (tenant-namespaced, 5-min TTL) to absorb repeated reads.
+    return cache.wrap(cache.key(businessId, 'domain', domain, horizon), 5 * 60 * 1000,
+      () => this._forecast(businessId, domain, horizon));
+  }
+
+  async _forecast(businessId, domain, horizon = 6) {
     switch (domain) {
       case 'profitability':       return this.profitability(businessId, horizon);
       case 'liquidity-stress':    return this.liquidityStress(businessId, horizon);
