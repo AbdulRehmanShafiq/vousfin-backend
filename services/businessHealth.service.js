@@ -385,11 +385,190 @@ async function taxComplianceInputs(businessId, startDate, endDate) {
   }
 }
 
+/* ════════════════════════════════════════════════════════════════════════════
+   FORWARD-LOOKING OUTLOOK  (H3) — projects health using the ensemble forecast
+════════════════════════════════════════════════════════════════════════════ */
+
+/** Months until projected cash depletes, walking the net-cash trajectory.
+ *  Returns null if cash survives the whole horizon; 0 if already non-positive. */
+function projectRunway(startCash, netSeries) {
+  if (!(startCash > 0)) return 0;
+  let cash = startCash;
+  for (let i = 0; i < (netSeries || []).length; i++) {
+    const prev = cash;
+    cash += netSeries[i] || 0;
+    if (cash <= 0) {
+      const drop = prev - cash; // > 0
+      const frac = drop > 0 ? prev / drop : 0;
+      return round(i + clamp(frac, 0, 1), 1);
+    }
+  }
+  return null;
+}
+
+/** Projected net margin (%) over the horizon from forecast revenue/expense. */
+function projectedMarginPct(revSeries, expSeries) {
+  const rev = (revSeries || []).reduce((s, v) => s + (v || 0), 0);
+  const exp = (expSeries || []).reduce((s, v) => s + (v || 0), 0);
+  return rev > 0 ? ((rev - exp) / rev) * 100 : null;
+}
+
+/** Confidence from relative interval width (narrower band → more confident). */
+function bandConfidence(predicted, lower, upper) {
+  const ratios = [];
+  for (let i = 0; i < (predicted || []).length; i++) {
+    const p = Math.abs(predicted[i]);
+    if (p > 0 && Number.isFinite(lower?.[i]) && Number.isFinite(upper?.[i])) {
+      ratios.push(((upper[i] - lower[i]) / 2) / p);
+    }
+  }
+  if (!ratios.length) return 'low';
+  const avg = ratios.reduce((a, b) => a + b, 0) / ratios.length;
+  return avg < 0.15 ? 'high' : avg < 0.35 ? 'medium' : 'low';
+}
+
+const CONFIDENCE_RANK = { high: 3, medium: 2, low: 1, insufficient: 0 };
+const weakerConfidence = (a, b) =>
+  ((CONFIDENCE_RANK[a] ?? 0) <= (CONFIDENCE_RANK[b] ?? 0) ? a : b);
+
+function monthLabels(from, n) {
+  const out = [];
+  const d = new Date(from);
+  for (let i = 1; i <= n; i++) {
+    out.push(new Date(d.getFullYear(), d.getMonth() + i, 1).toLocaleString('en', { month: 'short' }));
+  }
+  return out;
+}
+
+/**
+ * Forward-looking outlook: project runway, future margin, a forward health
+ * score and proactive signals from the ensemble forecast (read-only — uses the
+ * pure computeFromSeries so it never writes forecast records).
+ * @param {string} businessId
+ * @param {{horizonMonths?:number}} [opts]
+ */
+async function getForwardOutlook(businessId, opts = {}) {
+  if (!businessId) { const e = new Error('Business ID is required'); e.statusCode = 400; throw e; }
+  const ensembleForecast = require('./forecasting/ensembleForecast.service');
+  const lstm = require('./forecasting/lstmForecastService');
+
+  const horizon = Math.max(1, Math.min(12, opts.horizonMonths || 6));
+  const asOf = new Date();
+  const periodStart = new Date(asOf); periodStart.setMonth(periodStart.getMonth() - 12);
+
+  const [monthly, kpis] = await Promise.allSettled([
+    lstm.fetchMonthlyData(businessId, 24),
+    reportService.getKPISummary(businessId, periodStart, asOf),
+  ]).then((r) => r.map((x) => (x.status === 'fulfilled' ? x.value : null)));
+
+  const months = Array.isArray(monthly) ? monthly : [];
+  const revSeries = months.map((m) => m.revenue || 0);
+  const expSeries = months.map((m) => m.expenses || 0);
+  const nonZero = months.filter((m) => (m.revenue || 0) > 0 || (m.expenses || 0) > 0).length;
+  const period = revSeries.filter((v) => v > 0).length >= 6 ? 3 : 2;
+
+  const revFc = ensembleForecast.computeFromSeries(revSeries, { horizon, period, alpha: 0.1 });
+  const expFc = ensembleForecast.computeFromSeries(expSeries, { horizon, period, alpha: 0.1 });
+
+  if (!revFc || !expFc) {
+    return {
+      insufficient: true,
+      message: 'Not enough history to project a reliable outlook yet. About 4+ months of revenue and expense data unlocks this.',
+      horizonMonths: horizon, asOfDate: asOf.toISOString(), generatedAt: new Date().toISOString(),
+    };
+  }
+
+  const net = revFc.predicted.map((r, i) => r - (expFc.predicted[i] || 0));
+  const worst = revFc.predicted.map((_, i) => (revFc.lower[i] || 0) - (expFc.upper[i] || 0));
+  const best = revFc.predicted.map((_, i) => (revFc.upper[i] || 0) - (expFc.lower[i] || 0));
+
+  const cash = kpis?.cashBalance ?? 0;
+  const runway = projectRunway(cash, net);
+  const runwayPessimistic = projectRunway(cash, worst);
+  const runwayOptimistic = projectRunway(cash, best);
+
+  const projMargin = projectedMarginPct(revFc.predicted, expFc.predicted);
+  const currentMargin = Number.isFinite(kpis?.profitMargin) ? kpis.profitMargin : null;
+  const marginDelta = (projMargin != null && currentMargin != null) ? projMargin - currentMargin : null;
+
+  const fwdProfit = scoreProfitability({
+    netMarginPct: projMargin,
+    marginTrendPct: marginDelta != null ? marginDelta / horizon : undefined,
+  });
+  const fwdLiquidity = scoreLiquidity({ runwayMonths: runway == null ? 99 : runway });
+  const fwdOverall = combineOverall({ profitability: fwdProfit, liquidity: fwdLiquidity });
+
+  const confidence = weakerConfidence(
+    bandConfidence(revFc.predicted, revFc.lower, revFc.upper),
+    nonZero >= 6 ? 'high' : nonZero >= 3 ? 'medium' : 'low'
+  );
+
+  // ── Proactive signals ────────────────────────────────────────────────────
+  const signals = [];
+  if (runway != null && runway <= horizon) {
+    signals.push({
+      id: 'projected_cash_shortfall',
+      level: runway <= 2 ? 'critical' : 'warning',
+      title: 'Projected cash shortfall',
+      message: `At the forecast burn rate, cash is projected to run low in ~${runway} month${runway === 1 ? '' : 's'}` +
+        (runwayPessimistic != null && runwayPessimistic < runway ? ` (as soon as ~${runwayPessimistic} in a downside scenario).` : '.'),
+    });
+  }
+  const lastRev = revSeries.filter((v) => v > 0).slice(-1)[0] || 0;
+  const avgFcRev = revFc.predicted.reduce((a, b) => a + b, 0) / revFc.predicted.length;
+  if (lastRev > 0 && avgFcRev < lastRev * 0.9) {
+    signals.push({
+      id: 'revenue_decline', level: 'warning', title: 'Revenue projected to decline',
+      message: `Forecast revenue averages ${Math.round((1 - avgFcRev / lastRev) * 100)}% below your latest month.`,
+    });
+  }
+  if (marginDelta != null && marginDelta < -1) {
+    signals.push({
+      id: 'margin_compression', level: 'info', title: 'Margin compression ahead',
+      message: `Projected net margin ${round(projMargin, 1)}% vs current ${round(currentMargin, 1)}%.`,
+    });
+  }
+  if (signals.length === 0 && runway == null) {
+    signals.push({
+      id: 'stable_outlook', level: 'info', title: 'Stable outlook',
+      message: `Cash is projected to stay positive across the next ${horizon} months at the forecast burn rate.`,
+    });
+  }
+
+  return {
+    insufficient: false,
+    horizonMonths: horizon,
+    labels: monthLabels(asOf, horizon),
+    projected: {
+      revenue: revFc.predicted, revenueLower: revFc.lower, revenueUpper: revFc.upper,
+      expenses: expFc.predicted, expensesLower: expFc.lower, expensesUpper: expFc.upper,
+      netCashFlow: net,
+    },
+    runway: {
+      months: runway, pessimistic: runwayPessimistic, optimistic: runwayOptimistic,
+      survivesHorizon: runway == null,
+    },
+    margin: {
+      projectedPct: projMargin != null ? round(projMargin, 1) : null,
+      currentPct: currentMargin != null ? round(currentMargin, 1) : null,
+      deltaPct: marginDelta != null ? round(marginDelta, 1) : null,
+    },
+    forwardHealth: { overall: fwdOverall, level: fwdOverall != null ? levelOf(fwdOverall) : null },
+    confidence,
+    modelType: revFc.modelType,
+    signals,
+    asOfDate: asOf.toISOString(),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 module.exports = {
   getHealthScore,
+  getForwardOutlook,
   // pure helpers exported for unit tests
   _pure: {
     scoreLiquidity, scoreProfitability, scoreEfficiency, scoreLeverage, scoreTax,
     combineOverall, runwayPoints, currentRatioPoints, levelOf, marginTrend,
+    projectRunway, projectedMarginPct, bandConfidence, weakerConfidence,
   },
 };

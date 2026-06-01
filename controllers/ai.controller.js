@@ -206,6 +206,22 @@ const healthScore = async (req, res, next) => {
   }
 };
 
+/**
+ * Forward-looking outlook — projected runway, future margin, forward health
+ * score and proactive signals, from the ensemble forecast.
+ * GET /api/v1/ai/health-outlook?horizon=6
+ */
+const healthOutlook = async (req, res, next) => {
+  try {
+    const businessHealthService = require('../services/businessHealth.service');
+    const horizonMonths = Number(req.query.horizon) || 6;
+    const result = await businessHealthService.getForwardOutlook(req.user.businessId, { horizonMonths });
+    ApiResponse.success(res, result, 'Business outlook computed');
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   parseNaturalLanguage,
   ragQuery,
@@ -219,4 +235,5 @@ module.exports = {
   preSaveCheck,
   financialInsights,
   healthScore,
+  healthOutlook,
 };

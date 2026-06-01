@@ -10,6 +10,7 @@ const { _pure } = require('../../../services/businessHealth.service');
 const {
   scoreLiquidity, scoreProfitability, scoreEfficiency, scoreLeverage, scoreTax,
   combineOverall, runwayPoints, currentRatioPoints, levelOf, marginTrend,
+  projectRunway, projectedMarginPct, bandConfidence, weakerConfidence,
 } = _pure;
 
 describe('runwayPoints / currentRatioPoints', () => {
@@ -146,5 +147,45 @@ describe('levelOf / marginTrend', () => {
   });
   it('marginTrend undefined with <2 revenue months', () => {
     expect(marginTrend([{ revenue: 0, expenses: 5 }])).toBeUndefined();
+  });
+});
+
+/* ── H3: forward-outlook pure helpers ─────────────────────────────────────── */
+
+describe('projectRunway', () => {
+  it('returns 0 when starting cash is non-positive', () => {
+    expect(projectRunway(0, [10, 10])).toBe(0);
+    expect(projectRunway(-5, [10])).toBe(0);
+  });
+  it('returns null when cash survives the whole horizon', () => {
+    expect(projectRunway(1000, [100, 100, 100])).toBeNull(); // positive net → never depletes
+  });
+  it('finds the depletion month with sub-month interpolation', () => {
+    // start 100, burn 50/mo → depletes during month 2 (at 2.0)
+    expect(projectRunway(100, [-50, -50, -50])).toBe(2);
+    // start 100, burn 80 then 80 → crosses zero partway through month 2
+    const r = projectRunway(100, [-80, -80]);
+    expect(r).toBeGreaterThan(1);
+    expect(r).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('projectedMarginPct', () => {
+  it('computes margin over the horizon', () => {
+    expect(projectedMarginPct([100, 100], [60, 60])).toBeCloseTo(40, 5);
+  });
+  it('null when no revenue', () => {
+    expect(projectedMarginPct([0, 0], [10, 10])).toBeNull();
+  });
+});
+
+describe('bandConfidence / weakerConfidence', () => {
+  it('narrow bands → high confidence, wide → low', () => {
+    expect(bandConfidence([100, 100], [95, 95], [105, 105])).toBe('high');
+    expect(bandConfidence([100, 100], [40, 40], [160, 160])).toBe('low');
+  });
+  it('weakerConfidence picks the lower of two', () => {
+    expect(weakerConfidence('high', 'low')).toBe('low');
+    expect(weakerConfidence('medium', 'high')).toBe('medium');
   });
 });
