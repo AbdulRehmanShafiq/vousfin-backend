@@ -207,6 +207,21 @@ const healthScore = async (req, res, next) => {
 };
 
 /**
+ * Health score over time + change vs last month (for the trend sparkline).
+ * GET /api/v1/ai/health-history?days=90
+ */
+const healthHistory = async (req, res, next) => {
+  try {
+    const businessHealthService = require('../services/businessHealth.service');
+    const days = Number(req.query.days) || 90;
+    const result = await businessHealthService.getHealthHistory(req.user.businessId, days);
+    ApiResponse.success(res, result, 'Business health history');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * Forward-looking outlook — projected runway, future margin, forward health
  * score and proactive signals, from the ensemble forecast.
  * GET /api/v1/ai/health-outlook?horizon=6
@@ -250,6 +265,7 @@ module.exports = {
   preSaveCheck,
   financialInsights,
   healthScore,
+  healthHistory,
   healthOutlook,
   needsAttention,
 };

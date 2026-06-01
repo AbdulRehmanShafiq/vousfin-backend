@@ -60,6 +60,9 @@ router.get('/financial-insights',                                        aiContr
 // Business Health Score (auditable, server-side)
 router.get('/health-score',                                              aiController.healthScore);
 
+// Business Health history + trend (sparkline + change vs last month)
+router.get('/health-history',                                            aiController.healthHistory);
+
 // Forward-looking outlook (projected runway / margin / forward health)
 router.get('/health-outlook',                                            aiController.healthOutlook);
 

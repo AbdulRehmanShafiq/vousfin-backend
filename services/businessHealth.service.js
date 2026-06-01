@@ -23,6 +23,7 @@
  */
 'use strict';
 
+const mongoose = require('mongoose');
 const reportService = require('./report.service');
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -330,7 +331,7 @@ async function getHealthScore(businessId, opts = {}) {
   };
   const overall = combineOverall(subScores);
 
-  return {
+  const result = {
     insufficient: false,
     overall,
     level: overall != null ? levelOf(overall) : null,
@@ -349,6 +350,86 @@ async function getHealthScore(businessId, opts = {}) {
       cashBalance: round(cashBalance, 0),
     },
     asOfDate: asOf.toISOString(),
+    generatedAt: new Date().toISOString(),
+  };
+
+  // H5 — record today's snapshot so the score is trendable/auditable over time.
+  // Fire-and-forget + DB-readyState-guarded: it never affects this response.
+  _persistSnapshot(businessId, result);
+  return result;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   HISTORY / TREND  (H5)
+════════════════════════════════════════════════════════════════════════════ */
+
+const _toObjId = (id) =>
+  (mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+
+/** Upsert today's health snapshot. Never throws; skips if the DB isn't ready. */
+function _persistSnapshot(businessId, result) {
+  try {
+    if (!result || result.insufficient || result.overall == null) return;
+    if (mongoose.connection.readyState !== 1) return; // DB not connected → skip
+    const HealthSnapshot = require('../models/HealthSnapshot.model');
+    const date = String(result.asOfDate || new Date().toISOString()).slice(0, 10);
+    const cats = result.categories || {};
+    const catScore = (k) => (cats[k] && Number.isFinite(cats[k].score) ? cats[k].score : null);
+    HealthSnapshot.updateOne(
+      { businessId: _toObjId(businessId), date },
+      {
+        $set: {
+          businessId: _toObjId(businessId), date,
+          overall: result.overall,
+          confidence: result.confidence || null,
+          categories: {
+            liquidity: catScore('liquidity'), profitability: catScore('profitability'),
+            efficiency: catScore('efficiency'), leverage: catScore('leverage'), tax: catScore('tax'),
+          },
+          metrics: result.metrics || {},
+          capturedAt: new Date(),
+        },
+      },
+      { upsert: true }
+    ).catch(() => { /* snapshot is best-effort */ });
+  } catch (_e) { /* never throw from persistence */ }
+}
+
+/**
+ * Health score over time + the change vs ~30 days ago, for the trend sparkline.
+ * @param {string} businessId
+ * @param {number} [days=90]
+ */
+async function getHealthHistory(businessId, days = 90) {
+  if (!businessId) { const e = new Error('Business ID is required'); e.statusCode = 400; throw e; }
+  const HealthSnapshot = require('../models/HealthSnapshot.model');
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - Math.max(7, Math.min(365, days)));
+  const cutoffStr = cutoff.toISOString().slice(0, 10);
+
+  const rows = await HealthSnapshot.find(
+    { businessId: _toObjId(businessId), date: { $gte: cutoffStr } },
+    { date: 1, overall: 1, _id: 0 }
+  ).sort({ date: 1 }).lean();
+
+  const points = rows.map((r) => ({ date: r.date, overall: r.overall }));
+
+  // Δ vs the latest snapshot on/before ~30 days ago (else the earliest we have).
+  let delta = null;
+  if (points.length >= 2) {
+    const current = points[points.length - 1];
+    const target = new Date(); target.setDate(target.getDate() - 30);
+    const targetStr = target.toISOString().slice(0, 10);
+    const prior = [...points].reverse().find((p) => p.date <= targetStr) || points[0];
+    if (prior && prior.date !== current.date) {
+      delta = { value: current.overall - prior.overall, fromDate: prior.date };
+    }
+  }
+
+  return {
+    points,
+    delta,
+    current: points.length ? points[points.length - 1].overall : null,
     generatedAt: new Date().toISOString(),
   };
 }
@@ -565,6 +646,7 @@ async function getForwardOutlook(businessId, opts = {}) {
 module.exports = {
   getHealthScore,
   getForwardOutlook,
+  getHealthHistory,
   // pure helpers exported for unit tests
   _pure: {
     scoreLiquidity, scoreProfitability, scoreEfficiency, scoreLeverage, scoreTax,
