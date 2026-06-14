@@ -34,6 +34,9 @@ router.get('/profiles/:code',       validate(countryCodeParamSchema, 'params'), 
 router.get('/wht-schedules',        taxCtrl.getWhtSchedules);
 router.put('/vendor/:id/wht',       taxCtrl.updateVendorWht);
 
+// ── Live position (FR-04.1) ───────────────────────────────────────────────────
+router.get('/position',             taxCtrl.getPosition);    // always-on liability per tax type
+
 // ── Reporting (Phase 5.4.6) ───────────────────────────────────────────────────
 router.get('/reports/ledger',       taxCtrl.taxLedger);      // ?startDate&endDate
 router.get('/reports/summary',      taxCtrl.taxSummary);     // input/output split

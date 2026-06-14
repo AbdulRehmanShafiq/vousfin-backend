@@ -17,6 +17,7 @@ const Business           = require('../models/Business.model');
 const ChartOfAccount     = require('../models/ChartOfAccount.model');
 const taxEngine          = require('../services/taxEngine.service');
 const taxReport          = require('../services/taxReport.service');   // Phase 5.4.6
+const taxPosition        = require('../services/taxPosition.service');  // FR-04.1
 const { getProfile, getSupportedCountries } = require('../config/countryTaxProfiles');
 const { SUPPORTED_COUNTRIES } = require('../config/constants');
 const { ApiError }       = require('../utils/ApiError');
@@ -421,6 +422,20 @@ class TaxController {
         },
         config.country || 'PK'
       );
+      res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/position ──────────────────────────────────────────────────────
+  /**
+   * Live, always-on tax position across every applicable tax type (FR-04.1).
+   * No query params — it's the current state, computed from the live ledger.
+   */
+  async getPosition(req, res, next) {
+    try {
+      const data = await taxPosition.getLivePosition(req.user.businessId);
       res.json({ success: true, data });
     } catch (err) {
       next(err);
