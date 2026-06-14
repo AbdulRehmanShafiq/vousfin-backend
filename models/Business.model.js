@@ -133,6 +133,15 @@ const businessSchema = new mongoose.Schema(
         of: Number,
         default: () => new Map(),
       },
+
+      // ── FR-04.1 Autopilot ──────────────────────────────────────────────────
+      // Effective income-tax rate applied to net-profit YTD for the continuous
+      // income-tax provision. Default 0.29 = PK company rate; 0 disables it.
+      incomeTaxProvisionRate: { type: Number, default: 0.29, min: 0, max: 0.5 },
+
+      // When true, the live position tracks EOBI/SESSI from monthly payroll
+      // accruals; otherwise those report status 'not_tracked'.
+      payrollEnabled: { type: Boolean, default: false },
     },
 
     // ── Approval Workflow (#6) ───────────────────────────────────────────────

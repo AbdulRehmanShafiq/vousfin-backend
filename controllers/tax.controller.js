@@ -19,6 +19,7 @@ const taxEngine          = require('../services/taxEngine.service');
 const taxReport          = require('../services/taxReport.service');   // Phase 5.4.6
 const taxPosition        = require('../services/taxPosition.service');  // FR-04.1
 const taxSnapshot        = require('../services/taxSnapshot.service');  // FR-04.1 (Phase 2)
+const payrollRepo        = require('../repositories/payrollAccrual.repository');  // FR-04.1 (Phase 3)
 const { getProfile, getSupportedCountries } = require('../config/countryTaxProfiles');
 const { SUPPORTED_COUNTRIES } = require('../config/constants');
 const { ApiError }       = require('../utils/ApiError');
@@ -74,6 +75,7 @@ class TaxController {
         country, taxRegistrationNumber,
         gstEnabled, vatEnabled, whtEnabled, reverseChargeEnabled,
         registeredForTax, taxInclusive, filingFrequency, customRates,
+        incomeTaxProvisionRate, payrollEnabled,
       } = req.body;
 
       const update = {};
@@ -93,6 +95,8 @@ class TaxController {
       if (taxInclusive          !== undefined)  update['taxConfig.taxInclusive']          = !!taxInclusive;
       if (filingFrequency       !== undefined)  update['taxConfig.filingFrequency']       = filingFrequency;
       if (customRates           !== undefined)  update['taxConfig.customRates']           = new Map(Object.entries(customRates || {}));
+      if (incomeTaxProvisionRate !== undefined) update['taxConfig.incomeTaxProvisionRate'] = incomeTaxProvisionRate;
+      if (payrollEnabled        !== undefined)  update['taxConfig.payrollEnabled']         = !!payrollEnabled;
 
       const business = await Business.findByIdAndUpdate(
         req.user.businessId,
@@ -454,6 +458,25 @@ class TaxController {
       const months = Number(req.query.months) || 6;
       const data = await taxSnapshot.getTrend(req.user.businessId, months);
       res.json({ success: true, data });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── POST /tax/payroll-accrual ──────────────────────────────────────────────
+  /**
+   * Record (or overwrite) a month's employer EOBI/SESSI obligation so the live
+   * position can track payroll taxes (FR-04.1, Phase 3). Idempotent per month.
+   * Body: { month?: 'YYYY-MM' (default current), eobi?: number, sessi?: number }
+   */
+  async addPayrollAccrual(req, res, next) {
+    try {
+      const { eobi = 0, sessi = 0 } = req.body;
+      const month = req.body.month || new Date().toISOString().slice(0, 7); // 'YYYY-MM'
+      const accrual = await payrollRepo.upsertForMonth(req.user.businessId, month, {
+        eobi, sessi, createdBy: req.user._id || req.user.id || null,
+      });
+      res.json({ success: true, data: accrual, message: `Payroll accrual saved for ${month}` });
     } catch (err) {
       next(err);
     }

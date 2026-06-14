@@ -13,11 +13,16 @@
 
 const mongoose  = require('mongoose');
 const taxReport = require('./taxReport.service');
+const report    = require('./report.service');
+const payrollRepo = require('../repositories/payrollAccrual.repository');
 const { getCalendar } = require('../config/taxFilingCalendar');
 const { nextDeadline } = require('../utils/nextDeadline');
+const { fiscalYearStart } = require('../utils/fiscalYearStart');
 
 const Business = () => mongoose.model('Business');
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+const DEFAULT_PROVISION_RATE = 0.29; // PK company income-tax rate
 
 /** The month containing `asOf` — the next GST/WHT filing window. */
 function currentMonthRange(asOf) {
@@ -33,16 +38,37 @@ function currentMonthRange(asOf) {
  * @returns {Promise<{asOf:string, currency:string, country:string, taxes:object[], totalPayable:number}>}
  */
 async function getLivePosition(businessId, asOf = new Date()) {
-  const biz      = await Business().findById(businessId).select('taxConfig currency').lean();
+  const biz      = await Business().findById(businessId).select('taxConfig currency fiscalYearStartMonth').lean();
   const cfg      = (biz && biz.taxConfig) || {};
   const country  = cfg.country || 'PK';
   const currency = (biz && biz.currency) || 'PKR';
   const period   = currentMonthRange(asOf);
+  const fyStart  = fiscalYearStart(asOf, biz && biz.fiscalYearStartMonth);
 
-  const [gst, wht] = await Promise.all([
+  const [gst, wht, incomeStmt] = await Promise.all([
     taxReport.reconcileTaxToLedger(businessId, period, country), // GL-authoritative output/input
     taxReport.getWhtSummary(businessId, period),                 // WHT collected this period
+    // Net-profit YTD for the continuous income-tax provision. A failure here must
+    // not break the rest of the position → fall back to null (income tax not_tracked).
+    report.getIncomeStatement(businessId, fyStart, asOf).catch(() => null),
   ]);
+
+  // Income-tax provision = rate × max(0, net-profit YTD).
+  const rawRate       = Number(cfg.incomeTaxProvisionRate);
+  const provisionRate = Number.isFinite(rawRate) ? rawRate : DEFAULT_PROVISION_RATE;
+  const netProfitYTD  = Number(incomeStmt && (incomeStmt.netProfit ?? incomeStmt.netIncome)) || 0;
+  const incomeTax     = incomeStmt ? r2(provisionRate * Math.max(0, netProfitYTD)) : 0;
+  const incomeTaxStatus = incomeStmt ? 'tracked' : 'not_tracked';
+
+  // Payroll obligations (EOBI/SESSI) — only queried/tracked when explicitly enabled,
+  // read from the latest monthly accrual (Phase 3.3, minimal — no full payroll module).
+  let eobi = 0, sessi = 0, payrollStatus = 'not_tracked';
+  if (cfg.payrollEnabled) {
+    const accrual = await payrollRepo.latest(businessId);
+    eobi  = r2(accrual && accrual.eobi);
+    sessi = r2(accrual && accrual.sessi);
+    payrollStatus = 'tracked';
+  }
 
   const calendar = getCalendar(country);
   const deadlineFor = (taxType) => {
@@ -57,9 +83,9 @@ async function getLivePosition(businessId, asOf = new Date()) {
   const taxes = [
     { taxType: 'GST',        label: 'GST / Sales Tax',       liability: Math.max(0, gstNet), refundable: gstNet < 0, raw: gstNet, nextDeadline: deadlineFor('GST'),        status: 'tracked'     },
     { taxType: 'WHT',        label: 'Withholding Tax',       liability: r2(wht.totalWht),    refundable: false,                  nextDeadline: deadlineFor('WHT'),        status: 'tracked'     },
-    { taxType: 'INCOME_TAX', label: 'Income Tax (provision)', liability: 0,                  refundable: false,                  nextDeadline: deadlineFor('INCOME_TAX'), status: 'not_tracked' },
-    { taxType: 'EOBI',       label: 'EOBI',                  liability: 0,                   refundable: false,                  nextDeadline: deadlineFor('EOBI'),       status: 'not_tracked' },
-    { taxType: 'SESSI',      label: 'SESSI',                 liability: 0,                   refundable: false,                  nextDeadline: deadlineFor('SESSI'),      status: 'not_tracked' },
+    { taxType: 'INCOME_TAX', label: 'Income Tax (provision)', liability: incomeTax,           refundable: false,                  nextDeadline: deadlineFor('INCOME_TAX'), status: incomeTaxStatus },
+    { taxType: 'EOBI',       label: 'EOBI',                  liability: eobi,                refundable: false,                  nextDeadline: deadlineFor('EOBI'),       status: payrollStatus },
+    { taxType: 'SESSI',      label: 'SESSI',                 liability: sessi,               refundable: false,                  nextDeadline: deadlineFor('SESSI'),      status: payrollStatus },
   ];
 
   const totalPayable = r2(taxes.reduce((s, t) => s + (t.liability || 0), 0));
