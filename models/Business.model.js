@@ -142,6 +142,19 @@ const businessSchema = new mongoose.Schema(
       // When true, the live position tracks EOBI/SESSI from monthly payroll
       // accruals; otherwise those report status 'not_tracked'.
       payrollEnabled: { type: Boolean, default: false },
+
+      // ── FR-04.3 Filing ───────────────────────────────────────────────────────
+      // 'xml' = export FBR-compatible XML (always available); 'iris' = submit to
+      // FBR IRIS when credentials are configured (falls back to xml on failure).
+      filingMode: { type: String, enum: ['xml', 'iris'], default: 'xml' },
+      // Days before a deadline to auto-prepare + validate the return (1–30).
+      autoPrepareDaysBefore: { type: Number, default: 5, min: 1, max: 30 },
+      // IRIS credentials — optional; only used when filingMode === 'iris'.
+      fbrCredentials: {
+        ntn:       { type: String, default: null },
+        irisToken: { type: String, default: null },
+        endpoint:  { type: String, default: null },
+      },
     },
 
     // ── Approval Workflow (#6) ───────────────────────────────────────────────

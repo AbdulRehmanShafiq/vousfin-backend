@@ -48,6 +48,8 @@ router.get('/returns',              taxCtrl.listReturns);
 router.post('/returns/prepare',     taxCtrl.prepareReturn);     // { returnType, period:{year,month?} }
 router.get('/returns/:id',          taxCtrl.getReturn);
 router.post('/returns/:id/validate', taxCtrl.validateReturn);   // FBR pre-filing checks
+router.post('/returns/:id/submit',   taxCtrl.submitReturn);     // file (IRIS or XML fallback)
+router.get('/returns/:id/export',    taxCtrl.exportReturn);     // ?format=xml — download
 
 // ── Reporting (Phase 5.4.6) ───────────────────────────────────────────────────
 router.get('/reports/ledger',       taxCtrl.taxLedger);      // ?startDate&endDate

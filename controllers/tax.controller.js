@@ -23,6 +23,7 @@ const payrollRepo        = require('../repositories/payrollAccrual.repository');
 const taxAdvisor         = require('../services/taxAdvisor.service');  // FR-04.2
 const returnPrepare      = require('../services/returnPrepare.service');  // FR-04.3
 const returnValidator    = require('../services/returnValidator.service');  // FR-04.3
+const returnFiling       = require('../services/returnFiling.service');  // FR-04.3
 const taxReturnRepo      = require('../repositories/taxReturn.repository');  // FR-04.3
 const { getProfile, getSupportedCountries } = require('../config/countryTaxProfiles');
 const { SUPPORTED_COUNTRIES } = require('../config/constants');
@@ -548,6 +549,34 @@ class TaxController {
       const data = await returnValidator.validateReturn(req.user.businessId, req.params.id);
       const passed = data && data.validation && data.validation.passed;
       res.json({ success: true, data, message: passed ? 'Return validated — ready to file' : 'Validation found issues to fix' });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── POST /tax/returns/:id/submit ───────────────────────────────────────────
+  /** File a validated return (IRIS when configured, else FBR XML) (FR-04.3). */
+  async submitReturn(req, res, next) {
+    try {
+      const data = await returnFiling.submitReturn(req.user.businessId, req.params.id, req.user._id || req.user.id || null);
+      const msg = data.mode === 'iris'
+        ? `Filed with FBR — acknowledgment ${data.ackNumber}`
+        : 'FBR-compatible XML is ready to download';
+      res.json({ success: true, data, message: msg });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/returns/:id/export?format=xml ─────────────────────────────────
+  /** Download a return as FBR-compatible XML (FR-04.3). */
+  async exportReturn(req, res, next) {
+    try {
+      const format = (req.query.format || 'xml').toLowerCase();
+      const out = await returnFiling.exportReturn(req.user.businessId, req.params.id, format);
+      res.setHeader('Content-Type', 'application/xml');
+      res.setHeader('Content-Disposition', `attachment; filename="${out.filename}"`);
+      res.send(out.content);
     } catch (err) {
       next(err);
     }

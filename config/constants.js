@@ -514,6 +514,8 @@ module.exports = {
     // ── AR/AP Refactor M8 — enterprise extras ─────────────────────────────────
     RECURRING_GENERATED: 'Recurring Document Generated',
     DUNNING_ESCALATED:   'Dunning Escalated',
+    // ── FR-04.3: Tax return filing ────────────────────────────────────────────
+    FILED:               'Filed',
     STATEMENT_GENERATED: 'Statement Generated',
     DISCOUNT_APPLIED:    'Early Payment Discount Applied',
     // ── AR/AP Refactor M9 — event sourcing / projection integrity ─────────────
@@ -550,6 +552,8 @@ module.exports = {
     PENDING_TRANSACTION:  'pendingTransaction',
     // ── Bank reconciliation (#7) ──────────────────────────────────────────────
     BANK_STATEMENT:       'bankStatement',
+    // ── FR-04.3: Tax return ───────────────────────────────────────────────────
+    TAX_RETURN:           'taxReturn',
   },
 
   // ===============================
