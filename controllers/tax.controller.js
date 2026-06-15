@@ -20,6 +20,7 @@ const taxReport          = require('../services/taxReport.service');   // Phase 
 const taxPosition        = require('../services/taxPosition.service');  // FR-04.1
 const taxSnapshot        = require('../services/taxSnapshot.service');  // FR-04.1 (Phase 2)
 const payrollRepo        = require('../repositories/payrollAccrual.repository');  // FR-04.1 (Phase 3)
+const taxAdvisor         = require('../services/taxAdvisor.service');  // FR-04.2
 const { getProfile, getSupportedCountries } = require('../config/countryTaxProfiles');
 const { SUPPORTED_COUNTRIES } = require('../config/constants');
 const { ApiError }       = require('../utils/ApiError');
@@ -477,6 +478,21 @@ class TaxController {
         eobi, sessi, createdBy: req.user._id || req.user.id || null,
       });
       res.json({ success: true, data: accrual, message: `Payroll accrual saved for ${month}` });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── GET /tax/advisories ────────────────────────────────────────────────────
+  /**
+   * Legal tax-optimisation advisories (FR-04.2) — each citing a legal provision
+   * and an estimated PKR saving, ranked by saving. Review-risk items carry a
+   * prominent warning. Read-only; computed from the live ledger.
+   */
+  async getAdvisories(req, res, next) {
+    try {
+      const data = await taxAdvisor.getAdvisories(req.user.businessId);
+      res.json({ success: true, data });
     } catch (err) {
       next(err);
     }

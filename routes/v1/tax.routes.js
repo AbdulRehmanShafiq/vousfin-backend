@@ -40,6 +40,9 @@ router.get('/position',             taxCtrl.getPosition);       // always-on lia
 router.get('/position/trend',       taxCtrl.getPositionTrend);  // ?months=6 — daily snapshot series
 router.post('/payroll-accrual',     validate(payrollAccrualSchema), taxCtrl.addPayrollAccrual);  // monthly EOBI/SESSI
 
+// ── Optimization advisor (FR-04.2) ─────────────────────────────────────────────
+router.get('/advisories',           taxCtrl.getAdvisories);     // legal tax-saving advisories
+
 // ── Reporting (Phase 5.4.6) ───────────────────────────────────────────────────
 router.get('/reports/ledger',       taxCtrl.taxLedger);      // ?startDate&endDate
 router.get('/reports/summary',      taxCtrl.taxSummary);     // input/output split
