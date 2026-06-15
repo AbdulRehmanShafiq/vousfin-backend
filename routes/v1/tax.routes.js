@@ -47,6 +47,7 @@ router.get('/advisories',           taxCtrl.getAdvisories);     // legal tax-sav
 router.get('/returns',              taxCtrl.listReturns);
 router.post('/returns/prepare',     taxCtrl.prepareReturn);     // { returnType, period:{year,month?} }
 router.get('/returns/:id',          taxCtrl.getReturn);
+router.post('/returns/:id/validate', taxCtrl.validateReturn);   // FBR pre-filing checks
 
 // ── Reporting (Phase 5.4.6) ───────────────────────────────────────────────────
 router.get('/reports/ledger',       taxCtrl.taxLedger);      // ?startDate&endDate

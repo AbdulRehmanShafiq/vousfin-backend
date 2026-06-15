@@ -22,6 +22,7 @@ const taxSnapshot        = require('../services/taxSnapshot.service');  // FR-04
 const payrollRepo        = require('../repositories/payrollAccrual.repository');  // FR-04.1 (Phase 3)
 const taxAdvisor         = require('../services/taxAdvisor.service');  // FR-04.2
 const returnPrepare      = require('../services/returnPrepare.service');  // FR-04.3
+const returnValidator    = require('../services/returnValidator.service');  // FR-04.3
 const taxReturnRepo      = require('../repositories/taxReturn.repository');  // FR-04.3
 const { getProfile, getSupportedCountries } = require('../config/countryTaxProfiles');
 const { SUPPORTED_COUNTRIES } = require('../config/constants');
@@ -535,6 +536,18 @@ class TaxController {
         throw new ApiError(404, 'Return not found');
       }
       res.json({ success: true, data: ret });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ── POST /tax/returns/:id/validate ─────────────────────────────────────────
+  /** Run the FBR pre-filing checks; promotes draft → validated on pass (FR-04.3). */
+  async validateReturn(req, res, next) {
+    try {
+      const data = await returnValidator.validateReturn(req.user.businessId, req.params.id);
+      const passed = data && data.validation && data.validation.passed;
+      res.json({ success: true, data, message: passed ? 'Return validated — ready to file' : 'Validation found issues to fix' });
     } catch (err) {
       next(err);
     }
