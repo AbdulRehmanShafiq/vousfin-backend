@@ -14,6 +14,7 @@ const { PROPOSED_ACTION_STATUS, ENTITY_TYPES, AUDIT_ACTIONS } = require('../conf
 const policy = require('./autonomyPolicy.service');
 const repo = require('../repositories/proposedAction.repository');
 const auditService = require('./audit.service');
+const feedback = require('./feedback.service');
 const logger = require('../config/logger');
 
 const S = PROPOSED_ACTION_STATUS;
@@ -74,6 +75,8 @@ async function loadQueued(businessId, id, requiredStatus, label) {
 /** Human approves a queued action → execute it (if an executor is given). */
 async function approve(businessId, id, performedBy, executor) {
   const a = await loadQueued(businessId, id, S.QUEUED, 'queued');
+  const verdict = a.correction ? 'edited' : 'approved';
+  feedback.record({ businessId, capability: a.capability, actionType: a.type, proposedActionId: a._id, verdict, confidence: a.confidence, correction: a.correction, performedBy });
   if (executor) return runExecutor(a, executor, performedBy);
   const updated = await repo.update(id, { $set: { status: S.APPROVED, decidedBy: performedBy, decidedAt: new Date() } });
   await audit(a, performedBy, AUDIT_ACTIONS.APPROVED, { status: 'approved' });
@@ -83,6 +86,7 @@ async function approve(businessId, id, performedBy, executor) {
 /** Human declines a queued action. */
 async function reject(businessId, id, performedBy) {
   const a = await loadQueued(businessId, id, S.QUEUED, 'queued');
+  feedback.record({ businessId, capability: a.capability, actionType: a.type, proposedActionId: a._id, verdict: 'rejected', confidence: a.confidence, performedBy });
   const updated = await repo.update(id, { $set: { status: S.REJECTED, decidedBy: performedBy, decidedAt: new Date() } });
   await audit(a, performedBy, AUDIT_ACTIONS.REJECTED, { status: 'rejected' });
   return updated;

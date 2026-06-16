@@ -1,11 +1,14 @@
 // controllers/autonomy.controller.js — Autonomy Phase 0
 'use strict';
-// Register the model so the policy service's mongoose.model('AutonomyPolicy')
-// lookup resolves at runtime (nothing else imports this model).
+// Register the models that are only accessed via lazy mongoose.model() lookups,
+// so those lookups resolve at runtime (nothing else imports them).
 require('../models/AutonomyPolicy.model');
+require('../models/FeedbackEvent.model');
+require('../models/EntityMemory.model');
 const policy = require('../services/autonomyPolicy.service');
 const actionRouter = require('../services/actionRouter.service');
 const commandCenter = require('../services/commandCenter.service');
+const autonomyReport = require('../services/autonomyReport.service');
 const repo = require('../repositories/proposedAction.repository');
 
 const actor = (req) => req.user._id || req.user.id || null;
@@ -28,6 +31,12 @@ class AutonomyController {
   // GET /autonomy/inbox — the one inbox: proposed actions + wrapped insights
   async getInbox(req, res, next) {
     try { res.json({ success: true, data: await commandCenter.getInbox(req.user.businessId) }); }
+    catch (err) { next(err); }
+  }
+
+  // GET /autonomy/report — the Autonomy Report: accuracy + dial recommendations
+  async getReport(req, res, next) {
+    try { res.json({ success: true, data: await autonomyReport.getReport(req.user.businessId) }); }
     catch (err) { next(err); }
   }
 

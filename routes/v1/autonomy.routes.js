@@ -8,9 +8,10 @@ const { requireBusiness } = require('../../middleware/business.middleware');
 
 router.use(authMiddleware, requireBusiness);
 
-// Control plane — the autonomy dials
+// Control plane — the autonomy dials + the Autonomy Report
 router.get('/policy',                 ctrl.getPolicy);
 router.put('/policy/:capability',     ctrl.setCapability);   // { level?, confidenceThreshold?, maxAutoAmount? }
+router.get('/report',                 ctrl.getReport);       // accuracy + dial recommendations
 
 // The one inbox + activity
 router.get('/inbox',                  ctrl.getInbox);        // ?capability=
