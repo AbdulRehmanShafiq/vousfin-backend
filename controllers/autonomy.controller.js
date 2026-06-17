@@ -13,6 +13,8 @@ const reconciler = require('../services/reconciler.service');
 const collector = require('../services/collector.service');
 const paymentsAgent = require('../services/paymentsAgent.service');
 const closeAgent = require('../services/closeAgent.service');
+const orchestrator = require('../services/orchestrator.service');
+const nlControl = require('../services/nlControl.service');
 const policy = require('../services/autonomyPolicy.service');
 const actionRouter = require('../services/actionRouter.service');
 const commandCenter = require('../services/commandCenter.service');
@@ -62,6 +64,34 @@ class AutonomyController {
   async getCloseStatus(req, res, next) {
     try { res.json({ success: true, data: await closeAgent.getCloseStatus(req.user.businessId) }); }
     catch (err) { next(err); }
+  }
+
+  // GET /autonomy/plans — the routines on offer + the latest plan run
+  async getPlans(req, res, next) {
+    try {
+      const [playbooks, latest] = await Promise.all([
+        orchestrator.listPlaybooks(),
+        orchestrator.getLatestPlan(req.user.businessId),
+      ]);
+      res.json({ success: true, data: { playbooks, latest } });
+    } catch (err) { next(err); }
+  }
+
+  // POST /autonomy/plans/:key/run — run a routine; returns the observable plan
+  async runPlan(req, res, next) {
+    try {
+      const who = { id: req.user._id || req.user.id || null };
+      const data = await orchestrator.runPlaybook(req.user.businessId, req.params.key, who);
+      res.json({ success: true, data, message: 'Routine run' });
+    } catch (err) { next(err); }
+  }
+
+  // POST /autonomy/control — the plain-language control line ("set tax to autopilot")
+  async control(req, res, next) {
+    try {
+      const data = await nlControl.interpret(req.user.businessId, req.body.text, { id: req.user._id || req.user.id || null });
+      res.json({ success: true, data, message: data.message });
+    } catch (err) { next(err); }
   }
 
   // POST /autonomy/payments/hold — exclude (or re-include) a vendor from payment runs

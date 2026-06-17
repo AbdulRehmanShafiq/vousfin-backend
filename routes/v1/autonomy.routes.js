@@ -18,6 +18,9 @@ router.get('/inbox',                  ctrl.getInbox);        // ?capability=
 router.post('/scan',                  ctrl.scan);            // agents look for work → inbox
 router.post('/payments/hold',         ctrl.setPaymentHold);  // { vendorId, hold } — per-vendor payment hold
 router.get('/close/status',           ctrl.getCloseStatus);  // month-end checklist (the plan view)
+router.get('/plans',                  ctrl.getPlans);        // routines on offer + latest run
+router.post('/plans/:key/run',        ctrl.runPlan);         // run a routine (weekly_cash | monthly_close)
+router.post('/control',               ctrl.control);         // { text } — plain-language control line
 router.get('/actions',                ctrl.getActions);
 router.post('/actions/:id/approve',   ctrl.approve);
 router.post('/actions/:id/reject',    ctrl.reject);
