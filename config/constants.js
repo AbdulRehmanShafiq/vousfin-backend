@@ -556,6 +556,8 @@ module.exports = {
     TAX_RETURN:           'taxReturn',
     // ── Autonomy Phase 0: proposed action ─────────────────────────────────────
     PROPOSED_ACTION:      'proposedAction',
+    // ── Autonomy Phase 2: ingested source document (Bookkeeper agent) ─────────
+    SOURCE_DOCUMENT:      'sourceDocument',
   },
 
   // ===============================
@@ -874,6 +876,28 @@ module.exports = {
     REJECTED:  'rejected',   // human declined
     FAILED:    'failed',     // execution errored
     REVERSED:  'reversed',   // undone after execution
+  },
+
+  // The action types agents emit through the router (the `type` on a ProposedAction).
+  PROPOSED_ACTION_TYPES: {
+    POST_JOURNAL: 'post_journal',   // Bookkeeper — record a document as a journal entry
+  },
+
+  // Autonomy Phase 2 — Bookkeeper agent. Where an ingested document came from.
+  SOURCE_DOCUMENT_SOURCES: {
+    MANUAL:    'manual',     // typed / pasted into the ingest box
+    EMAIL:     'email',      // forwarded to the business inbox
+    UPLOAD:    'upload',     // an uploaded receipt / bill (text already extracted)
+    BANK_FEED: 'bank_feed',  // a line from an imported bank statement
+  },
+
+  // Lifecycle of an ingested source document.
+  SOURCE_DOCUMENT_STATUS: {
+    RECEIVED:  'received',   // captured, not yet read
+    PROPOSED:  'proposed',   // read → a journal action is waiting / was auto-posted
+    POSTED:    'posted',     // the journal entry is in the ledger
+    FAILED:    'failed',     // could not be read into a journal entry
+    DISMISSED: 'dismissed',  // the owner declined the proposed entry
   },
 
   // ===============================

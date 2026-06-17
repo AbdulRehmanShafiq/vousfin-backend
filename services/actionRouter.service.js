@@ -15,6 +15,7 @@ const policy = require('./autonomyPolicy.service');
 const repo = require('../repositories/proposedAction.repository');
 const auditService = require('./audit.service');
 const feedback = require('./feedback.service');
+const executors = require('./actionExecutors');
 const logger = require('../config/logger');
 
 const S = PROPOSED_ACTION_STATUS;
@@ -50,6 +51,8 @@ async function runExecutor(action, executor, performedBy) {
  * @param {object} [opts] { executor }  function(action) → result, run on auto-execute
  */
 async function propose(raw, { executor } = {}) {
+  // Fall back to the agent's registered handler for this action type.
+  executor = executor || executors.executor(raw.type);
   const { decision } = await policy.decideForCapability(raw.businessId, raw.capability, { confidence: raw.confidence, amount: raw.amount });
 
   const status =
@@ -77,6 +80,7 @@ async function approve(businessId, id, performedBy, executor) {
   const a = await loadQueued(businessId, id, S.QUEUED, 'queued');
   const verdict = a.correction ? 'edited' : 'approved';
   feedback.record({ businessId, capability: a.capability, actionType: a.type, proposedActionId: a._id, verdict, confidence: a.confidence, correction: a.correction, performedBy });
+  executor = executor || executors.executor(a.type);
   if (executor) return runExecutor(a, executor, performedBy);
   const updated = await repo.update(id, { $set: { status: S.APPROVED, decidedBy: performedBy, decidedAt: new Date() } });
   await audit(a, performedBy, AUDIT_ACTIONS.APPROVED, { status: 'approved' });
@@ -89,12 +93,16 @@ async function reject(businessId, id, performedBy) {
   feedback.record({ businessId, capability: a.capability, actionType: a.type, proposedActionId: a._id, verdict: 'rejected', confidence: a.confidence, performedBy });
   const updated = await repo.update(id, { $set: { status: S.REJECTED, decidedBy: performedBy, decidedAt: new Date() } });
   await audit(a, performedBy, AUDIT_ACTIONS.REJECTED, { status: 'rejected' });
+  const onReject = executors.rejecter(a.type);
+  if (onReject) { try { await onReject(a); } catch (e) { logger.warn(`[actionRouter] onReject failed: ${e.message}`); } }
   return updated;
 }
 
 /** Undo an executed action via its reverser (every action carries a reversal descriptor). */
 async function reverse(businessId, id, performedBy, reverser) {
   const a = await loadQueued(businessId, id, S.EXECUTED, 'executed');
+  reverser = reverser || executors.reverser(a.type);
+  if (!reverser) throw new ApiError(400, 'This action cannot be reversed');
   const result = await reverser(a);
   const updated = await repo.update(id, { $set: { status: S.REVERSED, result: { reversal: result || {} } } });
   await audit(a, performedBy, AUDIT_ACTIONS.STATE_CHANGED, { status: 'reversed' });

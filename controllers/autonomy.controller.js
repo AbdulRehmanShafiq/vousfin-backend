@@ -5,6 +5,11 @@
 require('../models/AutonomyPolicy.model');
 require('../models/FeedbackEvent.model');
 require('../models/EntityMemory.model');
+require('../models/SourceDocument.model');
+// Requiring the bookkeeper registers its post_journal execute/reverse handlers
+// with the action router, so approving/reversing a bookkeeping action works
+// regardless of route mount order.
+require('../services/bookkeeper.service');
 const policy = require('../services/autonomyPolicy.service');
 const actionRouter = require('../services/actionRouter.service');
 const commandCenter = require('../services/commandCenter.service');
@@ -59,6 +64,14 @@ class AutonomyController {
     try {
       const data = await actionRouter.reject(req.user.businessId, req.params.id, actor(req));
       res.json({ success: true, data, message: 'Action dismissed' });
+    } catch (err) { next(err); }
+  }
+
+  // POST /autonomy/actions/:id/reverse — undo an executed action (one-click)
+  async reverse(req, res, next) {
+    try {
+      const data = await actionRouter.reverse(req.user.businessId, req.params.id, actor(req));
+      res.json({ success: true, data, message: 'Action reversed' });
     } catch (err) { next(err); }
   }
 }

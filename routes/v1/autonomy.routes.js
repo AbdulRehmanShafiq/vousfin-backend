@@ -18,5 +18,6 @@ router.get('/inbox',                  ctrl.getInbox);        // ?capability=
 router.get('/actions',                ctrl.getActions);
 router.post('/actions/:id/approve',   ctrl.approve);
 router.post('/actions/:id/reject',    ctrl.reject);
+router.post('/actions/:id/reverse',   ctrl.reverse);   // undo an executed action
 
 module.exports = router;
