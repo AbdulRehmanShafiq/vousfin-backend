@@ -101,11 +101,12 @@ fiscalYearSchema.index({ businessId: 1, startDate: 1 }, { unique: true });
 fiscalYearSchema.index({ businessId: 1, status: 1 });
 
 // ── Validation: endDate must be after startDate ──────────────────────────────
-fiscalYearSchema.pre('save', function (next) {
+// Mongoose 9 removed the next() callback for middleware — a sync hook signals an
+// error by throwing (calling next() throws "next is not a function").
+fiscalYearSchema.pre('save', function () {
   if (this.endDate <= this.startDate) {
-    return next(new Error('Fiscal year endDate must be after startDate'));
+    throw new Error('Fiscal year endDate must be after startDate');
   }
-  next();
 });
 
 // ── Virtual: duration in months ──────────────────────────────────────────────

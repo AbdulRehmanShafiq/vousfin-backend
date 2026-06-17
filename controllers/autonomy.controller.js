@@ -12,6 +12,7 @@ require('../services/bookkeeper.service');
 const reconciler = require('../services/reconciler.service');
 const collector = require('../services/collector.service');
 const paymentsAgent = require('../services/paymentsAgent.service');
+const closeAgent = require('../services/closeAgent.service');
 const policy = require('../services/autonomyPolicy.service');
 const actionRouter = require('../services/actionRouter.service');
 const commandCenter = require('../services/commandCenter.service');
@@ -47,13 +48,20 @@ class AutonomyController {
     try {
       const businessId = req.user.businessId;
       const who = { id: req.user._id || req.user.id || null };
-      const [reconciliation, collections, payments] = await Promise.all([
+      const [reconciliation, collections, payments, close] = await Promise.all([
         reconciler.scanBusiness(businessId, who).catch(() => 0),
         collector.scanBusiness(businessId, who).catch(() => 0),
         paymentsAgent.scanBusiness(businessId, who).catch(() => 0),
+        closeAgent.scanBusiness(businessId, who).catch(() => 0),
       ]);
-      res.json({ success: true, data: { reconciliation, collections, payments, total: reconciliation + collections + payments }, message: 'Scan complete' });
+      res.json({ success: true, data: { reconciliation, collections, payments, close, total: reconciliation + collections + payments + close }, message: 'Scan complete' });
     } catch (err) { next(err); }
+  }
+
+  // GET /autonomy/close/status — the month-end checklist (the plan view)
+  async getCloseStatus(req, res, next) {
+    try { res.json({ success: true, data: await closeAgent.getCloseStatus(req.user.businessId) }); }
+    catch (err) { next(err); }
   }
 
   // POST /autonomy/payments/hold — exclude (or re-include) a vendor from payment runs

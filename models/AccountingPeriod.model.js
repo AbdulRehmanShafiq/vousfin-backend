@@ -107,11 +107,12 @@ accountingPeriodSchema.index({ businessId: 1, startDate: 1, endDate: 1 });
 accountingPeriodSchema.index({ businessId: 1, status: 1 });
 
 // ── Pre-save: endDate must be after startDate ─────────────────────────────────
-accountingPeriodSchema.pre('save', function (next) {
+// Mongoose 9 removed the next() callback for middleware — a sync hook signals an
+// error by throwing (calling next() throws "next is not a function").
+accountingPeriodSchema.pre('save', function () {
   if (this.endDate <= this.startDate) {
-    return next(new Error('Period endDate must be after startDate'));
+    throw new Error('Period endDate must be after startDate');
   }
-  next();
 });
 
 /**

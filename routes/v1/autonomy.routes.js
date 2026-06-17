@@ -17,6 +17,7 @@ router.get('/report',                 ctrl.getReport);       // accuracy + dial 
 router.get('/inbox',                  ctrl.getInbox);        // ?capability=
 router.post('/scan',                  ctrl.scan);            // agents look for work → inbox
 router.post('/payments/hold',         ctrl.setPaymentHold);  // { vendorId, hold } — per-vendor payment hold
+router.get('/close/status',           ctrl.getCloseStatus);  // month-end checklist (the plan view)
 router.get('/actions',                ctrl.getActions);
 router.post('/actions/:id/approve',   ctrl.approve);
 router.post('/actions/:id/reject',    ctrl.reject);

@@ -884,6 +884,7 @@ module.exports = {
     CLEAR_BANK_MATCH: 'clear_bank_match', // Reconciler — link a statement line to a ledger entry
     ESCALATE_DUNNING: 'escalate_dunning', // Collector — chase an overdue customer (next dunning step)
     MAKE_PAYMENT:     'make_payment',     // Cash & Payments — pay a bill (cash-aware payment run)
+    CLOSE_MONTH:      'close_month',      // Controller/Close — month-end close + CFO narrative
   },
 
   // Autonomy Phase 2 — Bookkeeper agent. Where an ingested document came from.
