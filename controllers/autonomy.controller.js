@@ -11,6 +11,7 @@ require('../models/SourceDocument.model');
 require('../services/bookkeeper.service');
 const reconciler = require('../services/reconciler.service');
 const collector = require('../services/collector.service');
+const paymentsAgent = require('../services/paymentsAgent.service');
 const policy = require('../services/autonomyPolicy.service');
 const actionRouter = require('../services/actionRouter.service');
 const commandCenter = require('../services/commandCenter.service');
@@ -46,11 +47,22 @@ class AutonomyController {
     try {
       const businessId = req.user.businessId;
       const who = { id: req.user._id || req.user.id || null };
-      const [reconciliation, collections] = await Promise.all([
+      const [reconciliation, collections, payments] = await Promise.all([
         reconciler.scanBusiness(businessId, who).catch(() => 0),
         collector.scanBusiness(businessId, who).catch(() => 0),
+        paymentsAgent.scanBusiness(businessId, who).catch(() => 0),
       ]);
-      res.json({ success: true, data: { reconciliation, collections, total: reconciliation + collections }, message: 'Scan complete' });
+      res.json({ success: true, data: { reconciliation, collections, payments, total: reconciliation + collections + payments }, message: 'Scan complete' });
+    } catch (err) { next(err); }
+  }
+
+  // POST /autonomy/payments/hold — exclude (or re-include) a vendor from payment runs
+  async setPaymentHold(req, res, next) {
+    try {
+      const { vendorId, hold } = req.body;
+      if (!vendorId) return res.status(400).json({ success: false, message: 'vendorId is required' });
+      const data = await paymentsAgent.setVendorHold(req.user.businessId, vendorId, hold);
+      res.json({ success: true, data, message: data.hold ? 'Vendor put on hold' : 'Vendor hold removed' });
     } catch (err) { next(err); }
   }
 
