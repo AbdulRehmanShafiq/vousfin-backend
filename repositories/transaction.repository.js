@@ -32,8 +32,13 @@ const EFFECTIVE_LINES_STAGE = {
         if: { $gt: [{ $size: { $ifNull: ['$journalLines', []] } }, 0] },
         then: '$journalLines',
         else: [
-          { accountId: '$debitAccountId',  type: 'debit',  amount: '$amount' },
-          { accountId: '$creditAccountId', type: 'credit', amount: '$amount' },
+          // Synthesise the 2-account pair in the REPORTING (base) currency. For a
+          // foreign-currency entry the top-level `amount` is the original foreign
+          // amount (kept for display); the ledger effect is `baseCurrencyAmount`.
+          // Using base here keeps the Trial Balance / statements / ledger-integrity
+          // verifier in the functional currency, matching how balances were posted.
+          { accountId: '$debitAccountId',  type: 'debit',  amount: { $ifNull: ['$baseCurrencyAmount', '$amount'] } },
+          { accountId: '$creditAccountId', type: 'credit', amount: { $ifNull: ['$baseCurrencyAmount', '$amount'] } },
         ],
       },
     },

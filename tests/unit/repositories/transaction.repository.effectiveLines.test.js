@@ -28,10 +28,12 @@ describe('EFFECTIVE_LINES_STAGE — shared line normalisation', () => {
     expect(JSON.stringify(cond.if)).toContain('journalLines');
     // `then` uses the explicit lines
     expect(cond.then).toBe('$journalLines');
-    // `else` synthesises debit + credit from the top-level accounts/amount
+    // `else` synthesises debit + credit in the REPORTING (base) currency, so a
+    // foreign-currency entry hits the ledger at baseCurrencyAmount, not the raw
+    // foreign amount (falls back to amount when baseCurrencyAmount is null).
     expect(cond.else).toEqual([
-      { accountId: '$debitAccountId',  type: 'debit',  amount: '$amount' },
-      { accountId: '$creditAccountId', type: 'credit', amount: '$amount' },
+      { accountId: '$debitAccountId',  type: 'debit',  amount: { $ifNull: ['$baseCurrencyAmount', '$amount'] } },
+      { accountId: '$creditAccountId', type: 'credit', amount: { $ifNull: ['$baseCurrencyAmount', '$amount'] } },
     ]);
   });
 });

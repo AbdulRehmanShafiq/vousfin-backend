@@ -630,16 +630,16 @@ class TransactionService {
     }
 
     // Phase 2 convergence (canonical journal lines): every entry stores its
-    // journalLines so the ledger has ONE representation. We synthesise the 2-line
-    // pair when none exist — but ONLY for non-FX entries (baseAmount === amount).
-    // FX entries keep the 2-account pair for now, because their ledger balances use
-    // baseAmount while effectiveLines reports the foreign amount; unifying those is a
-    // separate FX-normalisation step and must not change FX semantics here.
-    if ((!entryData.journalLines || entryData.journalLines.length === 0) &&
-        Math.round(baseAmount * 100) === Math.round(entryData.amount * 100)) {
+    // journalLines so the ledger has ONE representation — always in the REPORTING
+    // (base) currency. `baseAmount` equals `amount` for domestic entries and the
+    // converted base amount for foreign-currency ones, so the ledger effect, the
+    // statements (via EFFECTIVE_LINES_STAGE) and the cached running balance all
+    // agree in the functional currency. The original foreign amount stays on the
+    // top-level `amount` field for display/audit.
+    if (!entryData.journalLines || entryData.journalLines.length === 0) {
       entryData.journalLines = [
-        { type: 'debit',  accountId: entryData.debitAccountId,  amount: entryData.amount },
-        { type: 'credit', accountId: entryData.creditAccountId, amount: entryData.amount },
+        { type: 'debit',  accountId: entryData.debitAccountId,  amount: baseAmount },
+        { type: 'credit', accountId: entryData.creditAccountId, amount: baseAmount },
       ];
     }
 
