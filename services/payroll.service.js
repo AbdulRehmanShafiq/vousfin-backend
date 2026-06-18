@@ -1,6 +1,11 @@
 // services/payroll.service.js — FR-08.2/.3
 'use strict';
 const payrollTax = require('./payrollTax.service');
+const { ApiError } = require('../utils/ApiError');
+const { PAYROLL_RUN_STATUS } = require('../config/constants');
+const Employee = require('../models/Employee.model');
+const employeeRepo = require('../repositories/employee.repository');
+const runRepo = require('../repositories/payrollRun.repository');
 
 const r = (n) => Math.round(n || 0);
 const sumAmt = (arr) => (arr || []).reduce((t, x) => t + r(x.amount), 0);
@@ -44,4 +49,59 @@ function computeNetPay(s, ctx, variable = {}) {
   };
 }
 
-module.exports = { computeNetPay };
+/** July–June Pakistani tax year string for a 'YYYY-MM' period, e.g. 2026-06 → '2025-26'. */
+function taxYearFor(period) {
+  const [y, m] = period.split('-').map(Number);
+  const startYear = m >= 7 ? y : y - 1;
+  return `${startYear}-${String((startYear + 1) % 100).padStart(2, '0')}`;
+}
+
+function rollUp(lines) {
+  const t = { gross: 0, incomeTax: 0, eobiEmployee: 0, eobiEmployer: 0, pfEmployee: 0, pfEmployer: 0, otherDeductions: 0, netPay: 0 };
+  for (const l of lines) {
+    t.gross += l.gross; t.incomeTax += l.incomeTax;
+    t.eobiEmployee += l.eobiEmployee; t.eobiEmployer += l.eobiEmployer;
+    t.pfEmployee += l.pfEmployee; t.pfEmployer += l.pfEmployer;
+    t.otherDeductions += l.otherDeductionsTotal; t.netPay += l.netPay;
+  }
+  return t;
+}
+
+async function processRun(businessId, period, { employeeIds = null, adjustments = {} } = {}, actor) {
+  const existing = await runRepo.findActiveByPeriod(businessId, period);
+  if (existing && [PAYROLL_RUN_STATUS.POSTED, PAYROLL_RUN_STATUS.PAID].includes(existing.status)) {
+    throw new ApiError(409, `Payroll for ${period} is already posted. Reverse it before reprocessing.`);
+  }
+
+  const taxYear = taxYearFor(period);
+  const asOf = new Date(`${period}-28T00:00:00Z`); // any day in-month resolves the in-force structure
+  let employees = await employeeRepo.findActive(businessId);
+  if (employeeIds) employees = employees.filter((e) => employeeIds.includes(String(e._id)));
+
+  const lines = [];
+  for (const emp of employees) {
+    const structure = Employee.resolveStructure(emp, asOf);
+    if (!structure) continue; // not yet effective this period
+    const variable = adjustments[String(emp._id)] || {};
+    const base = computeNetPay(structure, { taxYear }, variable);
+    lines.push({ employeeId: emp._id, employeeCode: emp.code, employeeName: emp.fullName, costCenterId: emp.department || null, ...base });
+  }
+
+  const doc = {
+    businessId, period, taxYear, status: PAYROLL_RUN_STATUS.PROCESSED,
+    lines, totals: rollUp(lines), processedBy: actor?.id || null, processedAt: new Date(),
+  };
+
+  if (existing) { Object.assign(existing, doc); return existing.save(); }
+  return runRepo.create(doc);
+}
+
+async function getRun(businessId, id) {
+  const run = await runRepo.findOwned(businessId, id);
+  if (!run) throw new ApiError(404, 'Payroll run not found.');
+  return run;
+}
+
+async function listRuns(businessId) { return runRepo.listByBusiness(businessId); }
+
+module.exports = { computeNetPay, processRun, getRun, listRuns, taxYearFor };
