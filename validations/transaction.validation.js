@@ -12,6 +12,8 @@ const journalLineSchema = Joi.object({
   type: Joi.string().valid('debit', 'credit').required(),
   amount: Joi.number().positive().max(999_999_999_999).precision(2).required(),
   description: Joi.string().max(200).allow('', null).optional(),
+  // SRS FR-07.1 — optional per-line cost/profit-centre tag.
+  costCenterId: Joi.string().pattern(objectIdPattern).allow(null, '').optional(),
 });
 
 /**
@@ -80,6 +82,8 @@ const createTransactionSchema = Joi.object({
   // Inventory (Phase 3.5) — set when an inventory item is linked to a sale/purchase
   inventoryItemId: Joi.string().pattern(objectIdPattern).allow(null, '').optional(),
   inventoryQty:    Joi.number().min(0).allow(null).optional(),
+  // SRS FR-07.1 — optional entry-level cost/profit-centre tag.
+  costCenterId:    Joi.string().pattern(objectIdPattern).allow(null, '').optional(),
 }).custom((value, helpers) => {
   // Validate Debit != Credit
   if (value.debitAccountId === value.creditAccountId) {

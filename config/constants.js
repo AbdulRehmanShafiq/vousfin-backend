@@ -1154,6 +1154,7 @@ module.exports = {
     BRANCH:      'branch',
     PROJECT:     'project',
     COST_CENTER: 'cost_center',
+    LOCATION:    'location',
   },
 
   /** Bill aging brackets (days past due) */

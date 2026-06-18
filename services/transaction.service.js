@@ -125,6 +125,17 @@ class TransactionService {
       }
     }
 
+    // 2d. SRS FR-07.1 — validate cost-centre tags (entry-level + per-line). A tag is
+    // optional, but if supplied it must be an active cost centre of this business.
+    {
+      const costCenterService = require('./costCenter.service'); // lazy — avoid load-order coupling
+      const ccIds = [data.costCenterId, ...(data.journalLines || []).map(l => l.costCenterId)]
+        .filter(Boolean).map(String);
+      for (const ccId of [...new Set(ccIds)]) {
+        await costCenterService.validateAssignable(data.businessId, ccId);
+      }
+    }
+
     // 2b. FX fields — populate currencyCode / exchangeRate / baseCurrencyAmount when a
     //     foreign currency is specified. Falls back gracefully if no rate exists.
     let baseAmount = data.amount; // amount in base currency (PKR) used for balance updates

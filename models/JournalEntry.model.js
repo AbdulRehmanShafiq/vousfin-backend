@@ -379,11 +379,26 @@ const journalEntrySchema = new mongoose.Schema(
         default: '',
         maxlength: 200,
       },
+      // SRS FR-07.1 — optional cost/profit-centre tag for this line.
+      costCenterId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'CostCenter',
+        default: null,
+      },
     }],
 
     // ===============================
     // Accounting Period Engine (Phase 5.1)
     // ===============================
+
+    // SRS FR-07.1 — entry-level cost/profit-centre tag (for simple 2-line entries;
+    // multi-line entries can also tag per journalLines[]).
+    costCenterId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'CostCenter',
+      default: null,
+      index: true,
+    },
 
     // The AccountingPeriod this entry belongs to (set automatically on post)
     periodId: {
