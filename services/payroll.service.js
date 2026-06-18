@@ -9,6 +9,7 @@ const employeeRepo = require('../repositories/employee.repository');
 const runRepo = require('../repositories/payrollRun.repository');
 const accountRepo = require('../repositories/account.repository');
 const txService = require('./transaction.service');
+const { buildBankTransferCsv } = require('../utils/bankTransferFile.util');
 
 const PAY = { WAGES_EXP: '6180', EOBI_EXP: '6192', PF_EXP: '6194',
   WAGES_PAYABLE: '2140', SALARY_TAX_PAYABLE: '2141', EOBI_PAYABLE: '2142',
@@ -208,4 +209,15 @@ async function reverseRun(businessId, runId, actor, ipAddress = null) {
   return run.save();
 }
 
-module.exports = { computeNetPay, processRun, getRun, listRuns, taxYearFor, postToGL, markPaid, reverseRun };
+async function bankFileFor(businessId, runId) {
+  const run = await getRun(businessId, runId);
+  const employees = await employeeRepo.findByBusiness(businessId);
+  const byId = Object.fromEntries(employees.map((e) => [String(e._id), e]));
+  const rows = run.lines.map((l) => {
+    const e = byId[String(l.employeeId)] || {};
+    return { bankAccountTitle: e.bankAccountTitle || l.employeeName, iban: e.iban || '', netPay: l.netPay };
+  });
+  return buildBankTransferCsv(run, rows);
+}
+
+module.exports = { computeNetPay, processRun, getRun, listRuns, taxYearFor, postToGL, markPaid, reverseRun, bankFileFor };

@@ -90,6 +90,7 @@ router.use('/bank-reconciliation',   bankReconciliationRoutes);   // #7 — bank
 router.use('/autonomy',              require('./v1/autonomy.routes')); // Autonomy roadmap Phase 0 — control plane + inbox
 router.use('/bookkeeping',           require('./v1/bookkeeping.routes')); // Autonomy roadmap Phase 2 — Bookkeeper agent
 router.use('/cost-centers',          require('./v1/costCenter.routes'));  // SRS FR-07.1 — cost / profit centres
+router.use('/payroll',               require('./v1/payroll.routes'));     // SRS FR-08 — payroll
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
