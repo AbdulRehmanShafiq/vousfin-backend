@@ -9,6 +9,7 @@
 const accountRepository = require('../repositories/account.repository');
 const transactionRepository = require('../repositories/transaction.repository');
 const { JOURNAL_STATUS } = require('../config/constants');
+const { ApiError } = require('../utils/ApiError');
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
@@ -86,4 +87,28 @@ async function accountDerivedBalance(businessId, accountId, asOfDate = ALL_TIME)
   return row ? row.derived : 0;
 }
 
-module.exports = { computeDrift, accountDerivedBalance };
+/**
+ * Repair a business's cached running balances by setting each to its journal-derived
+ * value (the journal is authoritative; the cache is what drifts). Phase 5.
+ * SAFE-BY-CONSTRUCTION: refuses to write when the journal itself is unbalanced
+ * (Dr ≠ Cr) — in that case the derived values can't be trusted. Returns a per-account
+ * change report; pass { apply:true } to write, otherwise it's a read-only dry-run.
+ */
+async function recomputeBusinessBalances(businessId, { apply = false } = {}) {
+  const drift = await computeDrift(businessId);
+  if (apply && !drift.balanced) {
+    throw new ApiError(409, `Refusing to recompute: business ${businessId} journal is unbalanced (Dr ${drift.totalDebits} ≠ Cr ${drift.totalCredits}). Investigate before repairing.`);
+  }
+  const changes = drift.accounts
+    .filter((a) => a.drift !== 0)
+    .map((a) => ({ accountId: a.accountId, code: a.code, name: a.name, from: a.cached, to: a.derived, delta: r2(a.derived - a.cached) }));
+
+  if (apply) {
+    for (const c of changes) {
+      await accountRepository.updateRunningBalance(c.accountId, c.delta);
+    }
+  }
+  return { businessId, applied: apply, balanced: drift.balanced, changeCount: changes.length, totalAbsDrift: drift.totalAbsDrift, changes };
+}
+
+module.exports = { computeDrift, accountDerivedBalance, recomputeBusinessBalances };
