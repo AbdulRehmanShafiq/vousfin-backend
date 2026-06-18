@@ -2,7 +2,7 @@
 
 jest.mock('../../../services/autonomyPolicy.service', () => ({ setCapability: jest.fn() }));
 jest.mock('../../../services/paymentsAgent.service', () => ({ setVendorHold: jest.fn() }));
-jest.mock('../../../models/Vendor.model', () => ({ findOne: jest.fn() }), { virtual: true });
+jest.mock('../../../models/Vendor.model', () => ({ findOne: jest.fn() }));
 
 const policy = require('../../../services/autonomyPolicy.service');
 const paymentsAgent = require('../../../services/paymentsAgent.service');

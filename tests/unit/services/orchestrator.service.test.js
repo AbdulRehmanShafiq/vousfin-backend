@@ -5,7 +5,7 @@ jest.mock('../../../services/reconciler.service', () => ({ scanBusiness: jest.fn
 jest.mock('../../../services/collector.service', () => ({ scanBusiness: jest.fn() }));
 jest.mock('../../../services/paymentsAgent.service', () => ({ scanBusiness: jest.fn() }));
 jest.mock('../../../services/closeAgent.service', () => ({ scanBusiness: jest.fn() }));
-jest.mock('../../../models/PlanRun.model', () => ({ create: jest.fn(), findOne: jest.fn() }), { virtual: true });
+jest.mock('../../../models/PlanRun.model', () => ({ create: jest.fn(), findOne: jest.fn() }));
 
 const reconciler = require('../../../services/reconciler.service');
 const collector = require('../../../services/collector.service');

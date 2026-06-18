@@ -5,8 +5,8 @@ jest.mock('../../../services/actionRouter.service', () => ({ propose: jest.fn() 
 jest.mock('../../../services/recognitionSchedule.service', () => ({ postDueRecognitions: jest.fn() }));
 jest.mock('../../../services/cfoReport.service', () => ({ generate: jest.fn() }));
 jest.mock('../../../services/accountingPeriod.service', () => ({ closePeriod: jest.fn(), reopenPeriod: jest.fn() }));
-jest.mock('../../../models/AccountingPeriod.model', () => ({ findOne: jest.fn() }), { virtual: true });
-jest.mock('../../../models/RecognitionSchedule.model', () => ({ countDocuments: jest.fn() }), { virtual: true });
+jest.mock('../../../models/AccountingPeriod.model', () => ({ findOne: jest.fn() }));
+jest.mock('../../../models/RecognitionSchedule.model', () => ({ countDocuments: jest.fn() }));
 jest.mock('../../../repositories/proposedAction.repository', () => ({ latestBySource: jest.fn() }));
 
 const actionRouter = require('../../../services/actionRouter.service');
