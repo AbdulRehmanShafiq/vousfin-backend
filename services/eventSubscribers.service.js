@@ -134,9 +134,34 @@ function registerAll() {
     await eventLog.record(evt, { handlerErrors: 0 });
   }, { name: 'durable-event-log-writer' });
 
+  // ── Budgeting FR-04.2 — real-time variance breach alerts ──────────────────
+  // Any GL movement may push an account past its budget threshold. Recompute the
+  // affected lines of the active budget(s) and fire a deduped alert (≤60s SRS).
+  // Fire-and-forget + error-isolated: a variance failure can never unwind a post.
+  // lazy-require avoids a load-time cycle (variance → repositories → models).
+  const budgetVarianceHandler = async (evt) => {
+    if (!evt || !evt.businessId) return;
+    const entry = evt.after || {};
+    const ids = new Set();
+    if (Array.isArray(entry.journalLines) && entry.journalLines.length) {
+      for (const l of entry.journalLines) if (l.accountId) ids.add(String(l.accountId));
+    } else {
+      if (entry.debitAccountId) ids.add(String(entry.debitAccountId));
+      if (entry.creditAccountId) ids.add(String(entry.creditAccountId));
+    }
+    if (ids.size === 0) return;
+    const variance = require('./variance.service');
+    await variance.checkBreaches(String(evt.businessId), [...ids], {
+      entryDate: entry.transactionDate || new Date(),
+    });
+  };
+  businessEvents.on(EVENTS.TRANSACTION_CREATED, budgetVarianceHandler, { name: 'budget-variance-check' });
+  businessEvents.on(EVENTS.TRANSACTION_REVERSED, budgetVarianceHandler, { name: 'budget-variance-check:reversed' });
+
   logger.info(
     `[eventSubscribers] analytics cache-sync on ${CACHE_INVALIDATING_EVENTS.length} event types ` +
-    `+ AR/AP document reconciliation on payment.recorded + durable event-log writer`
+    `+ AR/AP document reconciliation on payment.recorded + durable event-log writer ` +
+    `+ budget-variance breach alerts on transaction.created/reversed`
   );
   return true;
 }
