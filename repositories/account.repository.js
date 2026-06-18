@@ -82,6 +82,11 @@ class AccountRepository extends BaseRepository {
     });
   }
 
+  /** Find a business account by its (business-unique) accountCode. */
+  async findByCode(businessId, accountCode) {
+    return this.model.findOne({ businessId, accountCode }).lean();
+  }
+
   /**
    * Return all accounts from a list of IDs that belong to the given business.
    * Used to validate journal line account IDs for tenant isolation.

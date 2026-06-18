@@ -4,8 +4,15 @@ const payrollTax = require('./payrollTax.service');
 const { ApiError } = require('../utils/ApiError');
 const { PAYROLL_RUN_STATUS } = require('../config/constants');
 const Employee = require('../models/Employee.model');
+const PayrollRun = require('../models/PayrollRun.model');
 const employeeRepo = require('../repositories/employee.repository');
 const runRepo = require('../repositories/payrollRun.repository');
+const accountRepo = require('../repositories/account.repository');
+const txService = require('./transaction.service');
+
+const PAY = { WAGES_EXP: '6180', EOBI_EXP: '6192', PF_EXP: '6194',
+  WAGES_PAYABLE: '2140', SALARY_TAX_PAYABLE: '2141', EOBI_PAYABLE: '2142',
+  PF_PAYABLE: '2143', OTHER_PAYABLE: '2148' };
 
 const r = (n) => Math.round(n || 0);
 const sumAmt = (arr) => (arr || []).reduce((t, x) => t + r(x.amount), 0);
@@ -104,4 +111,67 @@ async function getRun(businessId, id) {
 
 async function listRuns(businessId) { return runRepo.listByBusiness(businessId); }
 
-module.exports = { computeNetPay, processRun, getRun, listRuns, taxYearFor };
+/** Group a run's lines by costCenterId and subtotal each deduction bucket. */
+function groupByCostCentre(lines) {
+  const groups = new Map();
+  for (const l of lines) {
+    const key = l.costCenterId ? String(l.costCenterId) : '';
+    const g = groups.get(key) || { costCenterId: l.costCenterId || null,
+      netPay: 0, incomeTax: 0, eobiEmployee: 0, eobiEmployer: 0, pfEmployee: 0, pfEmployer: 0, otherDeductions: 0 };
+    g.netPay += l.netPay; g.incomeTax += l.incomeTax;
+    g.eobiEmployee += l.eobiEmployee; g.eobiEmployer += l.eobiEmployer;
+    g.pfEmployee += l.pfEmployee; g.pfEmployer += l.pfEmployer;
+    g.otherDeductions += l.otherDeductionsTotal;
+    groups.set(key, g);
+  }
+  return [...groups.values()];
+}
+
+async function postToGL(businessId, runId, actor, ipAddress = null) {
+  const run = await runRepo.findOwned(businessId, runId);
+  if (!run) throw new ApiError(404, 'Payroll run not found.');
+  if (!PayrollRun.canTransition(run.status, PAYROLL_RUN_STATUS.POSTED)) {
+    throw new ApiError(409, `A ${run.status} payroll run cannot be posted.`);
+  }
+
+  // resolve account ids once
+  const ids = {};
+  for (const code of Object.values(PAY)) ids[code] = (await accountRepo.findByCode(businessId, code))?._id;
+
+  const transactionDate = new Date(`${run.period}-28T00:00:00Z`);
+  const groups = groupByCostCentre(run.lines);
+  const postedIds = [];
+  let seq = 0;
+
+  const post = async (debitCode, creditCode, amount, costCenterId, note) => {
+    if (!amount || amount <= 0) return;
+    const je = await txService.createTransaction({
+      businessId, transactionDate, amount,
+      description: `Payroll ${run.period} — ${note}`,
+      transactionType: 'Salary', inputMethod: 'batch', transactionSource: 'system_generated',
+      debitAccountId: ids[debitCode], creditAccountId: ids[creditCode],
+      costCenterId: costCenterId || undefined,
+      metadata: { idempotencyKey: `pr:${run._id}:${++seq}` },
+    }, actor?.id, ipAddress);
+    postedIds.push(je._id);
+  };
+
+  for (const g of groups) {
+    const cc = g.costCenterId;
+    await post(PAY.WAGES_EXP, PAY.WAGES_PAYABLE,       g.netPay,          cc, 'net pay');
+    await post(PAY.WAGES_EXP, PAY.SALARY_TAX_PAYABLE,  g.incomeTax,       cc, 'income tax withheld');
+    await post(PAY.WAGES_EXP, PAY.EOBI_PAYABLE,        g.eobiEmployee,    cc, 'EOBI (employee)');
+    await post(PAY.WAGES_EXP, PAY.PF_PAYABLE,          g.pfEmployee,      cc, 'provident fund (employee)');
+    await post(PAY.WAGES_EXP, PAY.OTHER_PAYABLE,       g.otherDeductions, cc, 'other deductions');
+    await post(PAY.EOBI_EXP,  PAY.EOBI_PAYABLE,        g.eobiEmployer,    cc, 'EOBI (employer)');
+    await post(PAY.PF_EXP,    PAY.PF_PAYABLE,          g.pfEmployer,      cc, 'provident fund (employer)');
+  }
+
+  run.status = PAYROLL_RUN_STATUS.POSTED;
+  run.postedJournalEntryIds = postedIds;
+  run.postedBy = actor?.id || null;
+  run.postedAt = new Date();
+  return run.save();
+}
+
+module.exports = { computeNetPay, processRun, getRun, listRuns, taxYearFor, postToGL };
