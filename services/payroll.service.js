@@ -152,7 +152,8 @@ async function postToGL(businessId, runId, actor, ipAddress = null) {
       transactionType: 'Salary', inputMethod: 'batch', transactionSource: 'system_generated',
       debitAccountId: ids[debitCode], creditAccountId: ids[creditCode],
       costCenterId: costCenterId || undefined,
-      metadata: { idempotencyKey: `pr:${run._id}:${++seq}` },
+      idempotencyKey: `pr:${run._id}:${++seq}`,  // engine dedups + stores under metadata
+      skipTax: true,                              // salary tax is handled by payroll, not the GST/WHT engine
     }, actor?.id, ipAddress);
     postedIds.push(je._id);
   };
@@ -187,7 +188,7 @@ async function markPaid(businessId, runId, bankAccountId, actor, ipAddress = nul
     description: `Payroll ${run.period} — net pay disbursement`,
     transactionType: 'Salary', inputMethod: 'batch', transactionSource: 'system_generated',
     debitAccountId: wagesPayable, creditAccountId: bankAccountId,
-    metadata: { idempotencyKey: `pr:${run._id}:pay` },
+    idempotencyKey: `pr:${run._id}:pay`, skipTax: true,
   }, actor?.id, ipAddress);
   run.status = PAYROLL_RUN_STATUS.PAID; run.bankAccountId = bankAccountId; run.paidAt = new Date();
   return run.save();

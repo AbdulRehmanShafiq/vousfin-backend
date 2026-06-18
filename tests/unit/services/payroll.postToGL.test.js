@@ -46,7 +46,8 @@ describe('postToGL', () => {
       expect(p.amount).toBeGreaterThan(0);
       expect(p.debitAccountId).not.toBe(p.creditAccountId);
       expect(p.costCenterId).toBe('cc1');
-      expect(p.metadata.idempotencyKey).toMatch(/^pr:run1:/);
+      expect(p.idempotencyKey).toMatch(/^pr:run1:/);
+      expect(p.skipTax).toBe(true);
     }
     // sum of debits to 6180 = gross; employer legs add eobiEmployer+pfEmployer
     const drTo6180 = calls.filter((p) => p.debitAccountId === 'acc-6180').reduce((s, p) => s + p.amount, 0);
