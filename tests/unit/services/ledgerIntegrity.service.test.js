@@ -60,6 +60,19 @@ describe('computeDrift', () => {
     expect(loan.drift).toBe(0);
   });
 
+  it('accountDerivedBalance returns the journal-derived balance for one account', async () => {
+    accountRepo.findByBusiness.mockResolvedValue([
+      { _id: 'cash', accountCode: '1010', accountName: 'Cash', normalBalance: 'Debit', runningBalance: 999 },
+      { _id: 'sales', accountCode: '4110', accountName: 'Sales', normalBalance: 'Credit', runningBalance: 0 },
+    ]);
+    txRepo.getDebitCreditTotals.mockResolvedValue({
+      debitTotals: [{ _id: 'cash', total: 1000 }],
+      creditTotals: [{ _id: 'sales', total: 1000 }],
+    });
+    expect(await integrity.accountDerivedBalance(BIZ, 'cash')).toBe(1000);
+    expect(await integrity.accountDerivedBalance(BIZ, 'unknown')).toBe(0);
+  });
+
   it('flags the books as unbalanced when total debits ≠ total credits', async () => {
     accountRepo.findByBusiness.mockResolvedValue([
       { _id: 'cash', accountCode: '1010', accountName: 'Cash', normalBalance: 'Debit', runningBalance: 1000 },

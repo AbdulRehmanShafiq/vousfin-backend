@@ -68,4 +68,14 @@ async function computeDrift(businessId, asOfDate = new Date()) {
   };
 }
 
-module.exports = { computeDrift };
+/**
+ * Journal-derived (compound-aware) balance for ONE account — the value its cached
+ * runningBalance SHOULD equal. Reused by the balance-repair path and the migration.
+ */
+async function accountDerivedBalance(businessId, accountId, asOfDate = new Date()) {
+  const { accounts } = await computeDrift(businessId, asOfDate);
+  const row = accounts.find((a) => a.accountId === String(accountId));
+  return row ? row.derived : 0;
+}
+
+module.exports = { computeDrift, accountDerivedBalance };

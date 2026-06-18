@@ -629,6 +629,20 @@ class TransactionService {
       logger.info(`[Tax] Appended ${pendingTaxLines.length} tax journal line(s) to transaction`);
     }
 
+    // Phase 2 convergence (canonical journal lines): every entry stores its
+    // journalLines so the ledger has ONE representation. We synthesise the 2-line
+    // pair when none exist — but ONLY for non-FX entries (baseAmount === amount).
+    // FX entries keep the 2-account pair for now, because their ledger balances use
+    // baseAmount while effectiveLines reports the foreign amount; unifying those is a
+    // separate FX-normalisation step and must not change FX semantics here.
+    if ((!entryData.journalLines || entryData.journalLines.length === 0) &&
+        Math.round(baseAmount * 100) === Math.round(entryData.amount * 100)) {
+      entryData.journalLines = [
+        { type: 'debit',  accountId: entryData.debitAccountId,  amount: entryData.amount },
+        { type: 'credit', accountId: entryData.creditAccountId, amount: entryData.amount },
+      ];
+    }
+
     if (entryData.journalLines && entryData.journalLines.length > 0) {
       let debits = 0, credits = 0;
       for (const line of entryData.journalLines) {
@@ -1526,22 +1540,18 @@ class TransactionService {
   }
 
   /**
-   * Recalculate running balance for a specific account.
+   * Recalculate running balance for a specific account FROM THE JOURNAL.
+   * Compound-aware: derives from effective lines (so an account that appears only
+   * in a non-primary journalLine of a compound entry is counted), via the shared
+   * ledger-integrity derivation. Sets the cached balance to the journal-derived
+   * value (the journal is authoritative; the cache is what drifts).
    */
   async recalculateAccountBalance(businessId, accountId) {
-    const transactions = await transactionRepository.getByAccount(businessId, accountId, new Date(0), new Date());
-    let balance = 0;
-    for (const tx of transactions) {
-      const isDebit = tx.debitAccountId._id.toString() === accountId;
-      const account = await accountRepository.findById(accountId);
-      if (isDebit) {
-        balance += (account.normalBalance === 'Debit' ? tx.amount : -tx.amount);
-      } else {
-        balance += (account.normalBalance === 'Credit' ? tx.amount : -tx.amount);
-      }
-    }
-    await accountRepository.updateRunningBalance(accountId, balance - (await accountRepository.findById(accountId)).runningBalance);
-    return balance;
+    const ledgerIntegrity = require('./ledgerIntegrity.service');
+    const derived = await ledgerIntegrity.accountDerivedBalance(businessId, accountId);
+    const current = (await accountRepository.findById(accountId))?.runningBalance || 0;
+    await accountRepository.updateRunningBalance(accountId, Math.round((derived - current) * 100) / 100);
+    return derived;
   }
 
   /**
