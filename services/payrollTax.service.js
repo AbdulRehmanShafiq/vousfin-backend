@@ -2,6 +2,8 @@
 // Salary income tax (annualize → salaried slabs → ÷12) + exempt-cap helper.
 'use strict';
 const { resolveSlabs } = require('../config/payrollTaxSlabs');
+const PayrollRun = require('../models/PayrollRun.model');
+const { ApiError } = require('../utils/ApiError');
 
 /** Progressive annual tax for a given annual taxable income and tax year. */
 function annualSalaryTax(annualTaxable, taxYear) {
@@ -28,4 +30,36 @@ function taxableAfterExemptions({ gross, basic = 0, medical = 0, medicalCapPctOf
   return Math.round(gross - exempt);
 }
 
-module.exports = { annualSalaryTax, monthlySalaryTax, taxableAfterExemptions };
+const TAX_YEAR_MONTHS = (taxYear) => {
+  const start = Number(taxYear.split('-')[0]);     // e.g. 2025 → Jul-2025 .. Jun-2026
+  const months = [];
+  for (let i = 0; i < 12; i++) {
+    const m = ((6 + i) % 12) + 1;                  // 7..12,1..6
+    const y = i < 6 ? start : start + 1;
+    months.push(`${y}-${String(m).padStart(2, '0')}`);
+  }
+  return months;
+};
+
+async function generateSalaryCertificate(businessId, employeeId, taxYear) {
+  const periods = TAX_YEAR_MONTHS(taxYear);
+  const runs = await PayrollRun.find({
+    businessId, period: { $in: periods }, status: { $in: ['posted', 'paid'] },
+  }).lean();
+
+  const months = [];
+  const totals = { gross: 0, taxableIncome: 0, taxWithheld: 0 };
+  let employeeName = null;
+  for (const run of runs) {
+    const line = (run.lines || []).find((l) => String(l.employeeId) === String(employeeId));
+    if (!line) continue;
+    employeeName = line.employeeName;
+    months.push({ period: run.period, gross: line.gross, taxableIncome: line.taxableIncome, taxWithheld: line.incomeTax });
+    totals.gross += line.gross; totals.taxableIncome += line.taxableIncome; totals.taxWithheld += line.incomeTax;
+  }
+  if (!months.length) throw new ApiError(404, `No payroll found for this employee in ${taxYear}.`);
+  months.sort((a, b) => a.period.localeCompare(b.period));
+  return { businessId, employeeId, employeeName, taxYear, months, totals };
+}
+
+module.exports = { annualSalaryTax, monthlySalaryTax, taxableAfterExemptions, generateSalaryCertificate };
