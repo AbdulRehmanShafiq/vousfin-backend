@@ -683,4 +683,7 @@ const transactionRepository = new TransactionRepository();
 // Exported for unit tests asserting the Income Statement and Trial Balance share
 // one line-normalisation stage (and therefore cannot diverge).
 transactionRepository.EFFECTIVE_LINES_STAGE = EFFECTIVE_LINES_STAGE;
+// Exported so variance/budget reads use the SAME statuses the financial
+// statements show (posted / partially_settled / settled).
+transactionRepository.REPORT_STATUSES = REPORT_STATUSES;
 module.exports = transactionRepository;
