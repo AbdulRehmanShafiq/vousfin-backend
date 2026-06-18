@@ -166,6 +166,7 @@ module.exports = {
     { accountCode: '2135', accountName: 'Accrued Expenses',              accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2137', accountName: 'Accrued Interest Payable',      accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2140', accountName: 'Wages Payable',                 accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2141', accountName: 'Salary Tax Withheld Payable',   accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2142', accountName: 'EOBI / Social Security Payable',accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2143', accountName: 'Provident Fund Payable',        accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2145', accountName: 'Sales Tax (PST/SST) Payable',   accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
@@ -409,6 +410,18 @@ module.exports = {
     SETTLED: 'settled',
     OVERDUE: 'overdue',
     CANCELLED: 'cancelled',
+  },
+
+  // Payroll run lifecycle (SRS FR-08.2/.3 — locked after posting; amendments require reversal)
+  PAYROLL_RUN_STATUS: {
+    DRAFT: 'draft', PROCESSED: 'processed', POSTED: 'posted', PAID: 'paid', REVERSED: 'reversed',
+  },
+  PAYROLL_RUN_TRANSITIONS: {
+    draft:     ['processed'],
+    processed: ['draft', 'posted'],
+    posted:    ['paid', 'reversed'],
+    paid:      ['reversed'],
+    reversed:  [],
   },
 
   // Payment tracking status
