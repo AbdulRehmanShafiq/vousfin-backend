@@ -10,7 +10,8 @@
  */
 
 const nlParserRoutes = require('./routes/nlParserRoutes');
-const { parseTransaction } = require('./services/parserService');
+const { parseTransaction, parseTransactionFromImage } = require('./services/parserService');
 
 module.exports = nlParserRoutes;
 module.exports.parseTransaction = parseTransaction;
+module.exports.parseTransactionFromImage = parseTransactionFromImage;

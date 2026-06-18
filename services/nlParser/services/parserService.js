@@ -5,7 +5,7 @@
  * → journal generation → validation → structured response.
  */
 
-const { callGeminiAPI } = require('./geminiService');
+const { callGeminiAPI, callGeminiVision } = require('./geminiService');
 const { normalizeExtraction } = require('./normalizationService');
 const { generateJournalEntries } = require('./journalGeneratorService');
 const { validateResult } = require('./validationService');
@@ -32,7 +32,17 @@ const { calculateConfidence, evaluateReviewNeed } = require('../utils/confidence
 async function parseTransaction(rawInput, businessAccounts = [], opts = {}) {
   // ── Step 1: AI Extraction — inject live accounts so Gemini uses real names ──
   const rawExtraction = await callGeminiAPI(rawInput, businessAccounts);
+  return _finishParse(rawExtraction, rawInput, businessAccounts, opts);
+}
 
+/** Read a bill/receipt IMAGE into the same structured result as the text path. */
+async function parseTransactionFromImage(imageBase64, mimeType = 'image/jpeg', businessAccounts = [], opts = {}) {
+  const rawExtraction = await callGeminiVision(imageBase64, mimeType, businessAccounts);
+  return _finishParse(rawExtraction, opts.rawText || '', businessAccounts, opts);
+}
+
+/** Steps 2–6 of the pipeline (shared by the text + image paths). */
+async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts = {}) {
   // ── Step 2: Normalization (Phase 5.4.7: pass rawText + countryCode for tax intelligence) ──
   const { normalized, confidence: rawConfidence } = normalizeExtraction(rawExtraction, {
     rawText:     rawInput,
@@ -117,4 +127,4 @@ async function parseTransaction(rawInput, businessAccounts = [], opts = {}) {
   };
 }
 
-module.exports = { parseTransaction };
+module.exports = { parseTransaction, parseTransactionFromImage };

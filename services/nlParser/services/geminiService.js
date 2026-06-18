@@ -7,9 +7,19 @@
 const { buildSystemPrompt, buildUserPrompt } = require('../utils/promptBuilder');
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
-const MAX_RETRIES = 3;
+// When the primary model is overloaded (503), fail over to another. Google's
+// "-latest" aliases point at busy preview models; the dated/stable ones are
+// usually free. De-duplicated, primary first.
+const MODELS = [...new Set([GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash'])];
+const MAX_RETRIES = 2;          // per model (we also fail over across models)
 const TIMEOUT_MS = 30000;
-const RETRY_DELAY_MS = 1000;
+const RETRY_DELAY_MS = 800;
+
+// A 503/429/UNAVAILABLE/timeout means the AI is busy, not that the input is bad.
+function isOverload(err) {
+  const m = String(err?.message || '');
+  return /\b(503|429)\b/.test(m) || /overloaded|unavailable|rate.?limit|timed out/i.test(m);
+}
 
 /**
  * Call the Gemini API with natural language transaction input.
@@ -19,74 +29,79 @@ const RETRY_DELAY_MS = 1000;
  * @throws {Error} If all retries fail or response is invalid.
  */
 async function callGeminiAPI(rawInput, businessAccounts = []) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new Error('GEMINI_API_KEY environment variable is not set');
-  }
-
-  const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
-
-  const systemPrompt = buildSystemPrompt(businessAccounts);
-  const userPrompt = buildUserPrompt(rawInput);
-
   const requestBody = {
-    system_instruction: {
-      parts: [{ text: systemPrompt }],
-    },
-    contents: [
-      {
-        role: 'user',
-        parts: [{ text: userPrompt }],
-      },
-    ],
-    generationConfig: {
-      temperature: 0.1,
-      responseMimeType: 'application/json',
-    },
+    system_instruction: { parts: [{ text: buildSystemPrompt(businessAccounts) }] },
+    contents: [{ role: 'user', parts: [{ text: buildUserPrompt(rawInput) }] }],
+    generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
   };
+  return generate(requestBody);
+}
+
+/**
+ * Read a bill/receipt IMAGE and return the same structured JSON as the text
+ * path. Gemini's flash models are multimodal, so we send the image inline with
+ * the same accounting prompt.
+ * @param {string} imageBase64 - base64 (no data: prefix)
+ * @param {string} mimeType    - e.g. image/jpeg, image/png
+ */
+async function callGeminiVision(imageBase64, mimeType = 'image/jpeg', businessAccounts = []) {
+  const requestBody = {
+    system_instruction: { parts: [{ text: buildSystemPrompt(businessAccounts) }] },
+    contents: [{
+      role: 'user',
+      parts: [
+        { text: buildUserPrompt('Read this bill/receipt image and extract the transaction. Use the amount, who it was paid to/received from, what it was for, and the date shown.') },
+        { inline_data: { mime_type: mimeType, data: imageBase64 } },
+      ],
+    }],
+    generationConfig: { temperature: 0.1, responseMimeType: 'application/json' },
+  };
+  return generate(requestBody);
+}
+
+/**
+ * POST a request body to Gemini, retrying per model and failing over across
+ * models when one is overloaded. Throws a tagged error (`.isOverloaded`) when
+ * the failure is the AI being busy rather than bad input.
+ */
+async function generate(requestBody) {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is not set');
 
   let lastError = null;
+  for (const model of MODELS) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await fetchWithTimeout(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody),
+        }, TIMEOUT_MS);
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const response = await fetchWithTimeout(GEMINI_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      }, TIMEOUT_MS);
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => 'Unknown error');
-        throw new Error(`Gemini API error (${response.status}): ${errorBody}`);
-      }
-
-      const data = await response.json();
-
-      const content = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!content) {
-        throw new Error('Empty response content from Gemini API');
-      }
-
-      // Parse and validate JSON response
-      const parsed = extractJSON(content);
-      if (!parsed) {
-        throw new Error('Failed to parse JSON from Gemini response');
-      }
-
-      return parsed;
-    } catch (error) {
-      lastError = error;
-      console.error(`Gemini API attempt ${attempt}/${MAX_RETRIES} failed:`, error.message);
-
-      if (attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAY_MS * attempt);
+        if (!response.ok) {
+          const errorBody = await response.text().catch(() => 'Unknown error');
+          throw new Error(`Gemini API error (${response.status}): ${errorBody}`);
+        }
+        const data = await response.json();
+        const content = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!content) throw new Error('Empty response content from Gemini API');
+        const parsed = extractJSON(content);
+        if (!parsed) throw new Error('Failed to parse JSON from Gemini response');
+        return parsed;
+      } catch (error) {
+        lastError = error;
+        console.error(`Gemini [${model}] attempt ${attempt}/${MAX_RETRIES} failed:`, error.message);
+        // Overloaded → stop retrying this model, fail over to the next one.
+        if (isOverload(error)) break;
+        if (attempt < MAX_RETRIES) await sleep(RETRY_DELAY_MS * attempt);
       }
     }
   }
 
-  throw new Error(`Gemini API failed after ${MAX_RETRIES} attempts: ${lastError?.message}`);
+  const err = new Error(`Gemini API failed across ${MODELS.length} model(s): ${lastError?.message}`);
+  err.isOverloaded = isOverload(lastError);
+  throw err;
 }
 
 /**
@@ -154,4 +169,4 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { callGeminiAPI, extractJSON };
+module.exports = { callGeminiAPI, callGeminiVision, extractJSON };

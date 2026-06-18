@@ -16,7 +16,7 @@
 // every posting is audited and reversible.
 //
 'use strict';
-const { parseTransaction } = require('./nlParser');
+const { parseTransaction, parseTransactionFromImage } = require('./nlParser');
 const actionRouter = require('./actionRouter.service');
 const executors = require('./actionExecutors');
 const entityMemory = require('./entityMemory.service');
@@ -47,9 +47,8 @@ function resolveAccount(accounts, name) {
   );
 }
 
-/* ── Read a document into a proposed journal entry ────────────────────────── */
-async function readIntoProposal(doc, accounts, countryCode) {
-  const parsed = await parseTransaction(doc.rawText, accounts, { countryCode });
+/* ── Turn a parsed reading into a proposed journal entry ──────────────────── */
+async function readIntoProposal(doc, accounts, parsed) {
   const p = parsed.parsedData || {};
   const lines = Array.isArray(parsed.journalEntries) ? parsed.journalEntries : [];
 
@@ -124,15 +123,17 @@ function buildSummary(p, lines, unresolved) {
   return `We read this as ${plainType(p.transactionType)}: ${amt}${who}.`;
 }
 
-/* ── Public: ingest a document and propose its journal entry ──────────────── */
-async function ingest({ businessId, rawText, source, submittedBy }) {
+/* ── Public: ingest a document (text or image) and propose its journal entry ─ */
+async function ingest({ businessId, rawText, source, submittedBy, image, mimeType }) {
   const text = String(rawText || '').trim();
-  if (!text) { const e = new Error('Nothing to read — add the bill or receipt text.'); e.statusCode = 400; throw e; }
+  const hasImage = !!image;
+  if (!text && !hasImage) { const e = new Error('Nothing to read — add the bill text, or attach a photo.'); e.statusCode = 400; throw e; }
 
   const doc = await docRepo.create({
     businessId,
-    rawText: text.slice(0, 5000),
-    source: Object.values(SOURCE_DOCUMENT_SOURCES).includes(source) ? source : SOURCE_DOCUMENT_SOURCES.MANUAL,
+    rawText: (text || '(photo of a bill/receipt)').slice(0, 5000),
+    source: hasImage ? SOURCE_DOCUMENT_SOURCES.UPLOAD
+      : (Object.values(SOURCE_DOCUMENT_SOURCES).includes(source) ? source : SOURCE_DOCUMENT_SOURCES.MANUAL),
     status: SOURCE_DOCUMENT_STATUS.RECEIVED,
     submittedBy: submittedBy || null,
   });
@@ -147,11 +148,20 @@ async function ingest({ businessId, rawText, source, submittedBy }) {
 
   let read;
   try {
-    read = await readIntoProposal(doc, accounts, countryCode);
+    // Read the photo with Gemini vision, or the typed text — same pipeline after.
+    const parsed = hasImage
+      ? await parseTransactionFromImage(image, mimeType || 'image/jpeg', accounts, { countryCode, rawText: text })
+      : await parseTransaction(text, accounts, { countryCode });
+    read = await readIntoProposal(doc, accounts, parsed);
   } catch (e) {
+    // Tell the owner the truth: the AI being busy is not the same as bad input.
+    const busy = e.isOverloaded || /overloaded|unavailable|busy|timed out|\b(503|429)\b/i.test(e.message || '');
+    const errMsg = busy
+      ? 'Our reader is busy right now — please try again in a moment.'
+      : 'We couldn’t read this one. Try typing the amount and what it was for.';
     logger.warn(`[bookkeeper] read failed for doc ${doc._id}: ${e.message}`);
-    await docRepo.update(doc._id, { $set: { status: SOURCE_DOCUMENT_STATUS.FAILED, error: 'AI could not read this document.' } });
-    return { document: await docRepo.findById(doc._id), action: null };
+    await docRepo.update(doc._id, { $set: { status: SOURCE_DOCUMENT_STATUS.FAILED, error: errMsg } });
+    return { document: await docRepo.findById(doc._id), action: null, error: errMsg, busy };
   }
 
   if (!read.ok && !read.confidence) {

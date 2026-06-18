@@ -1,7 +1,7 @@
 'use strict';
 
 jest.mock('../../../config/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
-jest.mock('../../../services/nlParser', () => ({ parseTransaction: jest.fn() }));
+jest.mock('../../../services/nlParser', () => ({ parseTransaction: jest.fn(), parseTransactionFromImage: jest.fn() }));
 jest.mock('../../../services/actionRouter.service', () => ({ propose: jest.fn() }));
 jest.mock('../../../services/entityMemory.service', () => ({ learn: jest.fn(), suggest: jest.fn() }));
 jest.mock('../../../services/transaction.service', () => ({ createTransaction: jest.fn(), reverseTransaction: jest.fn() }));
@@ -60,8 +60,7 @@ describe('readIntoProposal', () => {
   const doc = { _id: 'doc1', businessId: BIZ, rawText: 'paid 50000 office rent', submittedBy: 'u1' };
 
   it('builds resolved journal lines and is ok when every account matches', async () => {
-    parseTransaction.mockResolvedValue(parsedOk());
-    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, 'PK');
+    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, parsedOk());
     expect(r.ok).toBe(true);
     expect(r.payload.journalLines).toEqual([
       { accountId: 'acc_rent', type: 'debit', amount: 50000 },
@@ -71,15 +70,14 @@ describe('readIntoProposal', () => {
   });
 
   it('boosts confidence and cites memory when the counterparty was booked before', async () => {
-    parseTransaction.mockResolvedValue(parsedOk());
     entityMemory.suggest.mockResolvedValue({ value: { accountId: 'acc_rent' }, hits: 3 });
-    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, 'PK');
+    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, parsedOk());
     expect(r.confidence).toBeCloseTo(0.9);
     expect(r.citations.join(' ')).toMatch(/booked ABC Properties before/);
   });
 
   it('caps confidence and is not ok when an account cannot be matched', async () => {
-    parseTransaction.mockResolvedValue({
+    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, {
       parsedData: { amount: 9000, description: 'consulting', transactionType: 'expense' },
       journalEntries: [
         { account: 'Consulting Fees', entryType: 'debit', amount: 9000 },
@@ -87,7 +85,6 @@ describe('readIntoProposal', () => {
       ],
       confidence: { overall: 0.85 },
     });
-    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, 'PK');
     expect(r.ok).toBe(false);
     expect(r.confidence).toBeLessThanOrEqual(0.3);
     expect(r.unresolved).toContain('Consulting Fees');
@@ -95,8 +92,7 @@ describe('readIntoProposal', () => {
   });
 
   it('is not ok when no amount or lines are read', async () => {
-    parseTransaction.mockResolvedValue({ parsedData: {}, journalEntries: [], confidence: { overall: 0 } });
-    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, 'PK');
+    const r = await bookkeeper.readIntoProposal(doc, ACCOUNTS, { parsedData: {}, journalEntries: [], confidence: { overall: 0 } });
     expect(r.ok).toBe(false);
   });
 });
