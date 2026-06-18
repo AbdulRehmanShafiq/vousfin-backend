@@ -424,6 +424,20 @@ module.exports = {
     reversed:  [],
   },
 
+  // Budgeting (SRS FR-04.1 / FR-04.2) — versioned, immutable once active
+  BUDGET_STATUS: {
+    DRAFT: 'draft', PENDING_APPROVAL: 'pending_approval', ACTIVE: 'active',
+    REJECTED: 'rejected', ARCHIVED: 'archived',
+  },
+  BUDGET_STATUS_TRANSITIONS: {
+    draft:            ['pending_approval'],
+    pending_approval: ['active', 'rejected'],
+    rejected:         ['draft'],
+    active:           ['archived'],
+    archived:         [],
+  },
+  BUDGET_SCENARIOS: ['base', 'optimistic', 'pessimistic'],
+
   // Payment tracking status
   PAYMENT_STATUS: {
     UNPAID: 'unpaid',
