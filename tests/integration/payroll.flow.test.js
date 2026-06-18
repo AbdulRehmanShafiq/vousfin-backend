@@ -1,15 +1,18 @@
 'use strict';
-// Real services, mocked persistence — proves process → post (balanced, register==GL) → reverse.
+// Real services, mocked persistence — proves process → post (ONE balanced compound
+// entry whose lines equal the payroll register) → reverse.
 jest.mock('../../repositories/employee.repository', () => ({ findActive: jest.fn(), findByBusiness: jest.fn() }));
 jest.mock('../../repositories/payrollRun.repository', () => ({ findActiveByPeriod: jest.fn(), findOwned: jest.fn(), create: jest.fn() }));
 jest.mock('../../repositories/account.repository', () => ({ findByCode: jest.fn() }));
 jest.mock('../../models/Employee.model', () => ({ resolveStructure: jest.fn() }));
-jest.mock('../../services/transaction.service', () => ({ createTransaction: jest.fn(), reverseTransaction: jest.fn() }));
+jest.mock('../../services/ledgerPosting.service', () => ({ postCompoundJournal: jest.fn() }));
+jest.mock('../../services/transaction.service', () => ({ reverseTransaction: jest.fn() }));
 
 const employeeRepo = require('../../repositories/employee.repository');
 const runRepo = require('../../repositories/payrollRun.repository');
 const accountRepo = require('../../repositories/account.repository');
 const Employee = require('../../models/Employee.model');
+const ledgerPosting = require('../../services/ledgerPosting.service');
 const txService = require('../../services/transaction.service');
 const payroll = require('../../services/payroll.service');
 
@@ -27,11 +30,11 @@ beforeEach(() => {
   employeeRepo.findActive.mockResolvedValue([{ _id: 'e1', code: 'E1', fullName: 'Ali', department: 'cc1', salaryStructure: [STRUCT] }]);
   Employee.resolveStructure.mockReturnValue(STRUCT);
   accountRepo.findByCode.mockImplementation((b, code) => Promise.resolve({ _id: `acc-${code}` }));
-  let n = 0; txService.createTransaction.mockImplementation(() => Promise.resolve({ _id: `je${++n}` }));
+  ledgerPosting.postCompoundJournal.mockResolvedValue({ _id: 'je1' });
   txService.reverseTransaction.mockImplementation(() => Promise.resolve({ _id: 'rev' }));
 });
 
-it('process → post keeps GL totals equal to the payroll register', async () => {
+it('process → post emits ONE balanced compound entry equal to the register', async () => {
   let stored;
   runRepo.findActiveByPeriod.mockResolvedValue(null);
   runRepo.create.mockImplementation((doc) => {
@@ -44,25 +47,28 @@ it('process → post keeps GL totals equal to the payroll register', async () =>
   runRepo.findOwned.mockResolvedValue(stored);
   const posted = await payroll.postToGL(BIZ, 'run1', { id: 'u1' });
 
-  const pairs = txService.createTransaction.mock.calls.map((c) => c[0]);
-  const drTo6180 = pairs.filter((p) => p.debitAccountId === 'acc-6180').reduce((s, p) => s + p.amount, 0);
-  expect(drTo6180).toBe(processed.totals.gross);                 // wages expense == register gross
-  const creditToNet = pairs.filter((p) => p.creditAccountId === 'acc-2140').reduce((s, p) => s + p.amount, 0);
-  expect(creditToNet).toBe(processed.totals.netPay);            // wages payable == register net
+  expect(ledgerPosting.postCompoundJournal).toHaveBeenCalledTimes(1);
+  const { lines } = ledgerPosting.postCompoundJournal.mock.calls[0][0];
+  const sum = (t) => lines.filter(l => l.type === t).reduce((s, l) => s + l.amount, 0);
+  expect(sum('debit')).toBe(sum('credit'));                                   // balanced
+  const wages = lines.filter(l => l.accountId === 'acc-6180').reduce((s, l) => s + l.amount, 0);
+  expect(wages).toBe(processed.totals.gross);                                 // wages expense == register gross
+  expect(lines.find(l => l.accountId === 'acc-2140').amount).toBe(processed.totals.netPay); // payable == register net
   expect(posted.status).toBe('posted');
+  expect(posted.postedJournalEntryIds).toEqual(['je1']);
 });
 
-it('reverse undoes every posted entry', async () => {
+it('reverse undoes the posted entry', async () => {
   const run = { _id: 'run1', businessId: BIZ, period: '2026-06', status: 'posted',
-    postedJournalEntryIds: ['je1', 'je2', 'je3'], reversalJournalEntryIds: [], totals: { netPay: 1 },
+    postedJournalEntryIds: ['je1'], reversalJournalEntryIds: [], totals: { netPay: 1 },
     save: jest.fn().mockImplementation(function () { return Promise.resolve(this); }) };
   runRepo.findOwned.mockResolvedValue(run);
   const r = await payroll.reverseRun(BIZ, 'run1', { id: 'u1' });
-  expect(txService.reverseTransaction).toHaveBeenCalledTimes(3);
+  expect(txService.reverseTransaction).toHaveBeenCalledTimes(1);
   expect(r.status).toBe('reversed');
 });
 
-it('a 500-employee single-cost-centre run posts a bounded number of entries', async () => {
+it('a 500-employee single-cost-centre run still posts ONE entry', async () => {
   const emps = Array.from({ length: 500 }, (_, i) => ({ _id: `e${i}`, code: `E${i}`, fullName: `Emp${i}`, department: 'cc1', salaryStructure: [STRUCT] }));
   employeeRepo.findActive.mockResolvedValue(emps);
   let stored;
@@ -71,6 +77,5 @@ it('a 500-employee single-cost-centre run posts a bounded number of entries', as
   await payroll.processRun(BIZ, '2026-06', { adjustments: {} }, { id: 'u1' });
   runRepo.findOwned.mockResolvedValue(stored);
   await payroll.postToGL(BIZ, 'runP', { id: 'u1' });
-  // one cost-centre → at most 7 aggregated pairs, regardless of headcount
-  expect(txService.createTransaction.mock.calls.length).toBeLessThanOrEqual(7);
+  expect(ledgerPosting.postCompoundJournal).toHaveBeenCalledTimes(1);
 });

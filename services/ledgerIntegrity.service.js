@@ -21,16 +21,24 @@ const BALANCE_STATUSES = [
   JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.REVERSED,
 ];
 
+// The cached runningBalance is an ALL-TIME accumulator — a posting moves it the
+// moment it's written, regardless of its transactionDate (e.g. a period-end or
+// scheduled future-dated entry). So the journal-derived comparison must also be
+// all-time; an asOf of "now" would wrongly exclude future-dated entries that have
+// already moved the cache, producing phantom drift.
+const ALL_TIME = new Date('2999-12-31T00:00:00Z');
+
 /**
  * @param {string} businessId
- * @param {Date} [asOfDate=now]
+ * @param {Date} [asOfDate=all-time] — defaults to far-future so the comparison is
+ *   all-time, matching the cached runningBalance accumulator (see ALL_TIME note).
  * @returns {Promise<{
  *   asOf: Date, balanced: boolean, totalDebits: number, totalCredits: number,
  *   driftedCount: number, totalAbsDrift: number,
  *   accounts: Array<{accountId, code, name, normalBalance, cached, derived, drift}>
  * }>}
  */
-async function computeDrift(businessId, asOfDate = new Date()) {
+async function computeDrift(businessId, asOfDate = ALL_TIME) {
   const [accounts, totals] = await Promise.all([
     accountRepository.findByBusiness(businessId),
     transactionRepository.getDebitCreditTotals(businessId, asOfDate, { statuses: BALANCE_STATUSES }),
@@ -72,7 +80,7 @@ async function computeDrift(businessId, asOfDate = new Date()) {
  * Journal-derived (compound-aware) balance for ONE account — the value its cached
  * runningBalance SHOULD equal. Reused by the balance-repair path and the migration.
  */
-async function accountDerivedBalance(businessId, accountId, asOfDate = new Date()) {
+async function accountDerivedBalance(businessId, accountId, asOfDate = ALL_TIME) {
   const { accounts } = await computeDrift(businessId, asOfDate);
   const row = accounts.find((a) => a.accountId === String(accountId));
   return row ? row.derived : 0;

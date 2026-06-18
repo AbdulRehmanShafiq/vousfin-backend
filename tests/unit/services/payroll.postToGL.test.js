@@ -1,15 +1,14 @@
 'use strict';
 jest.mock('../../../repositories/payrollRun.repository', () => ({ findOwned: jest.fn() }));
-jest.mock('../../../services/transaction.service', () => ({ createTransaction: jest.fn() }));
+jest.mock('../../../services/ledgerPosting.service', () => ({ postCompoundJournal: jest.fn() }));
 jest.mock('../../../repositories/account.repository', () => ({ findByCode: jest.fn() }));
 
 const runRepo = require('../../../repositories/payrollRun.repository');
-const txService = require('../../../services/transaction.service');
+const ledgerPosting = require('../../../services/ledgerPosting.service');
 const accountRepo = require('../../../repositories/account.repository');
 const payroll = require('../../../services/payroll.service');
 
 const BIZ = 'biz1';
-// account code → fake id
 const ACCT = (code) => ({ _id: `acc-${code}`, accountCode: code });
 
 function makeRun() {
@@ -30,39 +29,42 @@ function makeRun() {
 beforeEach(() => {
   jest.clearAllMocks();
   accountRepo.findByCode.mockImplementation((biz, code) => Promise.resolve(ACCT(code)));
-  let n = 0;
-  txService.createTransaction.mockImplementation(() => Promise.resolve({ _id: `je${++n}` }));
+  ledgerPosting.postCompoundJournal.mockResolvedValue({ _id: 'je1' });
 });
 
 describe('postToGL', () => {
-  it('posts balanced Dr/Cr pairs whose debits equal gross + employer cost', async () => {
+  it('posts ONE balanced compound entry, expense legs cost-centre tagged', async () => {
     const run = makeRun();
     runRepo.findOwned.mockResolvedValue(run);
     const posted = await payroll.postToGL(BIZ, 'run1', { id: 'u1' });
 
-    const calls = txService.createTransaction.mock.calls.map((c) => c[0]);
-    // every pair is independently balanced (distinct debit/credit, positive amount)
-    for (const p of calls) {
-      expect(p.amount).toBeGreaterThan(0);
-      expect(p.debitAccountId).not.toBe(p.creditAccountId);
-      expect(p.costCenterId).toBe('cc1');
-      expect(p.idempotencyKey).toMatch(/^pr:run1:/);
-      expect(p.skipTax).toBe(true);
-    }
-    // sum of debits to 6180 = gross; employer legs add eobiEmployer+pfEmployer
-    const drTo6180 = calls.filter((p) => p.debitAccountId === 'acc-6180').reduce((s, p) => s + p.amount, 0);
-    expect(drTo6180).toBe(150000);
-    const totalDebits = calls.reduce((s, p) => s + p.amount, 0);
-    expect(totalDebits).toBe(150000 + 1500 + 5000); // gross + employer EOBI + employer PF
+    expect(ledgerPosting.postCompoundJournal).toHaveBeenCalledTimes(1);
+    const payload = ledgerPosting.postCompoundJournal.mock.calls[0][0];
+    expect(payload.idempotencyKey).toBe('pr:run1:post');
+
+    const lines = payload.lines;
+    const debits = lines.filter(l => l.type === 'debit');
+    const credits = lines.filter(l => l.type === 'credit');
+    const sum = (ls) => ls.reduce((s, l) => s + l.amount, 0);
+    // balanced
+    expect(sum(debits)).toBe(sum(credits));
+    // wages-expense debit equals gross; total debit = gross + employer EOBI + employer PF
+    const wages = debits.filter(l => l.accountId === 'acc-6180').reduce((s, l) => s + l.amount, 0);
+    expect(wages).toBe(150000);
+    expect(sum(debits)).toBe(150000 + 1500 + 5000);
+    // expense legs carry the cost-centre tag; payable credits don't need it
+    expect(debits.every(l => l.costCenterId === 'cc1')).toBe(true);
+    // net pay credited to wages payable
+    expect(credits.find(l => l.accountId === 'acc-2140').amount).toBe(139350);
 
     expect(posted.status).toBe('posted');
-    expect(posted.postedJournalEntryIds).toHaveLength(calls.length);
+    expect(posted.postedJournalEntryIds).toEqual(['je1']);
   });
 
   it('refuses to post a run that is not in processed state', async () => {
     const run = { ...makeRun(), status: 'posted' };
     runRepo.findOwned.mockResolvedValue(run);
     await expect(payroll.postToGL(BIZ, 'run1', { id: 'u1' })).rejects.toThrow(/cannot be posted/i);
-    expect(txService.createTransaction).not.toHaveBeenCalled();
+    expect(ledgerPosting.postCompoundJournal).not.toHaveBeenCalled();
   });
 });

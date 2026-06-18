@@ -9,6 +9,7 @@ const employeeRepo = require('../repositories/employee.repository');
 const runRepo = require('../repositories/payrollRun.repository');
 const accountRepo = require('../repositories/account.repository');
 const txService = require('./transaction.service');
+const ledgerPosting = require('./ledgerPosting.service');
 const { buildBankTransferCsv } = require('../utils/bankTransferFile.util');
 
 const PAY = { WAGES_EXP: '6180', EOBI_EXP: '6192', PF_EXP: '6194',
@@ -140,37 +141,36 @@ async function postToGL(businessId, runId, actor, ipAddress = null) {
   for (const code of Object.values(PAY)) ids[code] = (await accountRepo.findByCode(businessId, code))?._id;
 
   const transactionDate = new Date(`${run.period}-28T00:00:00Z`);
-  const groups = groupByCostCentre(run.lines);
-  const postedIds = [];
-  let seq = 0;
+  const t = run.totals;
+  const lines = [];
 
-  const post = async (debitCode, creditCode, amount, costCenterId, note) => {
-    if (!amount || amount <= 0) return;
-    const je = await txService.createTransaction({
-      businessId, transactionDate, amount,
-      description: `Payroll ${run.period} — ${note}`,
-      transactionType: 'Salary', inputMethod: 'batch', transactionSource: 'system_generated',
-      debitAccountId: ids[debitCode], creditAccountId: ids[creditCode],
-      costCenterId: costCenterId || undefined,
-      idempotencyKey: `pr:${run._id}:${++seq}`,  // engine dedups + stores under metadata
-      skipTax: true,                              // salary tax is handled by payroll, not the GST/WHT engine
-    }, actor?.id, ipAddress);
-    postedIds.push(je._id);
-  };
-
-  for (const g of groups) {
-    const cc = g.costCenterId;
-    await post(PAY.WAGES_EXP, PAY.WAGES_PAYABLE,       g.netPay,          cc, 'net pay');
-    await post(PAY.WAGES_EXP, PAY.SALARY_TAX_PAYABLE,  g.incomeTax,       cc, 'income tax withheld');
-    await post(PAY.WAGES_EXP, PAY.EOBI_PAYABLE,        g.eobiEmployee,    cc, 'EOBI (employee)');
-    await post(PAY.WAGES_EXP, PAY.PF_PAYABLE,          g.pfEmployee,      cc, 'provident fund (employee)');
-    await post(PAY.WAGES_EXP, PAY.OTHER_PAYABLE,       g.otherDeductions, cc, 'other deductions');
-    await post(PAY.EOBI_EXP,  PAY.EOBI_PAYABLE,        g.eobiEmployer,    cc, 'EOBI (employer)');
-    await post(PAY.PF_EXP,    PAY.PF_PAYABLE,          g.pfEmployer,      cc, 'provident fund (employer)');
+  // Expense legs — tagged per cost-centre so departmental P&L is preserved.
+  for (const g of groupByCostCentre(run.lines)) {
+    const gross = r(g.netPay + g.incomeTax + g.eobiEmployee + g.pfEmployee + g.otherDeductions);
+    if (gross > 0) lines.push({ accountId: ids[PAY.WAGES_EXP], type: 'debit', amount: gross, costCenterId: g.costCenterId, description: 'Gross salaries' });
+    if (g.eobiEmployer > 0) lines.push({ accountId: ids[PAY.EOBI_EXP], type: 'debit', amount: r(g.eobiEmployer), costCenterId: g.costCenterId, description: 'Employer EOBI' });
+    if (g.pfEmployer > 0) lines.push({ accountId: ids[PAY.PF_EXP], type: 'debit', amount: r(g.pfEmployer), costCenterId: g.costCenterId, description: 'Employer provident fund' });
   }
 
+  // Payable legs — aggregated business-wide.
+  const credit = (code, amount, note) => { if (amount > 0) lines.push({ accountId: ids[code], type: 'credit', amount: r(amount), description: note }); };
+  credit(PAY.WAGES_PAYABLE,      t.netPay,                        'Net pay');
+  credit(PAY.SALARY_TAX_PAYABLE, t.incomeTax,                     'Income tax withheld');
+  credit(PAY.EOBI_PAYABLE,       t.eobiEmployee + t.eobiEmployer, 'EOBI payable');
+  credit(PAY.PF_PAYABLE,         t.pfEmployee + t.pfEmployer,     'Provident fund payable');
+  credit(PAY.OTHER_PAYABLE,      t.otherDeductions,               'Other deductions');
+
+  // ONE balanced compound entry through the canonical system poster — no tax/FX
+  // enrichment, single idempotency key, expense legs cost-centre tagged.
+  const je = await ledgerPosting.postCompoundJournal({
+    businessId, transactionDate, description: `Payroll ${run.period}`,
+    transactionType: 'Salary', inputMethod: 'batch', transactionSource: 'system_generated',
+    createdBy: actor?.id, entryType: 'normal', lines,
+    idempotencyKey: `pr:${run._id}:post`,
+  });
+
   run.status = PAYROLL_RUN_STATUS.POSTED;
-  run.postedJournalEntryIds = postedIds;
+  run.postedJournalEntryIds = [je._id];
   run.postedBy = actor?.id || null;
   run.postedAt = new Date();
   return run.save();
@@ -183,13 +183,17 @@ async function markPaid(businessId, runId, bankAccountId, actor, ipAddress = nul
     throw new ApiError(409, `A ${run.status} payroll run cannot be paid.`);
   }
   const wagesPayable = (await accountRepo.findByCode(businessId, PAY.WAGES_PAYABLE))?._id;
-  await txService.createTransaction({
-    businessId, transactionDate: new Date(), amount: run.totals.netPay,
+  await ledgerPosting.postCompoundJournal({
+    businessId, transactionDate: new Date(),
     description: `Payroll ${run.period} — net pay disbursement`,
     transactionType: 'Salary', inputMethod: 'batch', transactionSource: 'system_generated',
-    debitAccountId: wagesPayable, creditAccountId: bankAccountId,
-    idempotencyKey: `pr:${run._id}:pay`, skipTax: true,
-  }, actor?.id, ipAddress);
+    createdBy: actor?.id, entryType: 'normal',
+    lines: [
+      { accountId: wagesPayable, type: 'debit', amount: run.totals.netPay, description: 'Clear wages payable' },
+      { accountId: bankAccountId, type: 'credit', amount: run.totals.netPay, description: 'Net pay paid' },
+    ],
+    idempotencyKey: `pr:${run._id}:pay`,
+  });
   run.status = PAYROLL_RUN_STATUS.PAID; run.bankAccountId = bankAccountId; run.paidAt = new Date();
   return run.save();
 }

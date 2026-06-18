@@ -1,10 +1,12 @@
 'use strict';
 jest.mock('../../../repositories/payrollRun.repository', () => ({ findOwned: jest.fn() }));
-jest.mock('../../../services/transaction.service', () => ({ createTransaction: jest.fn(), reverseTransaction: jest.fn() }));
+jest.mock('../../../services/transaction.service', () => ({ reverseTransaction: jest.fn() }));
+jest.mock('../../../services/ledgerPosting.service', () => ({ postCompoundJournal: jest.fn() }));
 jest.mock('../../../repositories/account.repository', () => ({ findByCode: jest.fn() }));
 
 const runRepo = require('../../../repositories/payrollRun.repository');
 const txService = require('../../../services/transaction.service');
+const ledgerPosting = require('../../../services/ledgerPosting.service');
 const accountRepo = require('../../../repositories/account.repository');
 const payroll = require('../../../services/payroll.service');
 
@@ -19,7 +21,7 @@ function run(over = {}) {
 beforeEach(() => {
   jest.clearAllMocks();
   accountRepo.findByCode.mockResolvedValue({ _id: 'acc-2140' });
-  txService.createTransaction.mockResolvedValue({ _id: 'jePay' });
+  ledgerPosting.postCompoundJournal.mockResolvedValue({ _id: 'jePay' });
   txService.reverseTransaction.mockResolvedValue({ _id: 'jeRev' });
 });
 
@@ -27,8 +29,11 @@ describe('markPaid', () => {
   it('posts Dr Wages Payable / Cr bank for the net total and moves to paid', async () => {
     runRepo.findOwned.mockResolvedValue(run());
     const r = await payroll.markPaid(BIZ, 'run1', 'bankAcc1', { id: 'u1' });
-    const p = txService.createTransaction.mock.calls[0][0];
-    expect(p).toMatchObject({ amount: 139350, debitAccountId: 'acc-2140', creditAccountId: 'bankAcc1' });
+    const p = ledgerPosting.postCompoundJournal.mock.calls[0][0];
+    const debit = p.lines.find(l => l.type === 'debit');
+    const credit = p.lines.find(l => l.type === 'credit');
+    expect(debit).toMatchObject({ accountId: 'acc-2140', amount: 139350 });
+    expect(credit).toMatchObject({ accountId: 'bankAcc1', amount: 139350 });
     expect(r.status).toBe('paid');
   });
   it('refuses to pay a run that is not posted', async () => {
