@@ -43,6 +43,7 @@
 const JournalEntry = require('../models/JournalEntry.model');
 const accountRepository = require('../repositories/account.repository');
 const { withTransaction } = require('../utils/withTransaction');
+const { ApiError } = require('../utils/ApiError');
 const logger = require('../config/logger');
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -97,25 +98,97 @@ async function applyRunningBalance(accountId, amount, side, { session = null, st
  * @param {import('mongoose').ClientSession|null} [opts.session]  join an existing txn
  * @returns {Promise<Object>}  the created JournalEntry document
  */
-async function postBalancedJournal(entry, { updateBalances = true, session = null } = {}) {
-  // The unit of work: insert the JE, then move both running balances. Every write
-  // forwards the session `s` so they share one transaction.
+/**
+ * CANONICAL COMPOUND POSTER (Phase 1).
+ * Post ONE balanced journal with 1..N lines, atomically, updating the running
+ * balance for EVERY line. This is the system lane: it does NO enrichment (no
+ * tax, FX, type inference, double-submit guard) — the caller supplies exact,
+ * already-validated lines. The top-level (debitAccountId, creditAccountId,
+ * amount) triple is written as a DERIVED projection of the lines (first debit,
+ * first credit, Σ debits) for back-compat and indexes.
+ *
+ * @param {Object} payload
+ *   { businessId, transactionDate, description, transactionType, inputMethod,
+ *     createdBy, transactionSource?, entryType?, costCenterId?, periodId?, …,
+ *     lines: [ { accountId, type:'debit'|'credit', amount, costCenterId?, description? } ],
+ *     idempotencyKey?, metadata? }
+ * @param {Object} [opts] { updateBalances=true, session=null }
+ * @returns {Promise<Object>} the created (or pre-existing idempotent) JournalEntry
+ */
+async function postCompoundJournal(payload, { updateBalances = true, session = null } = {}) {
+  const { lines, idempotencyKey, metadata, ...rest } = payload;
+
+  if (!Array.isArray(lines) || lines.length < 2) {
+    throw new ApiError(400, 'A journal needs at least two lines.');
+  }
+  let sumDebit = 0, sumCredit = 0;
+  for (const l of lines) {
+    if (!(Number(l.amount) > 0)) throw new ApiError(400, 'Every journal line needs a positive amount.');
+    if (l.type === 'debit') sumDebit = r2(sumDebit + l.amount);
+    else if (l.type === 'credit') sumCredit = r2(sumCredit + l.amount);
+    else throw new ApiError(400, `Invalid journal line type: ${l.type}`);
+  }
+  if (r2(sumDebit) !== r2(sumCredit)) {
+    throw new ApiError(400, `Journal is not balanced (debits ${r2(sumDebit)} ≠ credits ${r2(sumCredit)}).`);
+  }
+
+  // Unified idempotency — keyed on metadata.idempotencyKey (one batch = one entry).
+  if (idempotencyKey) {
+    const existing = await JournalEntry.findOne(
+      { businessId: rest.businessId, 'metadata.idempotencyKey': idempotencyKey }, { _id: 1 }
+    ).lean();
+    if (existing) {
+      logger.info(`[postCompoundJournal] idempotent skip — key ${idempotencyKey} already posted as ${existing._id}`);
+      return existing;
+    }
+  }
+
+  const firstDebit = lines.find((l) => l.type === 'debit');
+  const firstCredit = lines.find((l) => l.type === 'credit');
+  const entry = {
+    ...rest,
+    amount: r2(sumDebit),
+    debitAccountId: firstDebit.accountId,
+    creditAccountId: firstCredit.accountId,
+    journalLines: lines.map((l) => ({
+      accountId: l.accountId, type: l.type, amount: r2(l.amount),
+      description: l.description || '', costCenterId: l.costCenterId || null,
+    })),
+    metadata: { ...(metadata || {}), ...(idempotencyKey ? { idempotencyKey } : {}) },
+  };
+
   const run = async (s) => {
-    // Mongoose's array form returns an array; stay tolerant of a single-doc result.
     const created = await JournalEntry.create([entry], { session: s });
     const je = Array.isArray(created) ? created[0] : created;
     if (updateBalances) {
-      // Sequential (not Promise.all) so a self-referential pair can't race.
-      // strict = inside a real txn → a balance failure rolls the whole post back.
-      await applyRunningBalance(je.debitAccountId, je.amount, 'debit',  { session: s, strict: !!s });
-      await applyRunningBalance(je.creditAccountId, je.amount, 'credit', { session: s, strict: !!s });
+      // Sequential so two lines on the same account can't race; strict inside a txn.
+      for (const l of entry.journalLines) {
+        await applyRunningBalance(l.accountId, l.amount, l.type, { session: s, strict: !!s });
+      }
     }
     return je;
   };
 
-  if (session) return run(session);       // caller already owns a transaction
-  if (!updateBalances) return run(null);  // a single insert is atomic on its own
-  return withTransaction(run);            // open our own all-or-nothing unit
+  if (session) return run(session);
+  if (!updateBalances) return run(null);
+  return withTransaction(run);
 }
 
-module.exports = { postBalancedJournal, applyRunningBalance };
+/**
+ * Two-account balanced poster — now a thin shim over postCompoundJournal so the
+ * whole codebase shares ONE posting engine and every entry carries journalLines.
+ * Honours a caller-supplied compound `journalLines` if present (previously such
+ * extra legs moved the report but NOT the running balance — this fixes that).
+ */
+async function postBalancedJournal(entry, opts = {}) {
+  const { debitAccountId, creditAccountId, amount, journalLines, ...rest } = entry;
+  const lines = (journalLines && journalLines.length > 0)
+    ? journalLines.map((l) => ({ accountId: l.accountId, type: l.type, amount: l.amount, description: l.description, costCenterId: l.costCenterId }))
+    : [
+        { accountId: debitAccountId, type: 'debit', amount },
+        { accountId: creditAccountId, type: 'credit', amount },
+      ];
+  return postCompoundJournal({ ...rest, lines }, opts);
+}
+
+module.exports = { postBalancedJournal, postCompoundJournal, applyRunningBalance };
