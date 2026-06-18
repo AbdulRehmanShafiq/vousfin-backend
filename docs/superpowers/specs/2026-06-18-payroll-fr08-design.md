@@ -45,7 +45,9 @@ NetPay       = Gross − IncomeTax − EOBI_employee − PF_employee − Σ othe
 
 ## 5. The books — `payroll.service.postToGL` (runs on **Post**)
 
-One balanced compound journal entry per run, each expense leg **cost-centre tagged** from the employee's `department` (`costCenterId`), reusing existing default accounts:
+> **Posting model note:** this codebase's `JournalEntry` is a **single debit + single credit pair** (`amount`, `debitAccountId`, `creditAccountId`) — there is no multi-line compound entry. So the compound entry below is **decomposed into a set of balanced Dr/Cr pairs**, posted via `transaction.service.createTransaction` (which already handles cost-centre tagging, idempotency, and ledger immutability). To keep it bounded for large runs (NFR-PERF-04) the lines are **aggregated by cost-centre** — not one entry per employee. So a run produces ~5 expense→payable pairs **per distinct cost-centre** plus the 2 employer-contribution pairs per cost-centre, not thousands. Per-employee detail lives in the `PayrollRun` snapshot (the register); the sum of the posted pairs equals the register totals.
+
+Conceptually (the compound view), each expense leg **cost-centre tagged** from the employee's `department` (`costCenterId`), reusing existing default accounts:
 
 ```
 Dr  6180  Wages & Salaries            (Σ gross)
@@ -61,7 +63,21 @@ Dr  6194  Provident Fund Contribution (Σ employer PF)
 - **Invariant:** total debits = total credits = `Σ gross + Σ employer contributions`. A test asserts the posted JE balances **and** that its totals equal the payroll register totals (SRS FR-08.3: "GL entries exactly match payroll register totals").
 - **On Pay** (`markPaid`): `Dr 2140 Wages Payable / Cr <bank account>` for the net total. The statutory payables (2141/2142/2143/2148) remain as liabilities until separately remitted — the live tax position already surfaces them.
 - **New default account** `2141 Salary Tax Withheld Payable` (Liability / Current Liabilities / Credit) added to `DEFAULT_ACCOUNTS`; back-filled to existing businesses by the existing `accountRepository.syncMissingDefaults`.
-- GL posting goes through `transaction.service` (system-generated source), so it is immutable like every other journal entry — "cannot be manually edited; reversal required" is satisfied by the existing ledger immutability.
+- Each posted pair carries `transactionType: 'Salary'`, `inputMethod: 'batch'`, `transactionSource: 'system_generated'`, `metadata.idempotencyKey = 'pr:<runId>:<seq>'` (so a retried post never double-posts), and the group's `costCenterId`. The pairing decomposition (so the five credits each face a `6180` debit and the debits sum to gross):
+
+```
+per cost-centre group g (subtotals from the run snapshot):
+  Dr 6180 / Cr 2140  = g.netPay
+  Dr 6180 / Cr 2141  = g.incomeTax
+  Dr 6180 / Cr 2142  = g.eobiEmployee
+  Dr 6180 / Cr 2143  = g.pfEmployee
+  Dr 6180 / Cr 2148  = g.otherDeductions
+  Dr 6192 / Cr 2142  = g.eobiEmployer
+  Dr 6194 / Cr 2143  = g.pfEmployer
+(zero-amount pairs are skipped)
+```
+Total `6180` debits across all pairs = Σ gross; each pair is independently balanced.
+- GL posting goes through `transaction.service` (system-generated source), so it is immutable like every other journal entry — "cannot be manually edited; reversal required" is satisfied by the existing ledger immutability. `reverseRun` loops `postedJournalEntryIds` and calls `transaction.service.reverseTransaction` for each.
 
 ## 6. State machine & locking (SRS: "locked after processing; amendments require reversal")
 
