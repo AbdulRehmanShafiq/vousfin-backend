@@ -18,6 +18,7 @@ const FiscalYear     = require('../models/FiscalYear.model');
 const AccountingPeriod = require('../models/AccountingPeriod.model');
 const JournalEntry   = require('../models/JournalEntry.model');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
+const { postBalancedJournal } = require('./ledgerPosting.service');
 const {
   FISCAL_YEAR_STATUS, PERIOD_STATUS, PERIOD_TYPE,
   PERIOD_ACTION, ENTRY_TYPE, JOURNAL_STATUS, TRANSACTION_TYPES,
@@ -440,7 +441,7 @@ async function _runClosingEntries(businessId, bizId, fy, userId) {
     description = `Year-end closing: Net loss of ${Math.abs(netIncome).toLocaleString()} charged to Retained Earnings (${fy.name})`;
   }
 
-  const closingEntry = await JournalEntry.create({
+  const closingEntry = await postBalancedJournal({
     businessId:      bizId,
     transactionDate: new Date(fy.endDate),
     description,
@@ -486,7 +487,7 @@ async function postAdjustingEntry(businessId, {
 
   const bizId = new mongoose.Types.ObjectId(String(businessId));
 
-  const entry = await JournalEntry.create({
+  const entry = await postBalancedJournal({
     businessId:      bizId,
     transactionDate: new Date(period.endDate), // adjustments dated at period end
     description:     description || `${adjustingType} adjusting entry`,
@@ -692,7 +693,7 @@ async function createOpeningBalances(businessId, fiscalYearId, userId) {
       creditAccountId = acc._id;
     }
 
-    const entry = await JournalEntry.create({
+    const entry = await postBalancedJournal({
       businessId:      bizId,
       transactionDate: new Date(fy.startDate),
       description:     `Opening balance — ${acc.accountName} (${fy.name})`,

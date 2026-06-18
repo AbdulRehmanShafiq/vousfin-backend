@@ -17,6 +17,7 @@ const FiscalYear     = require('../models/FiscalYear.model');
 const AccountingPeriod = require('../models/AccountingPeriod.model');
 const JournalEntry   = require('../models/JournalEntry.model');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
+const { postBalancedJournal } = require('./ledgerPosting.service');
 const { ApiError }   = require('../utils/ApiError');
 const { FISCAL_YEAR_STATUS, PERIOD_STATUS, PERIOD_TYPE,
         TRANSACTION_TYPES, JOURNAL_STATUS, INPUT_METHODS,
@@ -387,7 +388,7 @@ async function runClosingEntries(businessId, fiscalYearId, userId) {
   // Create closing entries: DR each Revenue account → CR Target Equity (retained earnings / income summary)
   for (const rev of revenueAccs) {
     if (rev.total <= 0) continue;
-    const entry = await JournalEntry.create({
+    const entry = await postBalancedJournal({
       businessId:       bizId,
       transactionDate:  closingDate,
       description:      `Year-End Close: ${rev.accountName} → ${targetEquityAcc.accountName}`,
@@ -410,7 +411,7 @@ async function runClosingEntries(businessId, fiscalYearId, userId) {
   // Create closing entries: DR Target Equity → CR each Expense account (zeroes it out)
   for (const exp of expenseAccs) {
     if (exp.total <= 0) continue;
-    const entry = await JournalEntry.create({
+    const entry = await postBalancedJournal({
       businessId:       bizId,
       transactionDate:  closingDate,
       description:      `Year-End Close: ${targetEquityAcc.accountName} → ${exp.accountName}`,
@@ -435,7 +436,7 @@ async function runClosingEntries(businessId, fiscalYearId, userId) {
     const absNet = Math.abs(netIncome);
     if (absNet > 0.005) {
       const isProfit = netIncome >= 0;
-      const entry = await JournalEntry.create({
+      const entry = await postBalancedJournal({
         businessId:       bizId,
         transactionDate:  closingDate,
         description:      `Year-End Transfer: Net ${isProfit ? 'Income' : 'Loss'} to Retained Earnings`,
@@ -573,7 +574,7 @@ async function createOpeningBalances(businessId, newFiscalYearId, userId) {
     // Skip if debit === credit (would fail schema validation)
     if (debitAccId.toString() === creditAccId.toString()) continue;
 
-    const entry = await JournalEntry.create({
+    const entry = await postBalancedJournal({
       businessId:       bizId,
       transactionDate:  openingDate,
       description:      `Opening Balance: ${acc.accountName}`,
@@ -650,7 +651,7 @@ async function createAdjustingEntry(businessId, {
     throw new ApiError(400, 'Debit and credit accounts must be different');
   }
 
-  const entry = await JournalEntry.create({
+  const entry = await postBalancedJournal({
     businessId:       bizId,
     transactionDate:  new Date(transactionDate),
     description,
