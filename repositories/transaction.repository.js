@@ -507,9 +507,15 @@ class TransactionRepository extends BaseRepository {
    *
    * @param {string} businessId
    * @param {Date|string} asOfDate — include all transactions up to and including this date
+   * @param {Object} [opts]
+   * @param {string[]} [opts.statuses] — override the status filter. Defaults to
+   *   REPORT_STATUSES (what the financial statements show). The ledger-integrity
+   *   verifier passes the balance-affecting set (incl. 'reversed') so a reversed
+   *   original + its reversal net to zero — matching how the cached running
+   *   balance applied BOTH postings.
    * @returns {{ debitTotals: Array<{_id, total}>, creditTotals: Array<{_id, total}> }}
    */
-  async getDebitCreditTotals(businessId, asOfDate) {
+  async getDebitCreditTotals(businessId, asOfDate, { statuses = REPORT_STATUSES } = {}) {
     const validBusinessId = sanitizeAndValidateId(businessId);
     const endDate = new Date(asOfDate);
 
@@ -524,7 +530,7 @@ class TransactionRepository extends BaseRepository {
         $match: {
           businessId: new mongoose.Types.ObjectId(validBusinessId),
           transactionDate: { $lte: endDate },
-          status: { $in: REPORT_STATUSES },
+          status: { $in: statuses },
           isArchived: { $ne: true },
         },
       },
