@@ -174,4 +174,38 @@ async function postToGL(businessId, runId, actor, ipAddress = null) {
   return run.save();
 }
 
-module.exports = { computeNetPay, processRun, getRun, listRuns, taxYearFor, postToGL };
+async function markPaid(businessId, runId, bankAccountId, actor, ipAddress = null) {
+  const run = await runRepo.findOwned(businessId, runId);
+  if (!run) throw new ApiError(404, 'Payroll run not found.');
+  if (!PayrollRun.canTransition(run.status, PAYROLL_RUN_STATUS.PAID)) {
+    throw new ApiError(409, `A ${run.status} payroll run cannot be paid.`);
+  }
+  const wagesPayable = (await accountRepo.findByCode(businessId, PAY.WAGES_PAYABLE))?._id;
+  await txService.createTransaction({
+    businessId, transactionDate: new Date(), amount: run.totals.netPay,
+    description: `Payroll ${run.period} — net pay disbursement`,
+    transactionType: 'Salary', inputMethod: 'batch', transactionSource: 'system_generated',
+    debitAccountId: wagesPayable, creditAccountId: bankAccountId,
+    metadata: { idempotencyKey: `pr:${run._id}:pay` },
+  }, actor?.id, ipAddress);
+  run.status = PAYROLL_RUN_STATUS.PAID; run.bankAccountId = bankAccountId; run.paidAt = new Date();
+  return run.save();
+}
+
+async function reverseRun(businessId, runId, actor, ipAddress = null) {
+  const run = await runRepo.findOwned(businessId, runId);
+  if (!run) throw new ApiError(404, 'Payroll run not found.');
+  if (!PayrollRun.canTransition(run.status, PAYROLL_RUN_STATUS.REVERSED)) {
+    throw new ApiError(409, `A ${run.status} payroll run cannot be reversed.`);
+  }
+  const reversalIds = [];
+  for (const jeId of run.postedJournalEntryIds) {
+    const rev = await txService.reverseTransaction(jeId, businessId,
+      { reversalDate: new Date(), reason: `Reversal of payroll ${run.period}` }, actor?.id, ipAddress);
+    reversalIds.push(rev._id);
+  }
+  run.status = PAYROLL_RUN_STATUS.REVERSED; run.reversalJournalEntryIds = reversalIds;
+  return run.save();
+}
+
+module.exports = { computeNetPay, processRun, getRun, listRuns, taxYearFor, postToGL, markPaid, reverseRun };
