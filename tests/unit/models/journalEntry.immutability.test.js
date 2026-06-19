@@ -16,7 +16,7 @@ jest.mock('../../../models/AccountingPeriod.model', () => {
 
 const JournalEntry = require('../../../models/JournalEntry.model');
 const AccountingPeriod = require('../../../models/AccountingPeriod.model');
-const { PERIOD_STATUS, PERIOD_TYPE, TRANSACTION_TYPES, INPUT_METHODS } = require('../../../config/constants');
+const { PERIOD_STATUS, PERIOD_TYPE, TRANSACTION_TYPES, INPUT_METHODS, ENTRY_TYPE, TRANSACTION_SOURCES } = require('../../../config/constants');
 const { ApiError } = require('../../../utils/ApiError');
 
 describe('JournalEntry Period Immutability', () => {
@@ -86,8 +86,36 @@ describe('JournalEntry Period Immutability', () => {
     it('blocks saving an entry in a LOCKED period', async () => {
       AccountingPeriod.findCoveringPeriod.mockResolvedValue({ status: PERIOD_STATUS.LOCKED });
       const entry = new JournalEntry(mockJournalEntryData(new Date('2026-06-15')));
-      
+
       await expect(entry.save({ validateBeforeSave: false })).rejects.toThrow(ApiError);
+      await expect(entry.save({ validateBeforeSave: false })).rejects.toThrow(/locked accounting period/i);
+    });
+
+    it('ALLOWS a system-generated closing entry into a CLOSED period (year-end close)', async () => {
+      AccountingPeriod.findCoveringPeriod.mockResolvedValue({ status: PERIOD_STATUS.CLOSED });
+      const entry = new JournalEntry({
+        ...mockJournalEntryData(new Date('2026-12-31')),
+        entryType: ENTRY_TYPE.CLOSING,
+        transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
+      });
+
+      let error;
+      try {
+        await entry.save({ validateBeforeSave: false }); // fails on no DB, but our hook must NOT block
+      } catch (e) {
+        error = e;
+      }
+      expect(error).not.toBeInstanceOf(ApiError);
+    });
+
+    it('still BLOCKS a system-generated closing entry in a LOCKED period', async () => {
+      AccountingPeriod.findCoveringPeriod.mockResolvedValue({ status: PERIOD_STATUS.LOCKED });
+      const entry = new JournalEntry({
+        ...mockJournalEntryData(new Date('2026-12-31')),
+        entryType: ENTRY_TYPE.CLOSING,
+        transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
+      });
+
       await expect(entry.save({ validateBeforeSave: false })).rejects.toThrow(/locked accounting period/i);
     });
   });

@@ -666,11 +666,21 @@ async function createOpeningBalances(businessId, fiscalYearId, userId) {
     ],
   }).lean();
 
+  if (!retainedEarningsAcct) {
+    throw new ApiError(400, 'No Retained Earnings account found. Add a "Retained Earnings" equity account before generating opening balances.');
+  }
+  const retainedEarningsId = retainedEarningsAcct._id.toString();
+
   const createdEntryIds = [];
 
-  // Create one opening balance journal entry per BS account with a non-zero balance
+  // Create one opening balance journal entry per BS account with a non-zero balance.
   for (const acc of bsAccounts) {
     const accId = acc._id.toString();
+    // Retained Earnings is the contra for every other account, so its own opening
+    // balance is reconstructed automatically (in a balanced trial balance those
+    // offsets sum to exactly RE's carry-forward). Posting an entry for RE here
+    // would be self-referential (debit === credit) — skip it.
+    if (accId === retainedEarningsId) continue;
     const debits  = debitMap.get(accId)  || 0;
     const credits = creditMap.get(accId) || 0;
 
@@ -687,7 +697,7 @@ async function createOpeningBalances(businessId, fiscalYearId, userId) {
     // For a debit-normal account with a debit balance: DR account / CR Retained Earnings
     // For a credit-normal account with a credit balance: DR Retained Earnings / CR account
     let debitAccountId, creditAccountId;
-    const contraAcct = retainedEarningsAcct || acc; // fallback: self (shouldn't happen)
+    const contraAcct = retainedEarningsAcct;
 
     if (acc.normalBalance === 'Debit') {
       debitAccountId  = acc._id;

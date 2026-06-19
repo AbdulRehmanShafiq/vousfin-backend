@@ -668,6 +668,18 @@ journalEntrySchema.statics.getAccountTurnover = async function (businessId, acco
   return result.length ? result[0].total : 0;
 };
 
+// System-generated year-end CLOSING and OPENING-BALANCE entries are an intrinsic
+// part of the close process: they are dated at period boundaries (e.g. the fiscal
+// year's last day) that the close itself just set to CLOSED. They must be allowed
+// to post into a CLOSED period — but NEVER into a LOCKED one (locking is the hard,
+// final immutability). Gated on BOTH the entry type and the system source so a
+// manual entry can't set entryType to slip past the closed-period guard.
+function _isSystemCloseEntry(doc) {
+  return !!doc
+    && (doc.entryType === ENTRY_TYPE.CLOSING || doc.entryType === ENTRY_TYPE.OPENING_BALANCE)
+    && doc.transactionSource === TRANSACTION_SOURCES.SYSTEM_GENERATED;
+}
+
 // ===============================
 // Pre-save Middleware
 // ===============================
@@ -684,10 +696,16 @@ journalEntrySchema.pre('save', async function () {
   }
 
   // ── Period Immutability Check ──
+  // LOCKED always blocks. CLOSED blocks everything EXCEPT system-generated
+  // closing / opening-balance entries (year-end close posts these at the closed
+  // period's boundary by design).
   const AccountingPeriod = mongoose.model('AccountingPeriod');
   const period = await AccountingPeriod.findCoveringPeriod(this.businessId, this.transactionDate);
-  if (period && (period.status === PERIOD_STATUS.CLOSED || period.status === PERIOD_STATUS.LOCKED)) {
-    throw new ApiError(403, `Cannot modify journal entries in a ${period.status.toLowerCase()} accounting period.`);
+  if (period && period.status === PERIOD_STATUS.LOCKED) {
+    throw new ApiError(403, 'Cannot modify journal entries in a locked accounting period.');
+  }
+  if (period && period.status === PERIOD_STATUS.CLOSED && !_isSystemCloseEntry(this)) {
+    throw new ApiError(403, 'Cannot modify journal entries in a closed accounting period.');
   }
 
   // ── Invariant: keep paymentStatus and JournalStatus consistent with remainingBalance ──
@@ -731,8 +749,13 @@ async function checkPeriodLock() {
   const AccountingPeriod = mongoose.model('AccountingPeriod');
 
   const origPeriod = await AccountingPeriod.findCoveringPeriod(docToUpdate.businessId, docToUpdate.transactionDate);
-  if (origPeriod && (origPeriod.status === PERIOD_STATUS.CLOSED || origPeriod.status === PERIOD_STATUS.LOCKED)) {
-    throw new ApiError(403, `Cannot modify journal entries in a ${origPeriod.status.toLowerCase()} accounting period.`);
+  if (origPeriod && origPeriod.status === PERIOD_STATUS.LOCKED) {
+    throw new ApiError(403, 'Cannot modify journal entries in a locked accounting period.');
+  }
+  // CLOSED blocks normal entries; system closing/opening entries may be updated or
+  // removed (e.g. when a fiscal year is reopened and its closing entries reversed).
+  if (origPeriod && origPeriod.status === PERIOD_STATUS.CLOSED && !_isSystemCloseEntry(docToUpdate)) {
+    throw new ApiError(403, 'Cannot modify journal entries in a closed accounting period.');
   }
 
   const update = this.getUpdate ? this.getUpdate() : null;
