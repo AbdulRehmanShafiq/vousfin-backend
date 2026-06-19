@@ -22,7 +22,7 @@ const { postBalancedJournal } = require('./ledgerPosting.service');
 const {
   FISCAL_YEAR_STATUS, PERIOD_STATUS, PERIOD_TYPE,
   PERIOD_ACTION, ENTRY_TYPE, JOURNAL_STATUS, TRANSACTION_TYPES,
-  TRANSACTION_SOURCES,
+  TRANSACTION_SOURCES, INPUT_METHODS,
 } = require('../config/constants');
 const { ApiError } = require('../utils/ApiError');
 const reportCache   = require('../utils/reportCache');
@@ -499,6 +499,8 @@ async function postAdjustingEntry(businessId, {
     entryType:       ENTRY_TYPE.ADJUSTING,
     adjustingType,
     memo:            memo || '',
+    inputMethod:     INPUT_METHODS.FORM,
+    createdBy:       new mongoose.Types.ObjectId(String(userId)),
     transactionSource: TRANSACTION_SOURCES.MANUAL,
     lastModifiedBy:  new mongoose.Types.ObjectId(String(userId)),
     tags:            ['adjusting-entry', adjustingType],
