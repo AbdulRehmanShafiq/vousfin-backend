@@ -494,6 +494,15 @@ module.exports = {
     YEARLY:    'yearly',
   },
 
+  // Audit-trail action verbs for fiscal-year / accounting-period lifecycle
+  // (stored on the free-string `auditTrail.action` of both models).
+  PERIOD_ACTION: {
+    OPENED:   'opened',
+    CLOSED:   'closed',
+    LOCKED:   'locked',
+    REOPENED: 'reopened',
+  },
+
   ENTRY_TYPE: {
     NORMAL:          'normal',
     CLOSING:         'closing',
