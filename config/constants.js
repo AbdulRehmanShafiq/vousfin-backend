@@ -438,6 +438,18 @@ module.exports = {
   },
   BUDGET_SCENARIOS: ['base', 'optimistic', 'pessimistic'],
 
+  // Job costing (SRS FR-07.2)
+  JOB_STATUS: {
+    OPEN: 'open', IN_PROGRESS: 'in_progress', COMPLETED: 'completed', CANCELLED: 'cancelled',
+  },
+  JOB_STATUS_TRANSITIONS: {
+    open:        ['in_progress', 'cancelled'],
+    in_progress: ['completed', 'cancelled'],
+    completed:   [],
+    cancelled:   [],
+  },
+  JOB_COST_CATEGORIES: ['material', 'labour', 'overhead'],
+
   // Payment tracking status
   PAYMENT_STATUS: {
     UNPAID: 'unpaid',
