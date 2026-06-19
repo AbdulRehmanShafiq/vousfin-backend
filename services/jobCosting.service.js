@@ -1,7 +1,7 @@
 // services/jobCosting.service.js — FR-07.2
 'use strict';
 const { ApiError } = require('../utils/ApiError');
-const { JOB_STATUS } = require('../config/constants');
+const { JOB_STATUS, TRANSACTION_TYPES } = require('../config/constants');
 const repo = require('../repositories/job.repository');
 const accountRepo = require('../repositories/account.repository');
 const ledger = require('../services/ledgerPosting.service');
@@ -9,6 +9,17 @@ const ledger = require('../services/ledgerPosting.service');
 const WIP_CODE = '1169';            // Work in Progress (Asset)
 const FINISHED_GOODS_CODE = '1150'; // Inventory, used as Finished Goods
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+// Fetch a default account by code, back-filling it (additive, idempotent) if a
+// business predates it — so job costing works on every business out of the box.
+async function _ensureAccount(businessId, code) {
+  let acc = await accountRepo.findByCode(businessId, code);
+  if (!acc) {
+    if (typeof accountRepo.syncMissingDefaults === 'function') await accountRepo.syncMissingDefaults(businessId);
+    acc = await accountRepo.findByCode(businessId, code);
+  }
+  return acc;
+}
 
 function computeActuals(job) {
   const a = { material: 0, labour: 0, overhead: 0 };
@@ -54,7 +65,7 @@ async function addCost(businessId, jobId, { category, amount, sourceAccountId, d
   if (job.status !== JOB_STATUS.OPEN && job.status !== JOB_STATUS.IN_PROGRESS) {
     throw new ApiError(409, 'Costs can only be added while a job is open or in progress.');
   }
-  const wip = await accountRepo.findByCode(businessId, WIP_CODE);
+  const wip = await _ensureAccount(businessId, WIP_CODE);
   if (!wip) throw new ApiError(400, 'Work in Progress account (1169) is missing.');
   const source = await accountRepo.findOneByBusinessAndId(businessId, sourceAccountId);
   if (!source) throw new ApiError(400, 'Source account not found for this business.');
@@ -62,6 +73,7 @@ async function addCost(businessId, jobId, { category, amount, sourceAccountId, d
   const je = await ledger.postBalancedJournal({
     businessId, transactionDate: new Date(),
     description: description || `Job ${job.code}: ${category} cost`,
+    transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
     amount: r2(amount), debitAccountId: wip._id, creditAccountId: source._id,
     inputMethod: 'form', createdBy: user.id, entryType: 'normal',
     transactionSource: 'manual', tags: ['job-cost', `job-${job.code}`, category],
@@ -81,12 +93,13 @@ async function completeJob(businessId, jobId, user) {
   if (job.status !== JOB_STATUS.IN_PROGRESS) throw new ApiError(409, 'Only a job in progress can be completed.');
   const actuals = computeActuals(job);
   if (actuals.total <= 0) throw new ApiError(409, 'This job has no cost to transfer.');
-  const fg = await accountRepo.findByCode(businessId, FINISHED_GOODS_CODE);
-  const wip = await accountRepo.findByCode(businessId, WIP_CODE);
+  const fg = await _ensureAccount(businessId, FINISHED_GOODS_CODE);
+  const wip = await _ensureAccount(businessId, WIP_CODE);
   if (!fg || !wip) throw new ApiError(400, 'Inventory (1150) or Work in Progress (1169) account is missing.');
   const je = await ledger.postBalancedJournal({
     businessId, transactionDate: new Date(),
     description: `Job ${job.code} completed — cost to finished goods`,
+    transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
     amount: actuals.total, debitAccountId: fg._id, creditAccountId: wip._id,
     inputMethod: 'form', createdBy: user.id, entryType: 'normal',
     transactionSource: 'manual', tags: ['job-complete', `job-${job.code}`],

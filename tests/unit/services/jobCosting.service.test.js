@@ -34,7 +34,8 @@ describe('jobCosting.service — addCost', () => {
     ledger.postBalancedJournal.mockResolvedValue({ _id: 'je1' });
     const out = await svc.addCost('biz1', 'j1', { category: 'material', amount: 500, sourceAccountId: 'cash', description: 'wood' }, { id: 'u1' });
     expect(ledger.postBalancedJournal).toHaveBeenCalledWith(expect.objectContaining({
-      debitAccountId: 'wip169', creditAccountId: 'cash', amount: 500, inputMethod: 'form', createdBy: 'u1' }));
+      debitAccountId: 'wip169', creditAccountId: 'cash', amount: 500, inputMethod: 'form', createdBy: 'u1',
+      transactionType: 'Journal Entry' }));
     expect(job.costSheet).toHaveLength(1);
     expect(job.costSheet[0]).toMatchObject({ category: 'material', amount: 500, journalEntryId: 'je1' });
     expect(job.status).toBe('in_progress');
