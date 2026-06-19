@@ -92,6 +92,7 @@ router.use('/bookkeeping',           require('./v1/bookkeeping.routes')); // Aut
 router.use('/cost-centers',          require('./v1/costCenter.routes'));  // SRS FR-07.1 — cost / profit centres
 router.use('/payroll',               require('./v1/payroll.routes'));     // SRS FR-08 — payroll
 router.use('/budgets',               require('./v1/budget.routes'));      // SRS FR-04.1/.2 — budgeting & variance
+router.use('/cost',                  require('./v1/cost.routes'));        // SRS FR-07.2/.3/.4 — cost accounting
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
