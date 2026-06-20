@@ -282,6 +282,158 @@ class ReportService {
     return result;
   }
 
+  /** Public wrapper so other services (reportBuilder) can read balances. */
+  async getBalancesAsOf(businessId, asOfDate) {
+    return this._getBalancesAsOf(businessId, asOfDate);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  //  STATEMENT OF CHANGES IN EQUITY  (FR-02.4)
+  // ──────────────────────────────────────────────────────────────────────────
+  async getStatementOfChangesInEquity(businessId, startDate, endDate) {
+    if (!businessId || !startDate || !endDate)
+      throw new ApiError(400, 'Missing required parameters: businessId, startDate, endDate');
+
+    const cacheParams = {
+      start: new Date(startDate).toISOString(),
+      end:   new Date(endDate).toISOString(),
+    };
+    const cached = reportCache.get('equity-statement', businessId.toString(), cacheParams);
+    if (cached) return cached;
+
+    const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    const openingDate = new Date(new Date(startDate).getTime() - 86400000);
+
+    const [accounts, openMap, closeMap, movements] = await Promise.all([
+      accountRepository.findByBusiness(businessId),
+      this._getBalancesAsOf(businessId, openingDate),
+      this._getBalancesAsOf(businessId, endDate),
+      transactionRepository.getDebitCreditTotalsBetween(businessId, startDate, endDate),
+    ]);
+
+    const isCYE = (a) => /^current.?year.?earnings$/i.test((a.accountName || '').trim());
+    const equityAccts = accounts.filter(a => a.accountType === 'Equity' && !isCYE(a));
+
+    // Classify each real equity account into a component column.
+    const classify = (a) => {
+      const n = (a.accountName || '').toLowerCase();
+      const c = a.accountCode || '';
+      if (/capital|investment/.test(n) || c === '3110') return { key: 'capital', label: 'Owner capital' };
+      if (/share premium/.test(n) || c === '3130')      return { key: 'sharePremium', label: 'Share premium' };
+      if (/revaluation/.test(n) || c === '3140')        return { key: 'revaluation', label: 'Revaluation reserve' };
+      if (/retained/.test(n) || c === '3210')           return { key: 'retainedEarnings', label: 'Retained earnings' };
+      if (/distribution|drawing|dividend/.test(n) || c === '3120') return { key: 'capital', label: 'Owner capital' };
+      return { key: 'other', label: 'Other equity' };
+    };
+
+    // Build ordered component list (only columns that have any account), + synthetic CYE.
+    const compOrder = ['capital', 'sharePremium', 'revaluation', 'retainedEarnings', 'other'];
+    const compLabels = {
+      capital: 'Owner capital', sharePremium: 'Share premium', revaluation: 'Revaluation reserve',
+      retainedEarnings: 'Retained earnings', other: 'Other equity',
+    };
+    const acctToComp = new Map();
+    const compAccts = {};
+    for (const a of equityAccts) {
+      const { key } = classify(a);
+      acctToComp.set(a._id.toString(), key);
+      (compAccts[key] = compAccts[key] || []).push(a._id);
+    }
+    const components = compOrder
+      .filter(k => compAccts[k])
+      .map(k => ({ key: k, label: compLabels[k], accountIds: compAccts[k] }));
+    components.push({ key: 'currentYearEarnings', label: 'Current year earnings', isDerived: true });
+
+    // Economic sum over Revenue/Expense for the synthetic CYE column.
+    const realCYE = accounts.filter(a => a.accountType === 'Equity' && isCYE(a));
+    const econ = (map, type) => accounts
+      .filter(a => a.accountType === type)
+      .reduce((s, a) => s + (map[a._id.toString()] || 0), 0);
+    const realCYEsum = (map) => realCYE.reduce((s, a) => s + (map[a._id.toString()] || 0), 0);
+    const cyeAt = (map) => r2(econ(map, 'Revenue') - econ(map, 'Expense') + realCYEsum(map));
+
+    // Per-component opening / closing from economic account balances.
+    const colSum = (map, key) => r2((compAccts[key] || [])
+      .reduce((s, id) => s + (map[id.toString()] || 0), 0));
+    const opening = {}, closing = {};
+    for (const c of components) {
+      if (c.key === 'currentYearEarnings') { opening[c.key] = cyeAt(openMap); closing[c.key] = cyeAt(closeMap); }
+      else { opening[c.key] = colSum(openMap, c.key); closing[c.key] = colSum(closeMap, c.key); }
+    }
+
+    // Period net movement per equity account (economic, signed by normalBalance).
+    const dMap = new Map(movements.debitTotals.map(x => [x._id.toString(), x.total]));
+    const cMap = new Map(movements.creditTotals.map(x => [x._id.toString(), x.total]));
+    const netMove = (a) => {
+      const d = dMap.get(a._id.toString()) || 0, c = cMap.get(a._id.toString()) || 0;
+      return a.normalBalance === 'Debit' ? (d - c) : (c - d);
+    };
+
+    // Explicit movement rows (per component).
+    const zero = () => Object.fromEntries(components.map(c => [c.key, 0]));
+    const profit = zero(), capital = zero(), distributions = zero(), other = zero();
+
+    // Profit for the period → synthetic CYE column.
+    profit.currentYearEarnings = r2(
+      (econ(closeMap, 'Revenue') - econ(openMap, 'Revenue')) -
+      (econ(closeMap, 'Expense') - econ(openMap, 'Expense'))
+    );
+
+    // Capital injections (credit-normal capital/premium accounts) and distributions (debit-normal draws).
+    for (const a of equityAccts) {
+      const key = acctToComp.get(a._id.toString());
+      const mv = netMove(a);
+      const nm = (a.accountName || '').toLowerCase();
+      if (/distribution|drawing|dividend/.test(nm) || a.accountCode === '3120') {
+        distributions[key] = r2(distributions[key] + mv); // mv already negative for a draw
+      } else if (/capital|investment|share premium/.test(nm) || ['3110', '3130'].includes(a.accountCode)) {
+        capital[key] = r2(capital[key] + mv);
+      }
+    }
+
+    // Other changes = residual per column so each column foots opening → closing exactly.
+    for (const c of components) {
+      const explained = profit[c.key] + capital[c.key] + distributions[c.key];
+      other[c.key] = r2((closing[c.key] - opening[c.key]) - explained);
+    }
+
+    const rowTotal = (vals) => r2(components.reduce((s, c) => s + (vals[c.key] || 0), 0));
+    const mkRow = (key, label, vals) => ({ key, label, values: vals, total: rowTotal(vals) });
+
+    const rows = [
+      mkRow('opening', 'Balance at start', opening),
+      mkRow('profit', 'Profit for the period', profit),
+      mkRow('capital', 'Money put in by owners', capital),
+      mkRow('distributions', 'Money taken out / dividends', distributions),
+      mkRow('other', 'Other changes', other),
+      mkRow('closing', 'Balance at end', closing),
+    ];
+
+    const closingTotal = rowTotal(closing);
+    // Compute BS equity from the same signed closeMap (consistent with _getBalancesAsOf
+    // convention) rather than calling getBalanceSheet, which applies an additional
+    // sectionTotal negation for debit-normal accounts that would cause a spurious mismatch.
+    const bsEquity = r2(
+      equityAccts.reduce((s, a) => s + (closeMap[a._id.toString()] || 0), 0) +
+      cyeAt(closeMap)
+    );
+    const difference = r2(closingTotal - bsEquity);
+
+    const result = {
+      components,
+      rows,
+      reconciliation: {
+        closingTotal,
+        balanceSheetEquity: bsEquity,
+        difference,
+        reconciles: Math.abs(difference) < 0.01,
+      },
+      period: { startDate, endDate },
+    };
+    reportCache.set('equity-statement', businessId.toString(), cacheParams, result);
+    return result;
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // 3. CASH FLOW STATEMENT
   // ──────────────────────────────────────────────────────────────────────────
