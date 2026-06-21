@@ -332,12 +332,19 @@ class ReportService {
       capital: 'Owner capital', sharePremium: 'Share premium', revaluation: 'Revaluation reserve',
       retainedEarnings: 'Retained earnings', other: 'Other equity',
     };
+    // Helper: sign a raw balance (from _getBalancesAsOf) in the equity-contribution
+    // direction. Debit-normal accounts (Drawings) accumulate by DEBITING, so a positive
+    // raw balance REDUCES equity — flip the sign so the equity statement adds correctly.
+    const equitySign = (acc, raw) => (acc.normalBalance === 'Debit' ? -raw : raw);
+
     const acctToComp = new Map();
-    const compAccts = {};
+    const compAccts  = {};  // key → array of account _id strings (for lookup)
+    const compAcctObjs = {}; // key → array of account objects (for equitySign)
     for (const a of equityAccts) {
       const { key } = classify(a);
       acctToComp.set(a._id.toString(), key);
-      (compAccts[key] = compAccts[key] || []).push(a._id);
+      (compAccts[key]     = compAccts[key]     || []).push(a._id.toString());
+      (compAcctObjs[key]  = compAcctObjs[key]  || []).push(a);
     }
     const components = compOrder
       .filter(k => compAccts[k])
@@ -345,16 +352,31 @@ class ReportService {
     components.push({ key: 'currentYearEarnings', label: 'Current year earnings', isDerived: true });
 
     // Economic sum over Revenue/Expense for the synthetic CYE column.
+    // Mirrors getBalanceSheet's economicSum: negate any account whose normalBalance
+    // opposes the section's natural direction (Revenue natural = Credit; Expense natural = Debit).
     const realCYE = accounts.filter(a => a.accountType === 'Equity' && isCYE(a));
-    const econ = (map, type) => accounts
-      .filter(a => a.accountType === type)
-      .reduce((s, a) => s + (map[a._id.toString()] || 0), 0);
-    const realCYEsum = (map) => realCYE.reduce((s, a) => s + (map[a._id.toString()] || 0), 0);
+    const econ = (map, type) => {
+      const creditNatural = (type === 'Revenue');
+      return accounts
+        .filter(a => a.accountType === type)
+        .reduce((s, a) => {
+          const bal = map[a._id.toString()] || 0;
+          const isOpposite = creditNatural
+            ? a.normalBalance === 'Debit'    // contra-revenue
+            : a.normalBalance === 'Credit';  // contra-expense
+          return s + (isOpposite ? -bal : bal);
+        }, 0);
+    };
+    const realCYEsum = (map) => realCYE.reduce((s, a) => {
+      const bal = map[a._id.toString()] || 0;
+      return s + (a.normalBalance === 'Debit' ? -bal : bal);
+    }, 0);
     const cyeAt = (map) => r2(econ(map, 'Revenue') - econ(map, 'Expense') + realCYEsum(map));
 
-    // Per-component opening / closing from economic account balances.
-    const colSum = (map, key) => r2((compAccts[key] || [])
-      .reduce((s, id) => s + (map[id.toString()] || 0), 0));
+    // Per-component opening / closing — apply equitySign so debit-normal accounts
+    // (Drawings) REDUCE the column total rather than adding to it.
+    const colSum = (map, key) => r2((compAcctObjs[key] || [])
+      .reduce((s, acc) => s + equitySign(acc, map[acc._id.toString()] || 0), 0));
     const opening = {}, closing = {};
     for (const c of components) {
       if (c.key === 'currentYearEarnings') { opening[c.key] = cyeAt(openMap); closing[c.key] = cyeAt(closeMap); }
@@ -379,13 +401,17 @@ class ReportService {
       (econ(closeMap, 'Expense') - econ(openMap, 'Expense'))
     );
 
-    // Capital injections (credit-normal capital/premium accounts) and distributions (debit-normal draws).
+    // Capital injections and distributions — apply equitySign so movements from
+    // debit-normal accounts (Drawings) reduce equity (negative contribution).
+    // equitySign(acc, netMove(acc)) = periodCredits − periodDebits for every account:
+    //   credit-normal: (c − d) → same sign
+    //   debit-normal:  -(d − c) = (c − d) → negative when debits > credits (a draw)
     for (const a of equityAccts) {
       const key = acctToComp.get(a._id.toString());
-      const mv = netMove(a);
+      const mv = equitySign(a, netMove(a));
       const nm = (a.accountName || '').toLowerCase();
       if (/distribution|drawing|dividend/.test(nm) || a.accountCode === '3120') {
-        distributions[key] = r2(distributions[key] + mv); // mv already negative for a draw
+        distributions[key] = r2(distributions[key] + mv);
       } else if (/capital|investment|share premium/.test(nm) || ['3110', '3130'].includes(a.accountCode)) {
         capital[key] = r2(capital[key] + mv);
       }
@@ -410,13 +436,11 @@ class ReportService {
     ];
 
     const closingTotal = rowTotal(closing);
-    // Compute BS equity from the same signed closeMap (consistent with _getBalancesAsOf
-    // convention) rather than calling getBalanceSheet, which applies an additional
-    // sectionTotal negation for debit-normal accounts that would cause a spurious mismatch.
-    const bsEquity = r2(
-      equityAccts.reduce((s, a) => s + (closeMap[a._id.toString()] || 0), 0) +
-      cyeAt(closeMap)
-    );
+    // Reconcile to the real Balance Sheet so both statements agree by construction.
+    // getBalanceSheet applies the same equitySign logic (via sectionTotal) and uses
+    // economicSum for CYE — with fix #1 applied, closingTotal equals bs.totalEquity.
+    const bs = await this.getBalanceSheet(businessId, endDate);
+    const bsEquity = bs.totalEquity;
     const difference = r2(closingTotal - bsEquity);
 
     const result = {

@@ -26,11 +26,14 @@ describe('getStatementOfChangesInEquity', () => {
     const end = new Date('2026-12-31');
 
     // Economic balances: opening (day before start) vs closing (end).
+    // _getBalancesAsOf returns balances in NORMAL direction:
+    //   Drawings is debit-normal, so a 15000 withdrawal → raw balance +15000.
     // Opening: capital 100000, drawings 0, RE 50000, rev/exp all-time 0 → CYE 0.
-    // Closing: capital 120000 (owner put in 20000), drawings -15000 (took out 15000),
+    // Closing: capital 120000 (owner put in 20000), drawings +15000 (debit-normal raw),
     //          RE 50000, rev 200000, exp 140000 → CYE = 200000 - 140000 = 60000.
+    // Equity-signed closing: 120000 + (-15000) + 50000 + 60000 = 215000.
     const openingMap = { cap: 100000, draw: 0, re: 50000, rev: 0, exp: 0 };
-    const closingMap = { cap: 120000, draw: -15000, re: 50000, rev: 200000, exp: 140000 };
+    const closingMap = { cap: 120000, draw: 15000, re: 50000, rev: 200000, exp: 140000 };
 
     jest.spyOn(reportService, '_getBalancesAsOf').mockImplementation(async (_b, d) =>
       new Date(d).getTime() < start.getTime() ? openingMap : closingMap
@@ -64,8 +67,18 @@ describe('getStatementOfChangesInEquity', () => {
     expect(opening.total).toBeCloseTo(150000, 2);
     expect(closing.total).toBeCloseTo(215000, 2);
 
+    // Distributions row: Drawings (debit-normal, 15000 debit movement) must be -15000
+    // in the capital column (equitySign flips the sign).
+    const distRow = r.rows.find(x => x.key === 'distributions');
+    expect(distRow.values.capital).toBeCloseTo(-15000, 2);
+
+    // Other row should be zero when all movements are fully explained.
+    const otherRow = r.rows.find(x => x.key === 'other');
+    expect(otherRow.total).toBeCloseTo(0, 2);
+
     // Reconciles to BS equity (Σ closing columns)
     expect(r.reconciliation.reconciles).toBe(true);
     expect(r.reconciliation.closingTotal).toBeCloseTo(215000, 2);
+    expect(r.reconciliation.balanceSheetEquity).toBeCloseTo(215000, 2);
   });
 });
