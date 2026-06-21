@@ -160,6 +160,7 @@ module.exports = {
     { accountCode: '2100', accountName: 'Bank Overdraft',                accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2105', accountName: 'Credit Card Payable',           accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2110', accountName: 'Accounts Payable',              accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
+    { accountCode: '2115', accountName: 'Goods Received Not Invoiced',  accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2120', accountName: 'GST Payable',                   accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2125', accountName: 'WHT Payable',                   accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
     { accountCode: '2130', accountName: "Director's Loan",               accountType: 'Liability', accountSubtype: 'Current Liabilities',     normalBalance: 'Credit', isDefault: true },
