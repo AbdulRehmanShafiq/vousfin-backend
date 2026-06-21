@@ -459,6 +459,50 @@ class ReportService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
+  //  IFRS-15 REVENUE NOTES  (revenue disaggregation + policy text)
+  // ──────────────────────────────────────────────────────────────────────────
+  async getRevenueNotes(businessId, startDate, endDate) {
+    if (!businessId || !startDate || !endDate)
+      throw new ApiError(400, 'Missing required parameters: businessId, startDate, endDate');
+
+    const cacheParams = { start: new Date(startDate).toISOString(), end: new Date(endDate).toISOString() };
+    const cached = reportCache.get('revenue-notes', businessId.toString(), cacheParams);
+    if (cached) return cached;
+
+    const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    const [accounts, movements] = await Promise.all([
+      accountRepository.findByBusiness(businessId),
+      transactionRepository.getDebitCreditTotalsBetween(businessId, startDate, endDate),
+    ]);
+
+    const revAccts = accounts.filter(a => a.accountType === 'Revenue');
+    const dMap = new Map(movements.debitTotals.map(x => [x._id.toString(), x.total]));
+    const cMap = new Map(movements.creditTotals.map(x => [x._id.toString(), x.total]));
+
+    const disaggregation = revAccts.map(a => {
+      const id = a._id.toString();
+      const amt = r2((cMap.get(id) || 0) - (dMap.get(id) || 0)); // economic revenue (credit-normal)
+      return { stream: a.accountName, amount: amt };
+    }).filter(d => d.amount !== 0);
+
+    const totalRevenue = r2(disaggregation.reduce((s, d) => s + d.amount, 0));
+    disaggregation.forEach(d => { d.pct = totalRevenue !== 0 ? r2((d.amount / totalRevenue) * 100) : 0; });
+    disaggregation.sort((a, b) => b.amount - a.amount);
+
+    const policyText =
+      'Revenue is recognised when control of goods or services passes to the customer, ' +
+      'measured at the amount the business expects to receive (IFRS 15). For each sale the ' +
+      'business identifies the customer agreement and what it has promised to deliver, sets the ' +
+      'price, and records revenue as each promise is fulfilled — at a point in time for goods, ' +
+      'and over time for services delivered across a period. The table below breaks total revenue ' +
+      'down by source so readers can see where income comes from.';
+
+    const result = { policyText, disaggregation, totalRevenue, period: { startDate, endDate } };
+    reportCache.set('revenue-notes', businessId.toString(), cacheParams, result);
+    return result;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
   // 3. CASH FLOW STATEMENT
   // ──────────────────────────────────────────────────────────────────────────
 
