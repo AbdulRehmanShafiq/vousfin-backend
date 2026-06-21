@@ -73,6 +73,6 @@ router.put('/templates/:id',          validate(updateTemplateSchema, 'body'), tp
 router.delete('/templates/:id',       tplCtrl.remove);
 router.post('/templates/:id/render',  validate(renderSchema, 'body'),         tplCtrl.render);
 router.put('/templates/:id/schedule', validate(scheduleSchema, 'body'),       tplCtrl.setSchedule);
-// NOTE: GET /templates/:id/export is added in Task 8 (after the PDF helper exists)
+router.get('/templates/:id/export',   tplCtrl.exportTemplate);
 
 module.exports = router;

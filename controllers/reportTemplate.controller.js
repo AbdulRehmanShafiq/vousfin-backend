@@ -2,6 +2,8 @@
 
 const repo = require('../repositories/reportTemplate.repository');
 const reportBuilder = require('../services/reportBuilder.service');
+const businessRepository = require('../repositories/business.repository');
+const pdfExport = require('../utils/pdfExport.utils');
 const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
 const { computeNextRun } = require('../jobs/scheduledReport.job');
@@ -88,4 +90,30 @@ const setSchedule = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
-module.exports = { list, create, getOne, update, remove, render, preview, setSchedule };
+const exportTemplate = async (req, res, next) => {
+  try {
+    const format = req.query.format === 'csv' ? 'csv' : 'pdf';
+    const data = await reportBuilder.renderTemplate(req.user.businessId, req.params.id, range(req.query));
+    const business = await businessRepository.findById(req.user.businessId);
+    if (format === 'csv') {
+      const head = ['Line', ...data.columns].join(',');
+      const lines = data.rows.map(r => [
+        `"${(r.label || '').replace(/"/g, '""')}"`,
+        r.current ?? '', r.prior ?? '', r.change ?? '', r.changePct ?? '',
+      ].slice(0, 1 + data.columns.length).join(','));
+      const csv = [head, ...lines].join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${(data.template.name || 'report')}.csv"`);
+      return res.send(csv);
+    }
+    const pdf = await pdfExport.generateReportBuilderPDF({
+      businessName: business?.businessName || 'My Business',
+      currency: business?.currency || 'PKR', data, title: data.template.name,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${(data.template.name || 'report')}.pdf"`);
+    res.send(pdf);
+  } catch (e) { next(e); }
+};
+
+module.exports = { list, create, getOne, update, remove, render, preview, setSchedule, exportTemplate };

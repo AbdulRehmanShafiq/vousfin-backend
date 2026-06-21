@@ -37,6 +37,7 @@ const sendEmail = async (options) => {
     to: options.to,
     subject: options.subject,
     html: options.html,
+    ...(options.attachments ? { attachments: options.attachments } : {}),
   };
 
   try {
@@ -326,6 +327,7 @@ const sendCustomerPaymentReminderEmail = async (opts) => {
 };
 
 module.exports = {
+  sendEmail,
   sendVerificationEmail,
   sendAccountStatusEmail,
   sendPasswordResetEmail,

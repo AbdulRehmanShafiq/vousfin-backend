@@ -12,6 +12,7 @@ const { scheduleFxRateSync }  = require('./jobs/fxRateSync.job');
 const { schedulePaymentReminders } = require('./jobs/paymentReminder.job');
 const { scheduleTaxSnapshots } = require('./jobs/taxSnapshot.job');
 const { scheduleAutoPrepare } = require('./jobs/taxReturnAutoPrepare.job');
+const { scheduleReportDelivery } = require('./jobs/scheduledReport.job');
 const { initialize: initForecastingData } = require('./services/forecasting/dataLoader');
 const { ensureLSTMRunning, stopLSTM } = require('./utils/lstmService');
 
@@ -70,6 +71,13 @@ const startServer = async () => {
       scheduleAutoPrepare();
     } catch (err) {
       logger.warn(`⚠️ Tax-return auto-prepare job failed to schedule (non-fatal): ${err.message}`);
+    }
+
+    // Step 3b4: Schedule hourly scheduled-report email delivery (FR-02.5)
+    try {
+      scheduleReportDelivery();
+    } catch (err) {
+      logger.warn(`⚠️ Scheduled report delivery job failed to schedule (non-fatal): ${err.message}`);
     }
 
     // Forecast Platform F3: capture realized forecast accuracy daily (09:00)

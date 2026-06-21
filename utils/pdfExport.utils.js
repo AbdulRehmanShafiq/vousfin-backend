@@ -609,6 +609,55 @@ async function generateEquityStatementPDF({ businessName, data, dateRange, curre
   }
 }
 
+// ── 8. Report Builder (custom template export) ────────────────────────────────
+
+async function generateReportBuilderPDF({ businessName, currency = 'PKR', data, title }) {
+  const { doc, buffers } = buildDoc();
+  try {
+    const genDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+    docHeader(doc, businessName, title || 'Custom Report', `Generated: ${genDate}`);
+
+    const columns = data.columns || [];
+    const rows = data.rows || [];
+
+    // Table header row
+    const colCount = 1 + columns.length; // label + data columns
+    const labelW = 200;
+    const dataW = colCount > 1 ? Math.floor((CONTENT_W - labelW) / columns.length) : 0;
+
+    const hy = doc.y;
+    doc.rect(COL_L, hy, CONTENT_W, 18).fill(COLORS.primary);
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
+    doc.text('Line Item', COL_L + 4, hy + 5, { width: labelW });
+    columns.forEach((col, i) => {
+      const x = COL_L + labelW + i * dataW;
+      doc.text(String(col), x, hy + 5, { width: dataW, align: 'right' });
+    });
+    doc.moveDown(0.1);
+
+    // Data rows
+    rows.forEach((row, idx) => {
+      if (doc.y > doc.page.height - 60) doc.addPage();
+      const ry = doc.y;
+      if (idx % 2 === 0) doc.rect(COL_L, ry, CONTENT_W, 14).fill(COLORS.rowEven);
+      doc.fillColor(COLORS.text).font('Helvetica').fontSize(8);
+      doc.text(row.label || '', COL_L + 4, ry + 3, { width: labelW - 4 });
+      const vals = [row.current, row.prior, row.change, row.changePct].slice(0, columns.length);
+      vals.forEach((v, i) => {
+        const x = COL_L + labelW + i * dataW;
+        const display = typeof v === 'number' ? fmt(v, currency) : (v != null ? String(v) : '-');
+        doc.text(display, x, ry + 3, { width: dataW, align: 'right' });
+      });
+      doc.moveDown(0.05);
+    });
+
+    return finalise(doc, buffers);
+  } catch (err) {
+    logger.error('PDF generation failed (Report Builder):', err);
+    throw err;
+  }
+}
+
 // ── Legacy aliases (backward compat) ─────────────────────────────────────────
 
 const generateIncomeStatement     = generateIncomeStatementPDF;
@@ -656,6 +705,7 @@ module.exports = {
   generateGeneralLedgerPDF,
   generateAgingPDF,
   generateEquityStatementPDF,
+  generateReportBuilderPDF,
   // Backward-compat aliases
   generateIncomeStatement,
   generateBalanceSheet,
