@@ -4,6 +4,13 @@
 //
 jest.mock('../../../repositories/vendor.repository');
 jest.mock('../../../services/audit.service');
+// AP-liability posting dependencies — previously UNMOCKED, which let the
+// silent swallow in approve() hide postApLiabilityJournal throwing without a DB.
+jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() }));
+jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn() }));
+jest.mock('../../../services/partyBalance.service', () => ({ adjustPayable: jest.fn() }));
+jest.mock('../../../services/billMatching.service', () => ({ runFullMatch: jest.fn() }));
+jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
 jest.mock('../../../models/Bill.model', () => {
   const stateStore = new Map();
   const mongoose = require('mongoose');
@@ -54,12 +61,19 @@ jest.mock('../../../models/Bill.model', () => {
   return Bill;
 });
 
+const mongoose = require('mongoose');
 const Bill = require('../../../models/Bill.model');
 const billService = require('../../../services/bill.service');
 const auditService = require('../../../services/audit.service');
 const vendorRepository = require('../../../repositories/vendor.repository');
+const ChartOfAccount = require('../../../models/ChartOfAccount.model');
+const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
+const partyBalanceService = require('../../../services/partyBalance.service');
+const billMatchingService = require('../../../services/billMatching.service');
 
 const USER = { _id: 'u1', fullName: 'Bob Accountant', email: 'bob@x', role: 'accountant' };
+const AP_ID    = new mongoose.Types.ObjectId();
+const PURCH_ID = new mongoose.Types.ObjectId();
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -70,6 +84,19 @@ beforeEach(() => {
   auditService.log       = jest.fn().mockResolvedValue(undefined);
   auditService.logCreate = jest.fn().mockResolvedValue(undefined);
   auditService.logDelete = jest.fn().mockResolvedValue(undefined);
+
+  // Happy-path AP-posting deps: AP (2110) + purchases debit account exist, the
+  // poster + vendor-balance move + 3-way match all succeed.
+  ChartOfAccount.findOne.mockImplementation((q) => ({
+    lean: async () => {
+      if (q.accountCode === '2110') return { _id: AP_ID, accountCode: '2110' };
+      if (q.accountCode && q.accountCode.$in) return { _id: PURCH_ID, accountCode: '5100' };
+      return null;
+    },
+  }));
+  postBalancedJournal.mockResolvedValue({ _id: new mongoose.Types.ObjectId() });
+  partyBalanceService.adjustPayable.mockResolvedValue(undefined);
+  billMatchingService.runFullMatch.mockResolvedValue({});
 });
 
 describe('billService.createDraft()', () => {
@@ -153,5 +180,37 @@ describe('billService illegal transitions + lifecycle', () => {
     const archived = await billService.softDelete(bill._id, USER, '');
     expect(archived.isArchived).toBe(true);
     expect(auditService.logDelete).toHaveBeenCalled();
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  AP liability journal on approval — must NOT be silently swallowed (audit P2)
+// ════════════════════════════════════════════════════════════════════════════
+describe('billService.approve() — AP liability journal', () => {
+  async function submittedBill() {
+    const bill = await billService.createDraft(
+      { businessId: 'biz1', billNumber: 'BILL-AP', amount: 250000, issueDate: new Date(), vendorId: 'v1' },
+      USER, ''
+    );
+    await billService.submitForApproval(bill._id, USER, '');
+    return bill;
+  }
+
+  test('posts the AP liability journal and links it on the bill', async () => {
+    const bill = await submittedBill();
+    const ap = await billService.approve(bill._id, USER, 'ok', '');
+
+    expect(ap.state).toBe('approved');
+    expect(postBalancedJournal).toHaveBeenCalled();
+    expect(ap.apLiabilityJournalId).toBeDefined();
+  });
+
+  test('surfaces (does not swallow) a failure to post the AP liability journal', async () => {
+    const bill = await submittedBill();
+    // The ledger poster fails — the bill must NOT be reported as cleanly approved
+    // with no AP journal. The error has to propagate to the caller.
+    postBalancedJournal.mockRejectedValueOnce(new Error('ledger down'));
+
+    await expect(billService.approve(bill._id, USER, 'ok', '')).rejects.toThrow('ledger down');
   });
 });

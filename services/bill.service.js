@@ -278,11 +278,11 @@ class BillService {
     } catch (e) {
       logger.warn(`[bill] 3-way match failed on approval for ${bill.billNumber}: ${e.message}`);
     }
-    try {
-      await this.postApLiabilityJournal(approved, user, ipAddress);
-    } catch (e) {
-      logger.warn(`[bill] AP journal failed on approval for ${bill.billNumber}: ${e.message}`);
-    }
+    // Post the AP liability journal. Do NOT swallow a failure here — the GL must
+    // reflect the liability the moment a bill is approved. The poster is atomic
+    // and idempotent (guards on apLiabilityJournalId), so a surfaced error can be
+    // retried safely; a silent failure would leave AP understated (audit P2).
+    await this.postApLiabilityJournal(approved, user, ipAddress);
 
     // ERP Step 4 — broadcast so dashboard / forecasting / AP-aging subscribers refresh.
     businessEvents.emit(EVENTS.BILL_APPROVED, {
@@ -693,10 +693,14 @@ class BillService {
         }
       });
     } catch (e) {
+      // The GL writes already rolled back atomically (inner withTransaction).
+      // Restore the in-memory link fields and RE-THROW — never swallow: a bill must
+      // not be reported as approved while its AP liability silently failed to post
+      // (audit P2). The guard fields are reset so a retry re-posts cleanly.
       bill.apLiabilityJournalId = undefined;
       bill.linkedJournalEntryId = preLinked;
       logger.error(`[bill] AP recognition rolled back for ${bill.billNumber}: ${e.message}`);
-      return null;
+      throw e;
     }
 
     return primaryJe;
