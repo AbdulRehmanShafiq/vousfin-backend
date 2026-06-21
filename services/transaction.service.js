@@ -11,6 +11,7 @@ const { ENTITY_TYPES, TRANSACTION_TYPES, INPUT_METHODS, JOURNAL_STATUS, PAYMENT_
 const logger = require('../config/logger');
 const reportCache = require('../utils/reportCache');
 const fxService    = require('./fx.service');
+const journalGenerator = require('./journalGenerator.service'); // IAS 21 realised FX on settlement
 const taxEngine    = require('./taxEngine.service');   // Phase 5.4
 const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // ERP refactor Step 2
 const partyBalanceService = require('./partyBalance.service'); // ERP refactor Step 4 — centralized AR/AP balance engine
@@ -856,10 +857,36 @@ class TransactionService {
       throw new ApiError(400, 'Parent transaction must be a Credit Sale or Credit Purchase');
     }
 
-    // 4. Create the payment transaction (Child)
+    // 3b. Realised FX (IAS 21 §28) — when the parent is a FOREIGN-currency AR/AP,
+    //     settling at a rate different from the booking rate realises an exchange
+    //     gain/loss on the amount settled. We only touch the rate engine when the
+    //     parent actually carries a currency, so base-currency settlements (the
+    //     common case) are completely unaffected.
+    const settlementDate = paymentData.transactionDate || new Date();
+    let fxContext = null;
+    if (parent.currencyCode) {
+      const baseCurrency = await fxService.getBaseCurrency(businessId);
+      if (parent.currencyCode !== baseCurrency) {
+        const bookingRate    = parent.exchangeRate || 1;
+        const settlementRate = paymentData.exchangeRate
+          || await fxService.getRate(businessId, parent.currencyCode, baseCurrency, settlementDate);
+        const realised = journalGenerator.computeRealisedFx({
+          isReceivable,
+          foreignAmountSettled: paymentData.amount,
+          bookingRate,
+          settlementRate,
+        });
+        fxContext = { currencyCode: parent.currencyCode, settlementRate, realised };
+      }
+    }
+
+    // 4. Create the payment transaction (Child). For a foreign settlement the child
+    //    is currency-aware at the SETTLEMENT rate, so its cash leg posts at the rate
+    //    actually realised; the realised-FX entry below then corrects the AR/AP
+    //    control account back to its booked carrying value.
     const childData = {
       businessId,
-      transactionDate: paymentData.transactionDate || new Date(),
+      transactionDate: settlementDate,
       description: paymentData.description || `Payment for ${parent.transactionReference || 'Transaction'}`,
       transactionType: isReceivable ? TRANSACTION_TYPES.PAYMENT_RECEIVED : TRANSACTION_TYPES.PAYMENT_MADE,
       transactionMode: TRANSACTION_MODES.PARTIAL_SETTLEMENT,
@@ -871,6 +898,7 @@ class TransactionService {
       transactionReference: paymentData.reference || null,
       customerId: parent.customerId ? parent.customerId._id : null,
       vendorId: parent.vendorId ? parent.vendorId._id : null,
+      ...(fxContext ? { currencyCode: fxContext.currencyCode, exchangeRate: fxContext.settlementRate } : {}),
     };
 
     // 5. Pre-compute the parent's new settled state (pure — no writes yet).
@@ -919,6 +947,25 @@ class TransactionService {
         await partyBalanceService.adjustPayable(businessId, parent.vendorId._id, -paymentData.amount, {
           userId, reason: 'payment_made', entityType: ENTITY_TYPES.JOURNAL_ENTRY, entityId: child._id, session: s,
         });
+      }
+
+      // Realised FX correction (IAS 21 §28) — same session, idempotent. Posts only
+      // when the rate moved materially. The AR/AP control account is the parent's
+      // receivable (debit) or payable (credit) account.
+      if (fxContext && fxContext.realised.hasFx) {
+        const arApAccountId = isReceivable ? parent.debitAccountId._id : parent.creditAccountId._id;
+        await journalGenerator.generateRealizedFxEntry({
+          businessId,
+          transactionDate: settlementDate,
+          description: `Realised FX on settlement — ${parent.invoiceNumber || parent.transactionReference || parent._id}`,
+          fxAmount: fxContext.realised.fxAmount,
+          isGain: fxContext.realised.isGain,
+          isReceivable,
+          arApAccountId,
+          userId,
+          parentId: parent._id,
+          settlementId: child._id,
+        }, { session: s });
       }
       return child;
     });

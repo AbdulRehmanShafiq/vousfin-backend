@@ -47,6 +47,31 @@ function buildUnrealisedFxRevaluation({ isAR, diff, monetaryAccId, unrealisedAcc
   return { isGain, absAmt, debitId, creditId };
 }
 
+/**
+ * Pure: compute the realised FX gain/loss when a foreign-currency monetary item
+ * is (partially) settled (IAS 21 §28). The exchange difference between the rate
+ * the item was BOOKED at and the rate it is SETTLED at, on the amount settled, is
+ * recognised in profit or loss. Exported for exhaustive unit testing.
+ *
+ *   fxAmount = |settlementRate − bookingRate| × foreignAmountSettled   (base ccy)
+ *   AR (asset):     settle > booking → GAIN  (received more base than carried)
+ *                   settle < booking → LOSS
+ *   AP (liability): settle > booking → LOSS  (paid more base than carried)
+ *                   settle < booking → GAIN
+ *
+ * @param {{ isReceivable:boolean, foreignAmountSettled:number, bookingRate:number, settlementRate:number }} p
+ * @returns {{ fxAmount:number, isGain:boolean, hasFx:boolean }}
+ */
+function computeRealisedFx({ isReceivable, foreignAmountSettled, bookingRate, settlementRate }) {
+  const rateDiff = (Number(settlementRate) || 0) - (Number(bookingRate) || 0);
+  const fxAmount = Math.round(Math.abs(rateDiff) * (Number(foreignAmountSettled) || 0) * 100) / 100;
+  // Receivable: rising rate is a gain. Payable: rising rate is a loss (flip).
+  const isGain = isReceivable ? rateDiff > 0 : rateDiff < 0;
+  // Snap sub-cent dust to no-op (mirrors the settlement epsilon in audit A6).
+  const hasFx = fxAmount >= 0.005;
+  return { fxAmount, isGain, hasFx };
+}
+
 class JournalGeneratorService {
   // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -100,7 +125,8 @@ class JournalGeneratorService {
     arApAccountId,
     userId,
     parentId,
-  }) {
+    settlementId,
+  }, { session = null } = {}) {
     if (!fxAmount || fxAmount <= 0) return null;
 
     const fxAccts = await this._getFxAccounts(businessId);
@@ -111,47 +137,51 @@ class JournalGeneratorService {
       return null;
     }
 
-    let debitId, creditId;
-    if (isGain) {
-      // Gain: monetary item account DR, FX Gain CR
-      debitId  = arApAccountId;
-      creditId = fxPnlId;
-    } else {
-      // Loss: FX Loss DR, monetary item account CR
-      debitId  = fxPnlId;
-      creditId = arApAccountId;
-    }
+    // Direction depends ONLY on whether the realised difference is a gain or loss
+    // (the AR-vs-AP distinction is already baked into `isGain` by computeRealisedFx).
+    // The FX entry corrects the monetary account back to its booked carrying value:
+    //   Gain → DR Accounts Receivable/Payable      / CR FX Gain
+    //   Loss → DR FX Loss                           / CR Accounts Receivable/Payable
+    // (The previous dead-code path additionally flipped sides for payables, which
+    //  double-corrected the polarity — removed.)
+    const debitId  = isGain ? arApAccountId : fxPnlId;
+    const creditId = isGain ? fxPnlId : arApAccountId;
 
-    // AP: flip sides (AP is a liability, so the gain/loss polarity is reversed)
-    if (!isReceivable) {
-      [debitId, creditId] = [creditId, debitId];
-    }
+    // Post atomically + idempotently through the canonical poster (audit A4/A5):
+    // the JE and both running-balance updates commit together (joining the
+    // caller's settlement transaction when a session is supplied), and the
+    // idempotencyKey makes a retried settlement a no-op instead of a double-post.
+    const idempotencyKey = settlementId
+      ? `fx:realised:${parentId}:${settlementId}`
+      : `fx:realised:${parentId}:${new Date(transactionDate).toISOString()}`;
 
-    const entry = await JournalEntry.create({
+    const entry = await postCompoundJournal({
       businessId,
       transactionDate,
-      description:      description || `Realised FX ${isGain ? 'Gain' : 'Loss'}`,
+      description:       description || `Realised FX ${isGain ? 'Gain' : 'Loss'}`,
       transactionType:  isGain ? TRANSACTION_TYPES.FX_GAIN : TRANSACTION_TYPES.FX_LOSS,
-      amount:           fxAmount,
       baseCurrencyAmount: fxAmount,
       exchangeRate:     1,
-      debitAccountId:   debitId,
-      creditAccountId:  creditId,
       inputMethod:      INPUT_METHODS.FORM,
       status:           JOURNAL_STATUS.POSTED,
       transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
       entryType:        'adjusting',
       createdBy:        userId,
       lastModifiedBy:   userId,
-      ...(parentId ? { metadata: { fxSourceTransactionId: parentId.toString() } } : {}),
-    });
-
-    // Update running balances
-    await applyRunningBalance(debitId,  fxAmount, 'debit');
-    await applyRunningBalance(creditId, fxAmount, 'credit');
+      metadata: {
+        realisedFx: true,
+        ...(parentId ? { fxSourceTransactionId: parentId.toString() } : {}),
+        ...(settlementId ? { fxSettlementId: settlementId.toString() } : {}),
+      },
+      idempotencyKey,
+      lines: [
+        { accountId: debitId,  type: 'debit',  amount: fxAmount },
+        { accountId: creditId, type: 'credit', amount: fxAmount },
+      ],
+    }, { session });
 
     reportCache.invalidate(String(businessId));
-    logger.info(`[FX] Realised ${isGain ? 'gain' : 'loss'} of ${fxAmount} recorded — journal ${entry._id}`);
+    logger.info(`[FX] Realised ${isGain ? 'gain' : 'loss'} of ${fxAmount} recorded — journal ${entry?._id}`);
     return entry;
   }
 
@@ -320,3 +350,4 @@ class JournalGeneratorService {
 
 module.exports = new JournalGeneratorService();
 module.exports.buildUnrealisedFxRevaluation = buildUnrealisedFxRevaluation;
+module.exports.computeRealisedFx = computeRealisedFx;
