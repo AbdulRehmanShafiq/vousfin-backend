@@ -3,6 +3,10 @@
 // Phase 3.1 — Unit tests for goodsReceipt.service.js.
 //
 jest.mock('../../../services/audit.service');
+// A13 — stub transaction.service so cancel's reverseTransaction call is trackable.
+jest.mock('../../../services/transaction.service', () => ({
+  reverseTransaction: jest.fn().mockResolvedValue({ _id: 'rev1' }),
+}));
 jest.mock('../../../services/purchaseOrder.service', () => ({
   recordGrnReceipt: jest.fn().mockResolvedValue({}),
 }));
@@ -101,6 +105,7 @@ const poService     = require('../../../services/purchaseOrder.service');
 const inventoryService = require('../../../services/inventory.service');
 const { postCompoundJournal } = require('../../../services/ledgerPosting.service');
 const { businessEvents, EVENTS } = require('../../../services/businessEventEngine.service');
+const transactionService = require('../../../services/transaction.service');
 
 const USER = { _id: 'u1', fullName: 'Bob Warehouse', email: 'bob@x', role: 'warehouse' };
 const BIZ  = 'biz1';
@@ -110,6 +115,7 @@ const LINE_1  = PurchaseOrder.__mockPO.lineItems[0]._id;
 const LINE_2  = PurchaseOrder.__mockPO.lineItems[1]._id;
 
 beforeEach(() => {
+  jest.restoreAllMocks(); // undo any jest.spyOn() patches from the previous test
   jest.clearAllMocks();
   GoodsReceipt.__reset();
   auditService.log       = jest.fn().mockResolvedValue(undefined);
@@ -229,6 +235,58 @@ describe('grnService.cancel()', () => {
     grn.state = 'reconciled';
     await grn.save();
     await expect(grnService.cancel(grn._id, USER, 'test')).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  // A13 — cancelling a confirmed GRN with a posted GRNI accrual must reverse it.
+  test('cancel reverses the GRNI journal when one was posted', async () => {
+    const mongoose = require('mongoose');
+    // Build a confirmed GRN with a GL journal already posted.
+    const grn = await grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(),
+        receivedItems: [{ poLineItemId: LINE_1, name: 'W', quantityOrdered: 5, quantityReceived: 5, unitCost: 100 }] },
+      USER
+    );
+    grn.state = 'confirmed';
+    grn.glJournalId = new mongoose.Types.ObjectId('aaaaaaaaaaaaaaaaaaaaaaaa');
+    grn.inventoryApplied = true;
+    // Stub _loadOrThrow to bypass the findOne mock (which returns null for businessId-scoped queries)
+    // Use jest.spyOn so it is automatically restored by jest.restoreAllMocks() / afterEach.
+    jest.spyOn(grnService, '_loadOrThrow').mockResolvedValue(grn);
+
+    const revSpy = jest.spyOn(transactionService, 'reverseTransaction');
+    await grnService.cancel(grn._id, { _id: 'u1', businessId: BIZ }, 'wrong delivery', '0.0.0.0');
+
+    expect(revSpy).toHaveBeenCalledWith(
+      'aaaaaaaaaaaaaaaaaaaaaaaa',
+      expect.anything(),
+      expect.objectContaining({ reason: expect.stringContaining('cancelled') }),
+      'u1',
+      '0.0.0.0'
+    );
+    // glJournalId must be cleared after reversal
+    expect(grn.glJournalId).toBeNull();
+    // inventoryApplied must be cleared so the receipt nets to zero
+    expect(grn.inventoryApplied).toBe(false);
+  });
+
+  // A13 — cancel must re-throw if the reversal fails (no swallow)
+  test('cancel re-throws when reversal fails (no silent swallow)', async () => {
+    const mongoose = require('mongoose');
+    const grn = await grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(),
+        receivedItems: [{ poLineItemId: LINE_1, name: 'W', quantityOrdered: 5, quantityReceived: 5, unitCost: 100 }] },
+      USER
+    );
+    grn.state = 'confirmed';
+    grn.glJournalId = new mongoose.Types.ObjectId('bbbbbbbbbbbbbbbbbbbbbbbb');
+    grn.inventoryApplied = true;
+
+    jest.spyOn(grnService, '_loadOrThrow').mockResolvedValue(grn);
+
+    transactionService.reverseTransaction.mockRejectedValueOnce(new Error('GL reversal failed'));
+    await expect(
+      grnService.cancel(grn._id, { _id: 'u1', businessId: BIZ }, 'bad receipt', '0.0.0.0')
+    ).rejects.toThrow('GL reversal failed');
   });
 });
 

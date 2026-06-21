@@ -455,6 +455,41 @@ class GoodsReceiptService {
 
   async cancel(id, user, reason, ipAddress) {
     const grn = await this._loadOrThrow(id, user?.businessId);
+
+    // A13 — if this GRN had a GRNI accrual journal posted on confirm, reverse it so
+    // the cancellation nets to zero in the GL (DR GRNI / CR Inventory). Must happen
+    // BEFORE the state transition so a failure rolls back without leaving a
+    // partially-cancelled record. Re-throw on failure — never swallow.
+    if (grn.glJournalId) {
+      const transactionService = require('./transaction.service');
+      await transactionService.reverseTransaction(
+        grn.glJournalId.toString(),
+        grn.businessId.toString(),
+        { reason: `GRN ${grn.grnNumber} cancelled` },
+        user._id,
+        ipAddress,
+      );
+      grn.glJournalId = null;
+    }
+
+    // Reverse physical stock increments applied on confirm so the subledger nets to zero.
+    if (grn.inventoryApplied) {
+      for (const ri of (grn.receivedItems || [])) {
+        if (!ri.inventoryItemId) continue; // service / untracked — no stock leg
+        const acceptedQty = Math.max(0, Number(ri.quantityReceived || 0) - Number(ri.quantityRejected || 0));
+        if (acceptedQty <= 0) continue;
+        try {
+          await inventoryService.reduceStock(grn.businessId.toString(), ri.inventoryItemId, acceptedQty);
+        } catch (e) {
+          // Log and re-throw: a stock reversal failure means GL and subledger are out
+          // of sync — the caller must retry, not swallow.
+          logger.error(`[grn] cancel: stock reversal failed for item ${ri.inventoryItemId}: ${e.message}`);
+          throw e;
+        }
+      }
+      grn.inventoryApplied = false;
+    }
+
     return this._applyStateChange(grn, GRN_STATES.CANCELLED, user, { reason, ipAddress });
   }
 
