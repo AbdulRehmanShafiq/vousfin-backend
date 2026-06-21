@@ -107,6 +107,7 @@ class VendorCreditService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the vendor credit document was already persisted.
       logger.warn(`[vc] audit logCreate failed: ${e.message}`);
     }
     return vc;
@@ -195,6 +196,7 @@ class VendorCreditService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the credit application was already committed.
       logger.warn(`[vc] audit applyToBill failed: ${e.message}`);
     }
     return vc;
@@ -309,6 +311,7 @@ class VendorCreditService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the cancellation state was already persisted.
       logger.warn(`[vc] audit cancel failed: ${e.message}`);
     }
     return vc;
@@ -332,6 +335,7 @@ class VendorCreditService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the soft-delete was already committed.
       logger.warn(`[vc] audit logDelete failed: ${e.message}`);
     }
     return vc;

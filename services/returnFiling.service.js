@@ -63,7 +63,7 @@ async function submitReturn(businessId, returnId, performedBy, opts = {}) {
         action: AUDIT_ACTIONS.FILED, performedBy,
         afterState: { ackNumber: result.ackNumber, mode: 'iris', returnType: ret.returnType, period: ret.period },
       });
-    } catch (e) { logger.warn(`[filing] audit failed: ${e.message}`); }
+    } catch (e) { /* best-effort: audit-log write; the FBR filing result was already persisted */ logger.warn(`[filing] audit failed: ${e.message}`); }
     return { mode: 'iris', ackNumber: result.ackNumber, return: updated };
   }
 

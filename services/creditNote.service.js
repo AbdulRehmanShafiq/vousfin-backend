@@ -125,6 +125,7 @@ class CreditNoteService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the credit note document was already persisted.
       logger.warn(`[creditNote] audit logCreate failed: ${e.message}`);
     }
     return cn;

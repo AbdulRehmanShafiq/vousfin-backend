@@ -391,6 +391,7 @@ class BillMatchingService {
     try {
       po = await PurchaseOrder.findOne({ _id: bill.purchaseOrderId, businessId });
     } catch (e) {
+      // best-effort: PO load is a read for match-validation only; the bill is already persisted and match proceeds without PO data.
       logger.warn(`[billMatch] could not load PO ${bill.purchaseOrderId}: ${e.message}`);
     }
 

@@ -212,6 +212,7 @@ class ArApVoidCreditService {
         performedByName: user.fullName || user.email || 'User', afterState: after, ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the void/credit action was already committed.
       logger.warn(`[arApVoidCredit] audit failed: ${e.message}`);
     }
   }

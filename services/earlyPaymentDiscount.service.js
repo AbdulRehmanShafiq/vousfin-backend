@@ -116,6 +116,7 @@ class EarlyPaymentDiscountService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the discount was already applied and saved.
       logger.warn(`[earlyPaymentDiscount] audit failed: ${e.message}`);
     }
 

@@ -108,6 +108,7 @@ class InvoiceService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the invoice state was already persisted above.
       logger.warn(`[invoice] audit log failed for state change ${fromState}→${toState}: ${e.message}`);
     }
     return invoice;
@@ -177,6 +178,7 @@ class InvoiceService {
         data.amount || 0, txnCurrency, data.businessId, data.issueDate
       );
     } catch (e) {
+      // best-effort: FX rate lookup is enrichment only; falling back to 1:1 rate so the invoice is still created.
       logger.warn(`[invoice] FX prepareFxFields failed (non-fatal): ${e.message}`);
       fxFields = { currencyCode: txnCurrency, exchangeRate: 1, baseCurrencyAmount: data.amount || 0 };
     }
@@ -250,6 +252,7 @@ class InvoiceService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the invoice document was already persisted.
       logger.warn(`[invoice] audit logCreate failed: ${e.message}`);
     }
     return invoice;
@@ -330,6 +333,7 @@ class InvoiceService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the draft update was already saved.
       logger.warn(`[invoice] audit log (updateDraft) failed: ${e.message}`);
     }
     return invoice;
@@ -661,6 +665,7 @@ class InvoiceService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the soft-delete was already committed.
       logger.warn(`[invoice] audit logDelete failed: ${e.message}`);
     }
     return invoice;
@@ -1018,6 +1023,7 @@ class InvoiceService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the synced invoice was already persisted.
       logger.warn(`[invoice] audit logCreate (sync) failed: ${e.message}`);
     }
     return invoice;

@@ -163,6 +163,7 @@ class InvoiceSchedulerService {
           scheduleId: sched._id, invoiceNumber: invoice.invoiceNumber,
         });
       } catch (err) {
+        // best-effort: one schedule's failure must not abort the whole cron run; remaining schedules still generate their invoices.
         logger.error(`[invoice-scheduler] failed to generate invoice from schedule ${sched._id}: ${err.message}`);
       }
     }
@@ -219,6 +220,7 @@ class InvoiceSchedulerService {
         afterState: { invoiceNumber, scheduleId: sched._id },
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the generated invoice was already persisted.
       logger.warn(`[invoice-scheduler] audit failed: ${e.message}`);
     }
 

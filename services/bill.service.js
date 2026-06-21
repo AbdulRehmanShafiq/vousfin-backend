@@ -86,6 +86,7 @@ class BillService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the bill state was already persisted above.
       logger.warn(`[bill] audit log failed for state change ${fromState}→${toState}: ${e.message}`);
     }
     return bill;
@@ -191,6 +192,7 @@ class BillService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the bill document was already persisted.
       logger.warn(`[bill] audit logCreate failed: ${e.message}`);
     }
     return bill;
@@ -276,6 +278,7 @@ class BillService {
     try {
       await billMatchingService.runFullMatch(id, bill.businessId.toString());
     } catch (e) {
+      // best-effort: 3-way match is a validation check; the AP journal (below) is the money write and is not swallowed.
       logger.warn(`[bill] 3-way match failed on approval for ${bill.billNumber}: ${e.message}`);
     }
     // Post the AP liability journal. Do NOT swallow a failure here — the GL must
@@ -416,6 +419,7 @@ class BillService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the draft update was already saved.
       logger.warn(`[bill] audit log (updateDraft) failed: ${e.message}`);
     }
     return bill;
@@ -737,6 +741,7 @@ class BillService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the soft-delete was already committed.
       logger.warn(`[bill] audit logDelete failed: ${e.message}`);
     }
     return bill;
@@ -812,6 +817,7 @@ class BillService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the synced bill was already persisted.
       logger.warn(`[bill] audit logCreate (sync) failed: ${e.message}`);
     }
     return bill;

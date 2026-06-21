@@ -108,7 +108,7 @@ class TransactionTemplateService {
         action: AUDIT_ACTIONS.CREATED, performedBy: actor.id, performedByName: actor.fullName,
         afterState: { name: tpl.name, isRecurring, recurrencePattern: tpl.recurrencePattern },
       });
-    } catch (e) { logger.warn(`[template] audit failed: ${e.message}`); }
+    } catch (e) { /* best-effort: audit-log write; the template was already persisted */ logger.warn(`[template] audit failed: ${e.message}`); }
 
     logger.info(`[template] created ${tpl._id} (recurring=${isRecurring})`);
     return tpl;

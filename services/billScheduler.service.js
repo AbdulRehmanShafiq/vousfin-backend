@@ -161,6 +161,7 @@ class BillSchedulerService {
         });
 
       } catch (err) {
+        // best-effort: one schedule's failure must not abort the whole cron run; remaining schedules still generate their bills.
         logger.error(`[scheduler] failed to generate bill from schedule ${sched._id}: ${err.message}`);
       }
     }

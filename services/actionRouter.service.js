@@ -30,7 +30,7 @@ async function audit(action, performedBy, auditAction, afterState) {
       performedBy: performedBy || null,
       afterState: { capability: action.capability, type: action.type, ...afterState },
     });
-  } catch (e) { logger.warn(`[actionRouter] audit failed: ${e.message}`); }
+  } catch (e) { /* best-effort: audit-log write; the action record was already persisted */ logger.warn(`[actionRouter] audit failed: ${e.message}`); }
 }
 
 /** Run an executor against a persisted action and record the outcome. */
@@ -94,7 +94,7 @@ async function reject(businessId, id, performedBy) {
   const updated = await repo.update(id, { $set: { status: S.REJECTED, decidedBy: performedBy, decidedAt: new Date() } });
   await audit(a, performedBy, AUDIT_ACTIONS.REJECTED, { status: 'rejected' });
   const onReject = executors.rejecter(a.type);
-  if (onReject) { try { await onReject(a); } catch (e) { logger.warn(`[actionRouter] onReject failed: ${e.message}`); } }
+  if (onReject) { try { await onReject(a); } catch (e) { /* best-effort: onReject is a cleanup hook; the rejection itself is already recorded */ logger.warn(`[actionRouter] onReject failed: ${e.message}`); } }
   return updated;
 }
 

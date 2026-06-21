@@ -80,6 +80,7 @@ class PurchaseOrderService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the PO state was already persisted above.
       logger.warn(`[po] audit state-change failed (${fromState}→${toState}): ${e.message}`);
     }
     return po;
@@ -175,6 +176,7 @@ class PurchaseOrderService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the PO document was already persisted.
       logger.warn(`[po] audit logCreate failed: ${e.message}`);
     }
     return po;
@@ -214,6 +216,7 @@ class PurchaseOrderService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the draft update was already saved.
       logger.warn(`[po] audit updateDraft failed: ${e.message}`);
     }
     return po;
@@ -356,6 +359,7 @@ class PurchaseOrderService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the soft-delete was already committed.
       logger.warn(`[po] audit logDelete failed: ${e.message}`);
     }
     return po;

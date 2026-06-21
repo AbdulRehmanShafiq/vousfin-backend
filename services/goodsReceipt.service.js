@@ -70,6 +70,7 @@ class GoodsReceiptService {
         ipAddress,
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the GRN state was already saved above.
       logger.warn(`[grn] audit state-change failed (${fromState}→${toState}): ${e.message}`);
     }
     return grn;
@@ -209,6 +210,7 @@ class GoodsReceiptService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the GRN document was already persisted.
       logger.warn(`[grn] audit logCreate failed: ${e.message}`);
     }
     return grn;
@@ -258,6 +260,8 @@ class GoodsReceiptService {
         user
       );
     } catch (e) {
+      // best-effort: PO quantity sync is a convenience mirror; the GRN and GL are the
+      // source of truth, so a sync hiccup must not block confirming the receipt.
       logger.warn(`[grn] failed to update PO quantities: ${e.message}`);
     }
 
@@ -420,6 +424,7 @@ class GoodsReceiptService {
         ipAddress
       );
     } catch (e) {
+      // best-effort: audit-log write is observability only; the soft-delete was already committed.
       logger.warn(`[grn] audit logDelete failed: ${e.message}`);
     }
     return grn;

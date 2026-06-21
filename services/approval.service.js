@@ -61,7 +61,7 @@ class ApprovalService {
         action: AUDIT_ACTIONS.EDITED, performedBy: actor.id, performedByName: actor.fullName,
         afterState: { approvalSettings: biz.approvalSettings },
       });
-    } catch (e) { logger.warn(`[approval] settings audit failed: ${e.message}`); }
+    } catch (e) { /* best-effort: audit-log write; settings were already saved */ logger.warn(`[approval] settings audit failed: ${e.message}`); }
 
     return { ...DEFAULT_SETTINGS, ...(biz.approvalSettings || {}) };
   }
@@ -125,7 +125,7 @@ class ApprovalService {
         action: AUDIT_ACTIONS.SUBMITTED, performedBy: actor.id, performedByName: actor.fullName,
         ipAddress, afterState: { amount, description: txData.description, threshold: decision.threshold },
       });
-    } catch (e) { logger.warn(`[approval] submit audit failed: ${e.message}`); }
+    } catch (e) { /* best-effort: audit-log write; the pending transaction was already parked */ logger.warn(`[approval] submit audit failed: ${e.message}`); }
 
     logger.info(`[approval] parked pending ${pending._id} (amount=${amount} > threshold=${decision.threshold})`);
     return { pendingApproval: true, pendingTransaction: pending, threshold: decision.threshold };
@@ -206,7 +206,7 @@ class ApprovalService {
         ipAddress, beforeState: { status: 'pending' },
         afterState: { status: 'approved', journalEntryId: jeId },
       });
-    } catch (e) { logger.warn(`[approval] approve audit failed: ${e.message}`); }
+    } catch (e) { /* best-effort: audit-log write; the approval and JE were already committed */ logger.warn(`[approval] approve audit failed: ${e.message}`); }
 
     logger.info(`[approval] approved ${pending._id} → posted JE ${jeId}`);
     return { pendingTransaction: updated.toJSON(), transaction };
@@ -235,7 +235,7 @@ class ApprovalService {
         action: AUDIT_ACTIONS.REJECTED, performedBy: actor.id, performedByName: actor.fullName,
         ipAddress, beforeState: { status: 'pending' }, afterState: { status: 'rejected', reason },
       });
-    } catch (e) { logger.warn(`[approval] reject audit failed: ${e.message}`); }
+    } catch (e) { /* best-effort: audit-log write; the rejection state was already persisted */ logger.warn(`[approval] reject audit failed: ${e.message}`); }
 
     logger.info(`[approval] rejected ${pending._id}`);
     return pending.toJSON();

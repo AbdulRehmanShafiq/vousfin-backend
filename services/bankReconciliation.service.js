@@ -197,7 +197,7 @@ class BankReconciliationService {
         action: AUDIT_ACTIONS.CREATED, performedBy: actor.id, performedByName: actor.fullName,
         afterState: { name: statement.name, lines: lines.length, autoMatched: autoCount },
       });
-    } catch (e) { logger.warn(`[reconcile] import audit failed: ${e.message}`); }
+    } catch (e) { /* best-effort: audit-log write; the bank statement import was already persisted */ logger.warn(`[reconcile] import audit failed: ${e.message}`); }
 
     logger.info(`[reconcile] imported statement ${statement._id}: ${lines.length} lines, ${autoCount} auto-matched`);
     return this.getStatement(statement._id, businessId);

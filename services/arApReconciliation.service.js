@@ -142,6 +142,7 @@ class ArApReconciliationService {
         afterState:      { state: doc.state, paidAmount: paid, remainingBalance: remaining, reason: 'ledger_payment_reconcile' },
       });
     } catch (e) {
+      // best-effort: audit-log write is observability only; the reconciled state was already saved.
       logger.warn(`[arApReconcile] audit log failed for ${kind} ${doc._id}: ${e.message}`);
     }
 
