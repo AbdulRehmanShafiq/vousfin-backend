@@ -200,8 +200,9 @@ Extends `BaseRepository`. Adds: `findOwned(businessId)`, `findOwnedById(business
   3. Fetch once: current balances via `report.service._getBalancesAsOf` (export the
      helper or add a thin public `getBalancesAsOf`), period flows via
      `transactionRepository.getDebitCreditTotalsBetween`, and the comparative set if
-     enabled. Apply `filters.costCenterId` when present (flows filtered via
-     `EFFECTIVE_LINES_STAGE` cost-centre projection, consistent with variance.service).
+     enabled. (Cost-centre-scoped filtering is **deferred** — see Non-goals; the
+     `filters.costCenterId` field is retained on the model for forward-compat but is
+     not applied in this phase and no UI exposes it.)
   4. Assemble rows in `layout` order; subtotal rows sum preceding sibling rows;
      per row compute `{ current, prior?, change?, changePct? }`.
   5. Return `{ template:{id,name,baseType,comparative}, columns, rows, period, generatedAt }`.
@@ -254,8 +255,10 @@ existing reports router; `authMiddleware + requireBusiness` already applied ther
 ### 4.7 Acceptance
 
 Custom reports render < 5s. Comparative columns show absolute and % differences. Reports
-schedulable daily / weekly / monthly with auto-email. Cost-centre filter applies. Layout
-reorder + show/hide persists.
+schedulable daily / weekly / monthly with auto-email (each run renders the period implied
+by its frequency: daily → previous day, weekly → previous 7 days, monthly → previous
+calendar month). Layout reorder + show/hide persists. (Cost-centre-scoped filtering is
+deferred to a later phase — see Non-goals.)
 
 ---
 
@@ -309,3 +312,6 @@ with figures filled in; panel is collapsible and exports with the income stateme
 - No drag-and-drop builder (lightweight reorder instead).
 - No new charting; the builder renders tabular reports (with comparative columns).
 - No multi-format scheduled delivery beyond PDF in this phase (CSV is on-demand only).
+- No cost-centre-scoped report-builder filtering in this phase (niche power-user
+  feature; the `filters.costCenterId` field is kept on the model for forward-compat
+  but is not applied and no UI exposes it). Revisit when there is demand.
