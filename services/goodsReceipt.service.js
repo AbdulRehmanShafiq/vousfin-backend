@@ -313,6 +313,11 @@ class GoodsReceiptService {
    * @private
    */
   async _applyReceivedStock(grn, user) {
+    // Idempotency: the GL post is keyed (idempotencyKey), the subledger increment is
+    // guarded by inventoryApplied. On a replica set (production) all writes here commit
+    // atomically. On standalone Mongo (dev) withTransaction is non-atomic, so a crash
+    // between the GL commit and this guard-save could re-increment stock on retry —
+    // accepted: production runs on a replica set.
     if (grn.inventoryApplied && grn.glJournalId) {
       logger.debug(`[grn] stock + accrual already applied for ${grn.grnNumber} — skipping`);
       return;
@@ -326,7 +331,7 @@ class GoodsReceiptService {
       const acceptedQty = Math.max(0, Number(ri.quantityReceived || 0) - Number(ri.quantityRejected || 0));
       if (acceptedQty <= 0) continue;
       const unitCost = Number(ri.unitCost) || 0;
-      stockedLines.push({ ri, acceptedQty, unitCost, lineValue: Math.round(acceptedQty * unitCost * 100) / 100 });
+      stockedLines.push({ ri, acceptedQty, unitCost });
       inventoryValue = Math.round((inventoryValue + acceptedQty * unitCost) * 100) / 100;
     }
 
