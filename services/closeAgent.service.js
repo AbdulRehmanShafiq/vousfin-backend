@@ -101,11 +101,11 @@ async function executeCloseMonth(action) {
   if (period.status !== PERIOD_STATUS.OPEN) throw new Error(`The period is already ${period.status}.`);
 
   // 1. Post any recognition entries that have come due by period end.
-  let recognitionsPosted = 0;
-  try {
-    const r = await recognitionSchedule.postDueRecognitions(businessId, new Date(period.endDate));
-    recognitionsPosted = r?.linesPosted || 0;
-  } catch (e) { logger.warn(`[close] recognition posting failed: ${e.message}`); }
+  // Do NOT swallow — closing a period while its recognition entries failed to post
+  // would lock in understated revenue/expense (audit T3 sweep finding). A failure
+  // aborts the close; the period stays open for the owner to retry.
+  const r = await recognitionSchedule.postDueRecognitions(businessId, new Date(period.endDate));
+  const recognitionsPosted = r?.linesPosted || 0;
 
   // 2. Write up the month: CFO report + plain-language narrative (filed for the owner).
   let reportMonth = null;

@@ -88,8 +88,19 @@ describe('executeCloseMonth', () => {
     expect(accountingPeriod.closePeriod).not.toHaveBeenCalled();
   });
 
-  it('still closes even if recognition posting or the report fails (best-effort)', async () => {
+  it('ABORTS the close (rejects) if recognition posting fails — period stays open (audit T3)', async () => {
+    // A failed recognition post means revenue/expense would be understated in the closed period.
+    // The close must NOT proceed; accountingPeriod.closePeriod must NOT be called.
     recognitionSchedule.postDueRecognitions.mockRejectedValue(new Error('recog down'));
+    cfoReport.generate.mockResolvedValue({ month: '2026-05' });
+    accountingPeriod.closePeriod.mockResolvedValue({ status: 'closed' });
+    await expect(agent.executeCloseMonth(action)).rejects.toThrow('recog down');
+    expect(accountingPeriod.closePeriod).not.toHaveBeenCalled();
+  });
+
+  it('still closes even if the CFO report generation fails (genuinely best-effort)', async () => {
+    // Report generation is observability only — a failure there must NOT abort the close.
+    recognitionSchedule.postDueRecognitions.mockResolvedValue({ linesPosted: 0 });
     cfoReport.generate.mockRejectedValue(new Error('report down'));
     accountingPeriod.closePeriod.mockResolvedValue({ status: 'closed' });
     const r = await agent.executeCloseMonth(action);
