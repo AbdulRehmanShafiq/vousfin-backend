@@ -45,7 +45,11 @@ const update = async (req, res, next) => {
   try {
     const doc = await repo.findOwnedById(req.user.businessId, req.params.id);
     if (!doc) throw new ApiError(404, 'Report not found');
-    Object.assign(doc, req.body);
+    // Schedule changes go ONLY through setSchedule (which recomputes nextRunAt);
+    // businessId/createdBy are immutable. Strip them so a generic update can't
+    // overwrite the schedule (bypassing nextRunAt) or reassign ownership.
+    const { schedule, businessId, createdBy, _id, ...safe } = req.body;
+    Object.assign(doc, safe);
     await doc.save();
     ApiResponse.success(res, doc, 'Report updated');
   } catch (e) { next(e); }
