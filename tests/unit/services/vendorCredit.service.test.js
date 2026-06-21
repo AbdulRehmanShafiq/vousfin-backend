@@ -83,10 +83,29 @@ jest.mock('../../../models/VendorCredit.model', () => {
   return VendorCredit;
 });
 
+// GL deps for applyToBill() — vendor credits now post atomically (audit A9), so the
+// application must resolve accounts, a poster, the party-balance service and a txn wrapper.
+jest.mock('../../../models/ChartOfAccount.model', () => ({
+  findOne: jest.fn(() => ({
+    lean: () => Promise.resolve({ _id: new (require('mongoose').Types.ObjectId)() }),
+  })),
+}));
+jest.mock('../../../services/ledgerPosting.service', () => ({
+  postBalancedJournal: jest.fn().mockResolvedValue({ _id: 'je-vc' }),
+}));
+jest.mock('../../../services/partyBalance.service', () => ({
+  adjustPayable:    jest.fn().mockResolvedValue({}),
+  adjustReceivable: jest.fn().mockResolvedValue({}),
+}));
+jest.mock('../../../utils/withTransaction', () => ({
+  withTransaction: (fn) => fn(null),
+}));
+
 const VendorCredit = require('../../../models/VendorCredit.model');
 const Bill         = require('../../../models/Bill.model');
 const vcService    = require('../../../services/vendorCredit.service');
 const auditService = require('../../../services/audit.service');
+const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
 
 const USER = { _id: 'u1', fullName: 'Carol AP', email: 'carol@x', role: 'accountant' };
 const BIZ  = 'biz1';
@@ -196,6 +215,13 @@ describe('vcService.applyToBill()', () => {
     await vcService.applyToBill(vc._id, Bill.__mockBill._id, 1000, USER);
     expect(Bill.__mockBill.remainingBalance).toBe(4000); // 5000 - 1000
     expect(Bill.__mockBill.paidAmount).toBe(1000);
+  });
+
+  test('posts the credit-application journal inside the transaction session (audit A9)', async () => {
+    const vc = await makeCredit(1000);
+    await vcService.applyToBill(vc._id, Bill.__mockBill._id, 1000, USER);
+    // DR AP / CR credit posted through the poster with the txn session (null here).
+    expect(postBalancedJournal).toHaveBeenCalledWith(expect.any(Object), { session: null });
   });
 });
 

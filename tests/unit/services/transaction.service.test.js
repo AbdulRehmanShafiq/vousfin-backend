@@ -173,11 +173,13 @@ describe('TransactionService.deleteTransaction()', () => {
     const result = await transactionService.deleteTransaction('tx001', 'biz001', 'user1', '127.0.0.1');
     expect(result._id).toBe('tx_rev');
     // The reversal also stamps metadata.reversalId on the original for auditability.
+    // The 4th arg is the transaction session (audit A9 — all reversal writes are now
+    // joined to one withTransaction; null under the standalone unit-test runtime).
     expect(transactionRepository.updateTransaction).toHaveBeenCalledWith(
       'tx001', 'biz001', expect.objectContaining({
         status: 'reversed', paymentStatus: null, remainingBalance: 0,
         metadata: expect.objectContaining({ reversalId: 'tx_rev' }),
-      })
+      }), null
     );
   });
 });

@@ -20,6 +20,7 @@ const customerRepository = require('../repositories/customer.repository');
 const auditService = require('./audit.service');
 const partyBalanceService = require('./partyBalance.service');
 const { postBalancedJournal } = require('./ledgerPosting.service');
+const { withTransaction } = require('../utils/withTransaction');
 const { ApiError } = require('../utils/ApiError');
 const logger = require('../config/logger');
 const { ENTITY_TYPES, AUDIT_ACTIONS, TRANSACTION_TYPES } = require('../config/constants');
@@ -160,21 +161,25 @@ class CreditNoteService {
     const invoice = await Invoice.findById(cn.invoiceId);
     if (!invoice) throw new ApiError(404, 'Originating invoice not found');
 
-    if (cn.noteType === 'credit_note') {
-      invoice.totalCredited = (invoice.totalCredited || 0) + cn.totalAmount;
-      invoice.remainingBalance = Math.max(0, (invoice.remainingBalance ?? invoice.totalAmount) - cn.totalAmount);
-      if (!invoice.creditNoteIds) invoice.creditNoteIds = [];
-      invoice.creditNoteIds.push(cn._id);
-    } else {
-      // Debit note: increases amount owed
-      invoice.remainingBalance = (invoice.remainingBalance ?? invoice.totalAmount) + cn.totalAmount;
-    }
-    invoice.lastModifiedBy = user._id;
-    await invoice.save();
+    // All-or-nothing (audit A9): the invoice update, the GL posting, the AR
+    // adjustment and marking the note APPLIED must commit together. Previously the
+    // GL post sat in a try/catch that swallowed failures, so an invoice could be
+    // marked credited with no journal entry (document↔GL drift).
+    await withTransaction(async (s) => {
+      if (cn.noteType === 'credit_note') {
+        invoice.totalCredited = (invoice.totalCredited || 0) + cn.totalAmount;
+        invoice.remainingBalance = Math.max(0, (invoice.remainingBalance ?? invoice.totalAmount) - cn.totalAmount);
+        if (!invoice.creditNoteIds) invoice.creditNoteIds = [];
+        invoice.creditNoteIds.push(cn._id);
+      } else {
+        // Debit note: increases amount owed
+        invoice.remainingBalance = (invoice.remainingBalance ?? invoice.totalAmount) + cn.totalAmount;
+      }
+      invoice.lastModifiedBy = user._id;
+      await invoice.save({ session: s });
 
-    // Post GL journal entry for credit_note: DR Sales Returns & Allowances / CR Accounts Receivable
-    if (cn.noteType === 'credit_note') {
-      try {
+      // Post GL journal entry for credit_note: DR Sales Returns & Allowances / CR Accounts Receivable
+      if (cn.noteType === 'credit_note') {
         const [salesReturnsAcct, arAcct] = await Promise.all([
           ChartOfAccount.findOne({
             businessId: cn.businessId,
@@ -186,53 +191,53 @@ class CreditNoteService {
           }).lean(),
         ]);
 
-        if (salesReturnsAcct && arAcct) {
-          const je = await postBalancedJournal({
-            businessId:         cn.businessId,
-            transactionDate:    new Date(),
-            description:        `Credit Note ${cn.creditNoteNumber} applied to ${cn.invoiceNumber || invoice.invoiceNumber}`,
-            transactionType:    TRANSACTION_TYPES.REFUND,
-            amount:             cn.totalAmount,
-            debitAccountId:     salesReturnsAcct._id,
-            creditAccountId:    arAcct._id,
-            transactionSource:  'system_generated',
-            status:             'posted',
-            entryType:          'adjusting',
-            createdBy:          user._id,
-            lastModifiedBy:     user._id,
-            currencyCode:       cn.currencyCode || 'PKR',
-            baseCurrencyCode:   cn.baseCurrencyCode || 'PKR',
-            exchangeRate:       cn.exchangeRate || 1,
-            baseCurrencyAmount: cn.totalAmount,
-          });
-          cn.linkedJournalEntryId = je._id;
-
-          // Decrement the customer's receivable balance
-          if (invoice.customerId) {
-            await partyBalanceService.adjustReceivable(
-              cn.businessId,
-              invoice.customerId,
-              -cn.totalAmount,
-              {
-                userId:     user._id,
-                reason:     'credit_note_applied',
-                entityType: 'creditNote',
-                entityId:   cn._id,
-              }
-            );
-          }
-        } else {
-          logger.warn(`[creditNote.apply] Could not find Sales Returns or AR account for business ${cn.businessId} — GL not posted`);
+        if (!salesReturnsAcct || !arAcct) {
+          // Can't post → fail the whole apply (rolls back) rather than silently
+          // marking the invoice credited with no journal entry.
+          throw new ApiError(500, 'Cannot apply credit note: Sales Returns (4115) or Accounts Receivable (1110) account is not set up.');
         }
-      } catch (glErr) {
-        logger.error(`[creditNote.apply] GL posting failed for ${cn.creditNoteNumber}: ${glErr.message}`);
-        // Do NOT re-throw — the credit note application still proceeds; GL drift is logged
-      }
-    }
 
-    cn.state = 'applied';
-    cn.lastModifiedBy = user._id;
-    await cn.save();
+        const je = await postBalancedJournal({
+          businessId:         cn.businessId,
+          transactionDate:    new Date(),
+          description:        `Credit Note ${cn.creditNoteNumber} applied to ${cn.invoiceNumber || invoice.invoiceNumber}`,
+          transactionType:    TRANSACTION_TYPES.REFUND,
+          amount:             cn.totalAmount,
+          debitAccountId:     salesReturnsAcct._id,
+          creditAccountId:    arAcct._id,
+          transactionSource:  'system_generated',
+          status:             'posted',
+          entryType:          'adjusting',
+          createdBy:          user._id,
+          lastModifiedBy:     user._id,
+          currencyCode:       cn.currencyCode || 'PKR',
+          baseCurrencyCode:   cn.baseCurrencyCode || 'PKR',
+          exchangeRate:       cn.exchangeRate || 1,
+          baseCurrencyAmount: cn.totalAmount,
+        }, { session: s });
+        cn.linkedJournalEntryId = je._id;
+
+        // Decrement the customer's receivable balance
+        if (invoice.customerId) {
+          await partyBalanceService.adjustReceivable(
+            cn.businessId,
+            invoice.customerId,
+            -cn.totalAmount,
+            {
+              userId:     user._id,
+              reason:     'credit_note_applied',
+              entityType: 'creditNote',
+              entityId:   cn._id,
+              session:    s,
+            }
+          );
+        }
+      }
+
+      cn.state = 'applied';
+      cn.lastModifiedBy = user._id;
+      await cn.save({ session: s });
+    });
     return cn;
   }
 

@@ -73,7 +73,26 @@ jest.mock('../../../models/Invoice.model', () => {
   return Invoice;
 });
 
+// GL deps for apply() — credit notes now post atomically (audit A9), so the test
+// must provide the accounts, poster, party-balance service and txn wrapper.
+jest.mock('../../../models/ChartOfAccount.model', () => ({
+  findOne: jest.fn(() => ({
+    lean: () => Promise.resolve({ _id: new (require('mongoose').Types.ObjectId)() }),
+  })),
+}));
+jest.mock('../../../services/ledgerPosting.service', () => ({
+  postBalancedJournal: jest.fn().mockResolvedValue({ _id: 'je-cn' }),
+}));
+jest.mock('../../../services/partyBalance.service', () => ({
+  adjustReceivable: jest.fn().mockResolvedValue({}),
+  adjustPayable:    jest.fn().mockResolvedValue({}),
+}));
+jest.mock('../../../utils/withTransaction', () => ({
+  withTransaction: (fn) => fn(null), // run the unit without a real session
+}));
+
 const creditNoteService = require('../../../services/creditNote.service');
+const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
 
 const user = { _id: new mongoose.Types.ObjectId(), fullName: 'Tester', email: 'test@test.com', role: 'owner' };
 
@@ -187,6 +206,20 @@ describe('CreditNote — approve + apply', () => {
     expect(updatedInv.totalCredited).toBe(1500);
     expect(updatedInv.remainingBalance).toBe(3500);
     expect(updatedInv.creditNoteIds.length).toBe(1);
+  });
+
+  test('apply posts the GL entry inside the transaction session (audit A9)', async () => {
+    const inv = seedInvoice({ totalAmount: 5000, remainingBalance: 5000, customerId: new mongoose.Types.ObjectId() });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId, invoiceId: inv._id,
+      creditNoteNumber: 'CN-ATOMIC', issueDate: new Date(), totalAmount: 1000,
+    }, user, '127.0.0.1');
+    await creditNoteService.approve(cn._id, user);
+    const applied = await creditNoteService.apply(cn._id, user);
+
+    expect(applied.state).toBe('applied');
+    // The poster is invoked with the session arg from withTransaction (null here).
+    expect(postBalancedJournal).toHaveBeenCalledWith(expect.any(Object), { session: null });
   });
 });
 

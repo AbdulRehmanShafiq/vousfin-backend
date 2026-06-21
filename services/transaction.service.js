@@ -1261,37 +1261,45 @@ class TransactionService {
       }));
     }
 
-    // 4. Persist reversal entry
-    const reversal = await transactionRepository.createTransaction(reversalData);
+    // 4-7. All-or-nothing (audit A9/A3): the reversal entry, both running-balance
+    // updates, the party AR/AP rollback, and marking the original REVERSED must
+    // commit together or all roll back — otherwise a mid-sequence failure drifts
+    // the trial balance or double-counts the position.
+    const reversal = await withTransaction(async (s) => {
+      // 4. Persist reversal entry
+      const rev = await transactionRepository.createTransaction(reversalData, s);
 
-    // 5. Update account balances
-    if (reversalData.journalLines?.length > 0) {
-      for (const line of reversalData.journalLines) {
-        await this._updateAccountBalance(line.accountId, line.amount, line.type);
+      // 5. Update account balances
+      if (reversalData.journalLines?.length > 0) {
+        for (const line of reversalData.journalLines) {
+          await this._updateAccountBalance(line.accountId, line.amount, line.type, s);
+        }
+      } else {
+        await this._updateAccountBalance(rev.debitAccountId,  original.amount, 'debit',  s);
+        await this._updateAccountBalance(rev.creditAccountId, original.amount, 'credit', s);
       }
-    } else {
-      await this._updateAccountBalance(reversal.debitAccountId,  original.amount, 'debit');
-      await this._updateAccountBalance(reversal.creditAccountId, original.amount, 'credit');
-    }
 
-    // 6. Roll back customer / vendor AR/AP balances (centralized — emits *_BALANCE_CHANGED)
-    if (original.transactionType === TRANSACTION_TYPES.CREDIT_SALE && original.customerId) {
-      await partyBalanceService.adjustReceivable(businessId, original.customerId._id, -original.amount, {
-        userId, reason: 'reversal', entityType: ENTITY_TYPES.JOURNAL_ENTRY, entityId: original._id,
-      });
-    } else if (original.transactionType === TRANSACTION_TYPES.CREDIT_PURCHASE && original.vendorId) {
-      await partyBalanceService.adjustPayable(businessId, original.vendorId._id, -original.amount, {
-        userId, reason: 'reversal', entityType: ENTITY_TYPES.JOURNAL_ENTRY, entityId: original._id,
-      });
-    }
+      // 6. Roll back customer / vendor AR/AP balances (centralized — emits *_BALANCE_CHANGED)
+      if (original.transactionType === TRANSACTION_TYPES.CREDIT_SALE && original.customerId) {
+        await partyBalanceService.adjustReceivable(businessId, original.customerId._id, -original.amount, {
+          userId, reason: 'reversal', entityType: ENTITY_TYPES.JOURNAL_ENTRY, entityId: original._id, session: s,
+        });
+      } else if (original.transactionType === TRANSACTION_TYPES.CREDIT_PURCHASE && original.vendorId) {
+        await partyBalanceService.adjustPayable(businessId, original.vendorId._id, -original.amount, {
+          userId, reason: 'reversal', entityType: ENTITY_TYPES.JOURNAL_ENTRY, entityId: original._id, session: s,
+        });
+      }
 
-    // 7. Mark original REVERSED; store forward reference to the reversal
-    const updatedMeta = { ...(original.metadata || {}), reversalId: reversal._id.toString() };
-    await transactionRepository.updateTransaction(transactionId, businessId, {
-      status:         JOURNAL_STATUS.REVERSED,
-      paymentStatus:  null,
-      remainingBalance: 0,
-      metadata:       updatedMeta,
+      // 7. Mark original REVERSED; store forward reference to the reversal
+      const updatedMeta = { ...(original.metadata || {}), reversalId: rev._id.toString() };
+      await transactionRepository.updateTransaction(transactionId, businessId, {
+        status:         JOURNAL_STATUS.REVERSED,
+        paymentStatus:  null,
+        remainingBalance: 0,
+        metadata:       updatedMeta,
+      }, s);
+
+      return rev;
     });
 
     // 7b. Cascade: if this transaction has a linked installment plan, cancel it

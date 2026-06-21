@@ -19,6 +19,7 @@ const ChartOfAccount = require('../models/ChartOfAccount.model');
 const vendorRepository = require('../repositories/vendor.repository');
 const partyBalanceService = require('./partyBalance.service');     // ERP Step 4 — centralized AP balance
 const { postBalancedJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync
+const { withTransaction } = require('../utils/withTransaction');    // audit A9 — atomic multi-write
 const auditService = require('./audit.service');
 const { ApiError } = require('../utils/ApiError');
 const logger = require('../config/logger');
@@ -152,32 +153,35 @@ class VendorCreditService {
       throw new ApiError(409, `Cannot apply credit to bill in state "${bill.state}"`);
     }
 
-    // Record the application on the vendor credit
-    vc.appliedTransactions.push({
-      billId,
-      billNumber:    bill.billNumber,
-      appliedAmount: r2(amount),
-      appliedAt:     new Date(),
-      appliedBy:     user._id,
-      notes:         notes || null,
+    // All-or-nothing (audit A9): recording the application on the vendor credit,
+    // reducing the bill's balance, and posting the DR-AP/CR-credit journal (with the
+    // vendor payable adjustment) must commit together. Previously each ran as a
+    // separate write and the journal sat in a swallowing try/catch, so a bill could
+    // be marked paid-down with no journal and a stale vendor balance.
+    await withTransaction(async (s) => {
+      // Record the application on the vendor credit
+      vc.appliedTransactions.push({
+        billId,
+        billNumber:    bill.billNumber,
+        appliedAmount: r2(amount),
+        appliedAt:     new Date(),
+        appliedBy:     user._id,
+        notes:         notes || null,
+      });
+      // State and remainingAmount recomputed by pre-save hook
+      vc.lastModifiedBy = user._id;
+      await vc.save({ session: s });
+
+      // Reduce bill's remaining balance
+      const newPaid = r2((bill.paidAmount || 0) + amount);
+      bill.paidAmount = newPaid;
+      bill.remainingBalance = r2(Math.max(0, bill.totalAmount - newPaid));
+      bill.lastModifiedBy = user._id;
+      await bill.save({ session: s });
+
+      // Phase 3.2 — post vendor credit journal: DR AP, CR Vendor Credit
+      await this.postCreditApplicationJournal(vc, bill, amount, user, s);
     });
-    // State and remainingAmount recomputed by pre-save hook
-    vc.lastModifiedBy = user._id;
-    await vc.save();
-
-    // Reduce bill's remaining balance
-    const newPaid = r2((bill.paidAmount || 0) + amount);
-    bill.paidAmount = newPaid;
-    bill.remainingBalance = r2(Math.max(0, bill.totalAmount - newPaid));
-    bill.lastModifiedBy = user._id;
-    await bill.save();
-
-    // Phase 3.2 — post vendor credit journal: DR AP, CR Vendor Credit
-    try {
-      await this.postCreditApplicationJournal(vc, bill, amount, user);
-    } catch (e) {
-      logger.warn(`[vc] journal for credit application failed: ${e.message}`);
-    }
 
     try {
       await auditService.log({
@@ -218,7 +222,7 @@ class VendorCreditService {
    * @param {number} amount — Applied amount
    * @param {Object} user
    */
-  async postCreditApplicationJournal(vc, bill, amount, user) {
+  async postCreditApplicationJournal(vc, bill, amount, user, session = null) {
     const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
     const businessId = vc.businessId;
 
@@ -226,53 +230,52 @@ class VendorCreditService {
       businessId,
       accountCode: '2110',
     }).lean();
-    if (!apAccount) {
-      logger.warn('[vc] credit journal skipped — AP account (2110) not found');
-      return;
-    }
 
     // CR side: "Discount Received" (4180) or "Other Income" (4100) as fallback
     const crAccount = await ChartOfAccount.findOne({
       businessId,
       accountCode: { $in: ['4180', '4100', '4000'] },
     }).lean();
-    if (!crAccount) {
-      logger.warn('[vc] credit journal skipped — no suitable credit account found');
-      return;
+
+    // Can't post without both legs → fail the application (the caller's transaction
+    // rolls back) rather than silently marking the bill paid-down with no journal.
+    if (!apAccount) {
+      throw new ApiError(500, 'Cannot apply vendor credit: Accounts Payable (2110) account is not set up.');
     }
-    if (apAccount._id.toString() === crAccount._id.toString()) return;
+    if (!crAccount) {
+      throw new ApiError(500, 'Cannot apply vendor credit: a credit account (Discount Received 4180 / Other Income 4100) is not set up.');
+    }
+    if (apAccount._id.toString() === crAccount._id.toString()) {
+      throw new ApiError(500, 'Cannot apply vendor credit: AP and credit accounts resolve to the same account.');
+    }
 
     const appliedAmount = r2(amount);
     if (appliedAmount <= 0) return;
 
-    try {
-      await postBalancedJournal({
-        businessId,
-        transactionDate:  new Date(),
-        description:      `Vendor Credit Applied — ${vc.creditNumber} → Bill ${bill.billNumber}`,
-        transactionType:  TRANSACTION_TYPES.PAYMENT_MADE,
-        amount:           appliedAmount,
-        debitAccountId:   apAccount._id,   // DR Accounts Payable
-        creditAccountId:  crAccount._id,   // CR Vendor Credit / Discount Received
-        status:           JOURNAL_STATUS.POSTED,
-        transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
-        invoiceNumber:    bill.billNumber,
-        vendorId:         vc.vendorId || null,
-        currencyCode:     vc.currencyCode || 'PKR',
-        exchangeRate:     vc.exchangeRate || 1,
-        createdBy:        user._id,
-        lastModifiedBy:   user._id,
-      });
+    await postBalancedJournal({
+      businessId,
+      transactionDate:  new Date(),
+      description:      `Vendor Credit Applied — ${vc.creditNumber} → Bill ${bill.billNumber}`,
+      transactionType:  TRANSACTION_TYPES.PAYMENT_MADE,
+      amount:           appliedAmount,
+      debitAccountId:   apAccount._id,   // DR Accounts Payable
+      creditAccountId:  crAccount._id,   // CR Vendor Credit / Discount Received
+      status:           JOURNAL_STATUS.POSTED,
+      transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
+      invoiceNumber:    bill.billNumber,
+      vendorId:         vc.vendorId || null,
+      currencyCode:     vc.currencyCode || 'PKR',
+      exchangeRate:     vc.exchangeRate || 1,
+      createdBy:        user._id,
+      lastModifiedBy:   user._id,
+    }, { session });
 
-      // ERP Step 4: applying a credit reduces what we owe the vendor — mirror it
-      // onto the vendor's payable balance (DR AP) and broadcast the change.
-      if (vc.vendorId) {
-        await partyBalanceService.adjustPayable(businessId, vc.vendorId, -appliedAmount, {
-          userId: user._id, reason: 'vendor_credit_applied', entityType: ENTITY_TYPES.BILL, entityId: bill._id,
-        });
-      }
-    } catch (e) {
-      logger.error(`[vc] credit application journal failed: ${e.message}`);
+    // ERP Step 4: applying a credit reduces what we owe the vendor — mirror it
+    // onto the vendor's payable balance (DR AP) and broadcast the change.
+    if (vc.vendorId) {
+      await partyBalanceService.adjustPayable(businessId, vc.vendorId, -appliedAmount, {
+        userId: user._id, reason: 'vendor_credit_applied', entityType: ENTITY_TYPES.BILL, entityId: bill._id, session,
+      });
     }
   }
 
