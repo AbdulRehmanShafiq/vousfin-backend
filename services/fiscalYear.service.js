@@ -381,32 +381,44 @@ async function _runClosingEntries(businessId, bizId, fy, userId) {
     return { closingEntryIds: [], retainedEarningsTransferred: 0 };
   }
 
-  // Find a Cash or Revenue account to use as contra for the closing entry
-  // We create ONE summary closing journal entry: DR/CR Retained Earnings for net income
-  // This is the simplified direct-to-retained-earnings approach used by SME software
-  const systemAcct = await ChartOfAccount.findOne({
+  // Contra for the closing entry = the dedicated "Current Year Earnings" clearing
+  // account (3310 in DEFAULT_ACCOUNTS). Posting the net-income leg here instead of
+  // an arbitrary Revenue account avoids driving a real revenue account negative
+  // (audit A8). The Balance Sheet already folds this account's economic balance
+  // into its synthetic "Current Year Earnings" line (report.service `realCYEBalance`),
+  // so the synthetic line nets to zero after close and the profit lands in Retained
+  // Earnings — equity totals stay correct and the P&L is untouched (the closing
+  // legs hit equity-only accounts). Fall back to a Revenue account only if a
+  // business somehow lacks 3310, preserving the previous behaviour.
+  const clearingAcct = await ChartOfAccount.findOne({
+    businessId: bizId,
+    $or: [
+      { accountCode: '3310' },
+      { accountName: { $regex: /current.?year.?earnings/i } },
+    ],
+  }).lean() || await ChartOfAccount.findOne({
     businessId: bizId,
     accountType: 'Revenue',
   }).lean();
 
-  if (!systemAcct) {
-    logger.warn(`No Revenue account found for closing entry for business ${businessId}`);
+  if (!clearingAcct) {
+    logger.warn(`No Current Year Earnings / Revenue account found for closing entry for business ${businessId}`);
     return { closingEntryIds: [], retainedEarningsTransferred: 0 };
   }
 
-  // Net income > 0: CR Retained Earnings (equity increases), DR Income Summary (revenue-side)
-  // Net income < 0: DR Retained Earnings (equity decreases), CR Income Summary (expense-side)
+  // Net income > 0: DR Current Year Earnings / CR Retained Earnings (equity increases)
+  // Net income < 0: DR Retained Earnings / CR Current Year Earnings (equity decreases)
   let debitAccountId, creditAccountId, description;
 
   if (netIncome > 0) {
-    // Profit: transfer net income to Retained Earnings (credit)
-    debitAccountId  = systemAcct._id;          // temporary: debit the revenue account to close it
-    creditAccountId = retainedEarningsAcct._id; // credit retained earnings
+    // Profit: transfer net income into Retained Earnings (credit)
+    debitAccountId  = clearingAcct._id;         // DR Current Year Earnings clearing
+    creditAccountId = retainedEarningsAcct._id; // CR Retained Earnings
     description = `Year-end closing: Net income of ${Math.abs(netIncome).toLocaleString()} transferred to Retained Earnings (${fy.name})`;
   } else {
     // Loss: charge the net loss to Retained Earnings (debit)
-    debitAccountId  = retainedEarningsAcct._id; // debit retained earnings
-    creditAccountId = systemAcct._id;           // credit the revenue account side
+    debitAccountId  = retainedEarningsAcct._id; // DR Retained Earnings
+    creditAccountId = clearingAcct._id;         // CR Current Year Earnings clearing
     description = `Year-end closing: Net loss of ${Math.abs(netIncome).toLocaleString()} charged to Retained Earnings (${fy.name})`;
   }
 

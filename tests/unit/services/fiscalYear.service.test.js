@@ -42,6 +42,25 @@ const USER = oid().toString();
 
 const leanOf = (val) => ({ lean: () => Promise.resolve(val) });
 
+/**
+ * Classify a ChartOfAccount.findOne(query) the way the service issues them and
+ * return the matching account. Handles both `{ accountCode: '3310' }` and
+ * `{ accountName: { $regex: /.../i } }` forms used across the closing lookups.
+ */
+const makeAcctFindOne = ({ cyeId, reId, revId }) => (q) => {
+  const tokens = (q.$or || [])
+    .map(c => c.accountCode || (c.accountName && c.accountName.$regex && c.accountName.$regex.source) || '')
+    .join('|');
+  if (tokens.includes('3310') || /current.?year/i.test(tokens)) {
+    return leanOf({ _id: cyeId, accountName: 'Current Year Earnings' });
+  }
+  if (/retained/i.test(tokens)) {
+    return leanOf({ _id: reId, accountName: 'Retained Earnings' });
+  }
+  if (q.accountType === 'Revenue') return leanOf({ _id: revId, accountType: 'Revenue' });
+  return leanOf(null);
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
   // Legacy top-level aggregation path returns NOTHING — proves the service no
@@ -96,10 +115,8 @@ describe('closeFiscalYear — closing entry net income uses effective lines (A7)
     }));
     AccountingPeriod.countDocuments.mockResolvedValue(0); // no open periods
 
-    ChartOfAccount.findOne.mockImplementation((q) => {
-      if (q && q.accountType === 'Revenue') return leanOf({ _id: revId, accountType: 'Revenue' });
-      return leanOf({ _id: reId, accountName: 'Retained Earnings' });
-    });
+    const cyeId = oid();
+    ChartOfAccount.findOne.mockImplementation(makeAcctFindOne({ cyeId, reId, revId }));
     transactionRepository.getIncomeStatementData.mockResolvedValue({
       revenue:  [{ name: 'Sales', amount: 1000 }],
       expenses: [{ name: 'Cost of Goods Sold', amount: 600 }], // compound COGS leg
@@ -112,6 +129,55 @@ describe('closeFiscalYear — closing entry net income uses effective lines (A7)
       expect.objectContaining({ amount: 400 }) // 1000 - 600
     );
     expect(res.retainedEarningsTransferred).toBe(400);
+  });
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+//  A8 — closing entry debits the Current Year Earnings clearing account, never
+//  an arbitrary Revenue account (which it would drive negative)
+// ════════════════════════════════════════════════════════════════════════════
+describe('closeFiscalYear — closing entry uses Current Year Earnings clearing account (A8)', () => {
+  function setupClose({ revenue, expenses, cyeId, reId, revId, fyId }) {
+    FiscalYear.findOne.mockReturnValue(leanOf({
+      _id: fyId, name: 'FY2026', status: FISCAL_YEAR_STATUS.OPEN,
+      startDate: new Date('2026-01-01'), endDate: new Date('2026-12-31'),
+    }));
+    AccountingPeriod.countDocuments.mockResolvedValue(0);
+    ChartOfAccount.findOne.mockImplementation(makeAcctFindOne({ cyeId, reId, revId }));
+    transactionRepository.getIncomeStatementData.mockResolvedValue({ revenue, expenses });
+  }
+
+  test('profit: DR Current Year Earnings / CR Retained Earnings (revenue acct untouched)', async () => {
+    const fyId = oid(), cyeId = oid(), reId = oid(), revId = oid();
+    setupClose({
+      revenue:  [{ name: 'Sales', amount: 1000 }],
+      expenses: [{ name: 'COGS', amount: 600 }],
+      cyeId, reId, revId, fyId,
+    });
+
+    await fiscalYearService.closeFiscalYear(BIZ, fyId, USER, {});
+
+    const arg = postBalancedJournal.mock.calls[0][0];
+    expect(arg.amount).toBe(400);
+    expect(arg.debitAccountId).toEqual(cyeId);   // DR Current Year Earnings
+    expect(arg.creditAccountId).toEqual(reId);   // CR Retained Earnings
+    expect(arg.debitAccountId).not.toEqual(revId); // never the Revenue account
+  });
+
+  test('loss: DR Retained Earnings / CR Current Year Earnings', async () => {
+    const fyId = oid(), cyeId = oid(), reId = oid(), revId = oid();
+    setupClose({
+      revenue:  [{ name: 'Sales', amount: 400 }],
+      expenses: [{ name: 'COGS', amount: 1000 }], // net loss 600
+      cyeId, reId, revId, fyId,
+    });
+
+    await fiscalYearService.closeFiscalYear(BIZ, fyId, USER, {});
+
+    const arg = postBalancedJournal.mock.calls[0][0];
+    expect(arg.amount).toBe(600);
+    expect(arg.debitAccountId).toEqual(reId);    // DR Retained Earnings (loss)
+    expect(arg.creditAccountId).toEqual(cyeId);  // CR Current Year Earnings
   });
 });
 
