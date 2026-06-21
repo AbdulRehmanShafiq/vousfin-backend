@@ -68,7 +68,18 @@ jest.mock('../../../models/Invoice.model', () => {
       if (q?._id) return global.__mockInvoiceStoreForCN.get(String(q._id)) || null;
       return null;
     }),
-    findById: jest.fn(async (id) => global.__mockInvoiceStoreForCN.get(String(id)) || null),
+    // Returns a chainable thenable so callers can do either:
+    //   await Invoice.findById(id)            (direct await)
+    //   await Invoice.findById(id).session(s) (chained .session())
+    findById: jest.fn((id) => {
+      const doc = global.__mockInvoiceStoreForCN.get(String(id)) || null;
+      const thenable = {
+        then(onFulfilled, onRejected) { return Promise.resolve(doc).then(onFulfilled, onRejected); },
+        catch(onRejected) { return Promise.resolve(doc).catch(onRejected); },
+        session(_s) { return Promise.resolve(doc); },
+      };
+      return thenable;
+    }),
   };
   return Invoice;
 });
@@ -89,6 +100,9 @@ jest.mock('../../../services/partyBalance.service', () => ({
 }));
 jest.mock('../../../utils/withTransaction', () => ({
   withTransaction: (fn) => fn(null), // run the unit without a real session
+}));
+jest.mock('../../../services/transaction.service', () => ({
+  reverseTransaction: jest.fn().mockResolvedValue({ _id: 'rev-je' }),
 }));
 
 const creditNoteService = require('../../../services/creditNote.service');
@@ -248,6 +262,33 @@ describe('CreditNote — cancel', () => {
     expect(updatedInv.totalCredited).toBe(0);
     expect(updatedInv.remainingBalance).toBe(5000);
     expect(updatedInv.creditNoteIds.length).toBe(0);
+  });
+
+  test('cancel rejects (does not swallow) when the GL reversal fails', async () => {
+    const inv = seedInvoice({ totalAmount: 5000, remainingBalance: 5000 });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId,
+      invoiceId: inv._id,
+      creditNoteNumber: 'CN-CANCEL-ATOMIC',
+      issueDate: new Date(),
+      totalAmount: 500,
+    }, user, '127.0.0.1');
+
+    await creditNoteService.approve(cn._id, user);
+    await creditNoteService.apply(cn._id, user);
+
+    // Give the cn a linkedJournalEntryId so the reversal path is triggered
+    cn.linkedJournalEntryId = 'je1';
+
+    const transactionService = require('../../../services/transaction.service');
+    jest.spyOn(transactionService, 'reverseTransaction').mockRejectedValue(new Error('GL down'));
+
+    await expect(
+      creditNoteService.cancel(cn._id, user, 'mistake', '0.0.0.0')
+    ).rejects.toThrow('GL down');
+
+    // The credit note must NOT have been flipped to cancelled when the reversal failed.
+    expect(cn.state).not.toBe('cancelled');
   });
 });
 

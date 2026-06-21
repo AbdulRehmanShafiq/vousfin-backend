@@ -249,62 +249,51 @@ class CreditNoteService {
     const cn = await this._loadOrThrow(id, user?.businessId);
     if (cn.state === 'cancelled') return cn;
 
-    // If it was applied, reverse the invoice adjustment
-    if (cn.state === 'applied') {
-      const invoice = await Invoice.findById(cn.invoiceId);
-      if (invoice) {
-        if (cn.noteType === 'credit_note') {
-          invoice.totalCredited = Math.max(0, (invoice.totalCredited || 0) - cn.totalAmount);
-          invoice.remainingBalance = (invoice.remainingBalance || 0) + cn.totalAmount;
-          invoice.creditNoteIds = (invoice.creditNoteIds || []).filter(
-            cid => String(cid) !== String(cn._id)
-          );
-        } else {
-          invoice.remainingBalance = Math.max(0, (invoice.remainingBalance || 0) - cn.totalAmount);
-        }
-        invoice.lastModifiedBy = user._id;
-        await invoice.save();
+    // Cancel must be all-or-nothing: the invoice rollback, the GL reversal, the
+    // receivable restore and the state flip commit together or not at all. The
+    // previous version swallowed the reversal + balance errors, leaving a credit
+    // note CANCELLED while its GL effect and the customer balance were untouched
+    // (audit Phase 1.2 — A10 residual).
+    await withTransaction(async (s) => {
+      if (cn.state === 'applied') {
+        const invoice = await Invoice.findById(cn.invoiceId).session(s);
+        if (invoice) {
+          if (cn.noteType === 'credit_note') {
+            invoice.totalCredited = Math.max(0, (invoice.totalCredited || 0) - cn.totalAmount);
+            invoice.remainingBalance = (invoice.remainingBalance || 0) + cn.totalAmount;
+            invoice.creditNoteIds = (invoice.creditNoteIds || []).filter(
+              cid => String(cid) !== String(cn._id)
+            );
+          } else {
+            invoice.remainingBalance = Math.max(0, (invoice.remainingBalance || 0) - cn.totalAmount);
+          }
+          invoice.lastModifiedBy = user._id;
+          await invoice.save({ session: s });
 
-        // Reverse the GL journal entry if one was posted
-        if (cn.linkedJournalEntryId) {
-          try {
+          if (cn.linkedJournalEntryId) {
             const transactionService = require('./transaction.service');
             await transactionService.reverseTransaction(
               cn.linkedJournalEntryId.toString(),
               cn.businessId.toString(),
-              { reason: `Credit note ${cn.creditNoteNumber} cancelled` },
+              { reason: `Credit note ${cn.creditNoteNumber} cancelled`, session: s },
               user._id,
               ipAddress
             );
-          } catch (revErr) {
-            logger.warn(`[creditNote.cancel] GL reversal failed for ${cn.creditNoteNumber}: ${revErr.message}`);
-          }
 
-          // Restore customer receivable balance
-          if (cn.noteType === 'credit_note' && invoice.customerId) {
-            try {
+            if (cn.noteType === 'credit_note' && invoice.customerId) {
               await partyBalanceService.adjustReceivable(
-                cn.businessId,
-                invoice.customerId,
-                cn.totalAmount,
-                {
-                  userId:     user._id,
-                  reason:     'credit_note_cancelled',
-                  entityType: 'creditNote',
-                  entityId:   cn._id,
-                }
+                cn.businessId, invoice.customerId, cn.totalAmount,
+                { userId: user._id, reason: 'credit_note_cancelled', entityType: 'creditNote', entityId: cn._id, session: s }
               );
-            } catch (balErr) {
-              logger.warn(`[creditNote.cancel] Balance restore failed: ${balErr.message}`);
             }
           }
         }
       }
-    }
 
-    cn.state = 'cancelled';
-    cn.lastModifiedBy = user._id;
-    await cn.save();
+      cn.state = 'cancelled';
+      cn.lastModifiedBy = user._id;
+      await cn.save({ session: s });
+    });
     return cn;
   }
 
