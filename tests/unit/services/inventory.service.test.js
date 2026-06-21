@@ -116,7 +116,7 @@ describe('InventoryService.applyPurchaseStock()', () => {
     inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(item));
 
     await inventoryService.applyPurchaseStock(ID_BUSINESS, ID_ITEM, 4, 0);
-    expect(spy).toHaveBeenCalledWith(4, 5); // 5 = item.unitCostPrice fallback
+    expect(spy).toHaveBeenCalledWith(4, 5, null); // 5 = item.unitCostPrice fallback; null = no session
   });
 
   it('posts NO journal entry (funding journal is owned by the caller)', async () => {

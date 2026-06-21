@@ -20,7 +20,7 @@ jest.mock('../../../utils/reportCache', () => ({ invalidate: jest.fn(), get: jes
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
 jest.mock('../../../repositories/customer.repository', () => ({ updateReceivableBalance: jest.fn() }));
 jest.mock('../../../repositories/vendor.repository',   () => ({ updatePayableBalance:    jest.fn() }));
-jest.mock('../../../repositories/account.repository',  () => ({ findById: jest.fn(), updateRunningBalance: jest.fn() }));
+jest.mock('../../../repositories/account.repository',  () => ({ findById: jest.fn(), updateRunningBalance: jest.fn(), findByCode: jest.fn(), syncMissingDefaults: jest.fn() }));
 jest.mock('../../../repositories/auditLog.repository', () => ({ getByBusiness: jest.fn(), getForEntity: jest.fn() }));
 jest.mock('../../../repositories/user.repository',     () => ({ findById: jest.fn() }));
 jest.mock('../../../models/JournalEntry.model',        () => ({ create: jest.fn() }));
@@ -155,9 +155,14 @@ describe('Scenario 5 — Balanced journal posts AND moves both running balances'
 // ════════════════════════════════════════════════════════════════════════════
 describe('Scenario 6 — GRN confirm receives goods into inventory + emits + cache', () => {
   it('adds accepted qty (received − rejected) per line and broadcasts GOODS_RECEIVED', async () => {
+    // A13 — resolve the 1150/2115 accounts and stub the GRNI accrual poster.
+    accountRepository.findByCode.mockImplementation((b, code) =>
+      Promise.resolve({ _id: code === '1150' ? 'inv1' : 'grni1', accountCode: code }));
+    const accrualSpy = jest.spyOn(ledgerPosting, 'postCompoundJournal').mockResolvedValue({ _id: 'je-grn-1' });
+
     const grn = {
       _id: 'grn1', businessId: BIZ_A, grnNumber: 'GRN-1', vendorId: 'v1',
-      inventoryApplied: false,
+      inventoryApplied: false, glJournalId: null,
       receivedItems: [
         { inventoryItemId: 'item1', name: 'Widget', quantityReceived: 10, quantityRejected: 2, unitCost: 500 },
         { name: 'Service line (untracked)', quantityReceived: 1, unitCost: 100 }, // no inventoryItemId → skip
@@ -168,10 +173,13 @@ describe('Scenario 6 — GRN confirm receives goods into inventory + emits + cac
     await goodsReceiptService._applyReceivedStock(grn, USER);
     await flush();
 
+    // DR Inventory (1150) / CR GRNI (2115) at accepted-qty value (8 × 500 = 4000).
+    expect(accrualSpy).toHaveBeenCalledTimes(1);
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledTimes(1);
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledWith(
       BIZ_A, 'item1', 8 /* 10 − 2 */, 500, expect.objectContaining({ userId: USER._id })
     );
+    accrualSpy.mockRestore();
     expect(grn.inventoryApplied).toBe(true);
     expect(reportCache.invalidate).toHaveBeenCalledWith(BIZ_A); // GOODS_RECEIVED → analytics
   });

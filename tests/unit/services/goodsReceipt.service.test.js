@@ -11,6 +11,22 @@ jest.mock('../../../services/inventory.service', () => ({
   applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
   resolveCostAccounts: jest.fn(),
 }));
+// A13 — stub the ledger poster so we can assert the GRNI accrual entry.
+jest.mock('../../../services/ledgerPosting.service', () => ({
+  postCompoundJournal: jest.fn().mockResolvedValue({ _id: 'je-grn-1' }),
+}));
+// A13 — stub the account repo so _ensureAccount resolves the 1150/2115 accounts.
+jest.mock('../../../repositories/account.repository', () => ({
+  findByCode: jest.fn().mockImplementation((b, code) =>
+    Promise.resolve({ _id: code === '1150' ? 'inv1' : 'grni1', accountCode: code })),
+  syncMissingDefaults: jest.fn().mockResolvedValue(undefined),
+}));
+// A13 — run the transactional work synchronously with a truthy session so the
+// post + subledger increment + guard-save all see a session (mongoose is not
+// connected in unit tests, so the real withTransaction would pass null).
+jest.mock('../../../utils/withTransaction', () => ({
+  withTransaction: jest.fn((work) => work({ id: 'sess-1' })),
+}));
 
 jest.mock('../../../models/PurchaseOrder.model', () => {
   const mongoose = require('mongoose');
@@ -83,6 +99,7 @@ const grnService    = require('../../../services/goodsReceipt.service');
 const auditService  = require('../../../services/audit.service');
 const poService     = require('../../../services/purchaseOrder.service');
 const inventoryService = require('../../../services/inventory.service');
+const { postCompoundJournal } = require('../../../services/ledgerPosting.service');
 const { businessEvents, EVENTS } = require('../../../services/businessEventEngine.service');
 
 const USER = { _id: 'u1', fullName: 'Bob Warehouse', email: 'bob@x', role: 'warehouse' };
@@ -245,7 +262,7 @@ describe('grnService.confirm() — inventory stock-in (ERP Step 5)', () => {
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledTimes(1);
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledWith(
       BIZ, ITEM_1, 8 /* 10 − 2 */, 500,
-      expect.objectContaining({ userId: USER._id })
+      expect.objectContaining({ userId: USER._id, session: expect.anything() })
     );
   });
 
@@ -280,6 +297,42 @@ describe('grnService.confirm() — inventory stock-in (ERP Step 5)', () => {
     // Simulate a re-run of the private stock-in on the already-applied GRN.
     await grnService._applyReceivedStock(grn, USER);
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledTimes(1); // unchanged
+  });
+
+  // ── A13: GRNI accrual journal ───────────────────────────────────────────────
+  test('confirm posts DR Inventory / CR GRNI for stocked lines and is idempotent', async () => {
+    const grn = await makeDraftGRN([
+      { poLineItemId: LINE_1, inventoryItemId: ITEM_1, name: 'Widget',
+        quantityOrdered: 10, quantityReceived: 10, quantityRejected: 0, unitCost: 50 },
+    ]);
+
+    await grnService.confirm(grn._id, USER, '0.0.0.0');
+
+    // One compound GL entry: DR 1150 500 / CR 2115 500, via a session.
+    expect(postCompoundJournal).toHaveBeenCalledTimes(1);
+    expect(postCompoundJournal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        idempotencyKey: `grn:accrual:${grn._id}`,
+        lines: expect.arrayContaining([
+          expect.objectContaining({ accountId: 'inv1',  type: 'debit',  amount: 500 }),
+          expect.objectContaining({ accountId: 'grni1', type: 'credit', amount: 500 }),
+        ]),
+      }),
+      expect.objectContaining({ session: expect.anything() }),
+    );
+    // Guard persisted so a retry converges (no double-post).
+    expect(grn.glJournalId).toBe('je-grn-1');
+    expect(grn.inventoryApplied).toBe(true);
+  });
+
+  // ── A14: stop swallowing the stock-in / GL failure ──────────────────────────
+  test('confirm re-throws when the inventory accrual fails (no silent stock-in)', async () => {
+    const grn = await makeDraftGRN([
+      { poLineItemId: LINE_1, inventoryItemId: ITEM_1, name: 'X',
+        quantityOrdered: 5, quantityReceived: 5, quantityRejected: 0, unitCost: 20 },
+    ]);
+    postCompoundJournal.mockRejectedValueOnce(new Error('GL down'));
+    await expect(grnService.confirm(grn._id, USER, '0.0.0.0')).rejects.toThrow('GL down');
   });
 });
 

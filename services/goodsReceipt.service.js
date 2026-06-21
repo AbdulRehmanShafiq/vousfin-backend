@@ -17,15 +17,36 @@ const purchaseOrderService = require('./purchaseOrder.service');
 const inventoryService = require('./inventory.service');                       // ERP Step 5 — receive → stock
 const { businessEvents, EVENTS } = require('./businessEventEngine.service');   // ERP Step 5 — GOODS_RECEIVED
 const auditService = require('./audit.service');
+const ledgerPosting = require('./ledgerPosting.service');                      // A13 — GRNI accrual poster
+const { withTransaction } = require('../utils/withTransaction');               // A13 — atomic receive + post
+const accountRepo = require('../repositories/account.repository');            // A13 — resolve 1150 / 2115
 const { ApiError } = require('../utils/ApiError');
 const logger = require('../config/logger');
 const {
   GRN_STATES,
   AUDIT_ACTIONS,
   ENTITY_TYPES,
+  TRANSACTION_TYPES,
+  TRANSACTION_SOURCES,
 } = require('../config/constants');
 
+// Fetch a default account by code, back-filling it (additive, idempotent) if a
+// business predates it — so the GRNI accrual works on every business out of the box.
+async function _ensureAccount(businessId, code) {
+  let acc = await accountRepo.findByCode(businessId, code);
+  if (!acc) {
+    if (typeof accountRepo.syncMissingDefaults === 'function') await accountRepo.syncMissingDefaults(businessId);
+    acc = await accountRepo.findByCode(businessId, code);
+  }
+  return acc;
+}
+
 class GoodsReceiptService {
+  // Exposed as a method so unit tests can stub it.
+  _ensureAccount(businessId, code) {
+    return _ensureAccount(businessId, code);
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // Private helpers
   // ─────────────────────────────────────────────────────────────────────────
@@ -265,15 +286,10 @@ class GoodsReceiptService {
       logger.warn(`[grn] failed to update PO quantities: ${e.message}`);
     }
 
-    // ── ERP Step 5: physically receive goods into inventory ──────────────────
-    // Receiving is the single inventory-increment point of the procurement flow
-    // (the later Bill only posts the AP liability). Best-effort — a stock-sync
-    // failure must never block confirming the receipt.
-    try {
-      await this._applyReceivedStock(grn, user);
-    } catch (e) {
-      logger.warn(`[grn] inventory stock-in failed for ${grn.grnNumber}: ${e.message}`);
-    }
+    // ── ERP Step 5 + A13: receive goods into inventory AND post the GRNI accrual,
+    // atomically. A failure now rolls the receive back (was silently swallowed —
+    // A14). Idempotent, so a retry after a crash converges.
+    await this._applyReceivedStock(grn, user);
 
     return this._applyStateChange(grn, targetState, user, {
       reason: targetState === GRN_STATES.DISCREPANCY_REPORTED
@@ -297,42 +313,72 @@ class GoodsReceiptService {
    * @private
    */
   async _applyReceivedStock(grn, user) {
-    if (grn.inventoryApplied) {
-      logger.debug(`[grn] stock already applied for ${grn.grnNumber} — skipping`);
+    if (grn.inventoryApplied && grn.glJournalId) {
+      logger.debug(`[grn] stock + accrual already applied for ${grn.grnNumber} — skipping`);
       return;
     }
 
-    const applied = [];
+    // Gather stocked lines and their landed value.
+    const stockedLines = [];
+    let inventoryValue = 0;
     for (const ri of (grn.receivedItems || [])) {
-      if (!ri.inventoryItemId) continue;                 // untracked line — skip
+      if (!ri.inventoryItemId) continue; // service / untracked — accrued at Bill, no inventory leg
       const acceptedQty = Math.max(0, Number(ri.quantityReceived || 0) - Number(ri.quantityRejected || 0));
       if (acceptedQty <= 0) continue;
-
-      try {
-        await inventoryService.applyPurchaseStock(
-          grn.businessId,
-          ri.inventoryItemId,
-          acceptedQty,
-          Number(ri.unitCost) || 0,
-          { userId: user._id, vendorId: grn.vendorId || null },
-        );
-        applied.push({
-          inventoryItemId: ri.inventoryItemId,
-          name: ri.name,
-          qty: acceptedQty,
-          unitCost: Number(ri.unitCost) || 0,
-        });
-      } catch (e) {
-        // One bad line shouldn't abort the rest of the receipt.
-        logger.warn(`[grn] stock-in failed for item ${ri.inventoryItemId} on ${grn.grnNumber}: ${e.message}`);
-      }
+      const unitCost = Number(ri.unitCost) || 0;
+      stockedLines.push({ ri, acceptedQty, unitCost, lineValue: Math.round(acceptedQty * unitCost * 100) / 100 });
+      inventoryValue = Math.round((inventoryValue + acceptedQty * unitCost) * 100) / 100;
     }
 
-    grn.inventoryApplied   = true;
-    grn.inventoryAppliedAt = new Date();
-    await grn.save();
+    if (stockedLines.length === 0) {
+      // Nothing tracked to stock (services / untracked customs): set the guard so the
+      // confirm path is idempotent; no inventory leg to post (accrued later at Bill).
+      grn.inventoryApplied = true;
+      grn.inventoryAppliedAt = new Date();
+      await grn.save();
+      return;
+    }
+
+    const invAcc = await this._ensureAccount(grn.businessId, '1150');
+    const grniAcc = await this._ensureAccount(grn.businessId, '2115');
+    if (!invAcc || !grniAcc) {
+      throw new ApiError(400, `Cannot receive ${grn.grnNumber}: Inventory (1150) or Goods Received Not Invoiced (2115) account is missing.`);
+    }
+
+    const applied = [];
+    await withTransaction(async (s) => {
+      const je = await ledgerPosting.postCompoundJournal({
+        businessId:        grn.businessId,
+        transactionDate:   new Date(),
+        description:       `Goods received — ${grn.grnNumber}`,
+        transactionType:   TRANSACTION_TYPES.JOURNAL_ENTRY,
+        transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
+        createdBy:         user._id,
+        lastModifiedBy:    user._id,
+        idempotencyKey:    `grn:accrual:${grn._id}`,
+        lines: [
+          { accountId: invAcc._id,  type: 'debit',  amount: inventoryValue, description: 'Inventory received' },
+          { accountId: grniAcc._id, type: 'credit', amount: inventoryValue, description: 'Goods received not invoiced' },
+        ],
+      }, { session: s });
+
+      for (const { ri, acceptedQty, unitCost } of stockedLines) {
+        await inventoryService.applyPurchaseStock(
+          grn.businessId, ri.inventoryItemId, acceptedQty, unitCost,
+          { userId: user._id, vendorId: grn.vendorId || null, session: s },
+        );
+        applied.push({ inventoryItemId: ri.inventoryItemId, name: ri.name, qty: acceptedQty, unitCost });
+      }
+
+      grn.glJournalId        = je._id;
+      grn.inventoryApplied   = true;
+      grn.inventoryAppliedAt = new Date();
+      await grn.save({ session: s });
+    });
 
     if (applied.length > 0) {
+      // best-effort: analytics/forecasting broadcast; never blocks the receipt.
+      // Posted OUTSIDE the transaction so a subscriber error can't roll back the ledger.
       businessEvents.emit(EVENTS.GOODS_RECEIVED, {
         businessId:      grn.businessId.toString(),
         userId:          user._id,

@@ -136,6 +136,11 @@ const goodsReceiptSchema = new mongoose.Schema(
     inventoryApplied:   { type: Boolean, default: false },
     inventoryAppliedAt: { type: Date, default: null },
 
+    // A13 — the GRNI accrual journal posted on confirm (DR Inventory 1150 /
+    // CR Goods Received Not Invoiced 2115). Set once, alongside inventoryApplied,
+    // so a retry after a crash converges instead of double-posting.
+    glJournalId: { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry', default: null },
+
     // ── Metadata ──────────────────────────────────────────────────────────────
     notes:          { type: String, default: null, maxlength: 1000, trim: true },
     createdBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },

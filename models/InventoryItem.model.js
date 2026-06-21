@@ -130,13 +130,13 @@ inventoryItemSchema.index({ businessId: 1, category: 1 });
  * Update the weighted-average unit cost when adding stock.
  * newAvgCost = (currentStock * unitCostPrice + addedQty * addedCostPerUnit) / (currentStock + addedQty)
  */
-inventoryItemSchema.methods.addStock = async function (qty, costPerUnit) {
+inventoryItemSchema.methods.addStock = async function (qty, costPerUnit, session = null) {
   if (qty <= 0) throw new Error('Quantity must be positive');
   const totalValue = this.currentStock * this.unitCostPrice + qty * costPerUnit;
   const newQty = this.currentStock + qty;
   this.unitCostPrice = newQty > 0 ? totalValue / newQty : costPerUnit;
   this.currentStock = newQty;
-  await this.save();
+  await this.save({ session });
   return this;
 };
 

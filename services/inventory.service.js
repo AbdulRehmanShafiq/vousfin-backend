@@ -196,13 +196,13 @@ class InventoryService {
     if (!businessId) throw new ApiError(400, 'Business ID is required');
     if (!(Number(qty) > 0)) throw new ApiError(400, 'Quantity must be a positive number');
 
-    const item = await inventoryItemRepository.model.findOne({ _id: itemId, businessId });
+    const item = await inventoryItemRepository.model.findOne({ _id: itemId, businessId }).session(opts.session || null);
     if (!item) throw new ApiError(404, 'Inventory item not found');
 
     const valuationBefore = Math.round(item.currentStock * item.unitCostPrice * 100) / 100;
     const cost = Number(costPerUnit) > 0 ? Number(costPerUnit) : item.unitCostPrice;
 
-    await item.addStock(qty, cost);
+    await item.addStock(qty, cost, opts.session || null);
     logger.info(`Stock added: ${qty} units of "${item.name}" (new stock: ${item.currentStock})`);
 
     const valuationAfter = Math.round(item.currentStock * item.unitCostPrice * 100) / 100;
