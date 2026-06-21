@@ -91,7 +91,8 @@ exports.submitForApproval = async (req, res, next) => {
 
 exports.approve = async (req, res, next) => {
   try {
-    const bill = await billService.approve(req.params.id, actor(req), req.body?.note, req.ip);
+    const { note, override } = req.body || {};
+    const bill = await billService.approve(req.params.id, actor(req), note, req.ip, { override: !!override });
     ApiResponse.success(res, bill, 'Bill approved');
   } catch (err) { next(err); }
 };
