@@ -48,7 +48,11 @@ const scheduleSchema = Joi.object({
   dayOfWeek: Joi.number().min(0).max(6).default(1),
   dayOfMonth: Joi.number().min(1).max(28).default(1),
   hour: Joi.number().min(0).max(23).default(6),
-  recipients: Joi.array().items(Joi.string().email()).default([]),
+  recipients: Joi.array().items(Joi.string().email()).when('enabled', {
+    is: true,
+    then: Joi.array().min(1).required(),
+    otherwise: Joi.array().default([]),
+  }),
 });
 
 module.exports = {

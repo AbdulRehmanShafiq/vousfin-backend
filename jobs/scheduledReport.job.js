@@ -31,6 +31,31 @@ function computeNextRun(schedule, fromDate) {
   return next;
 }
 
+/**
+ * Pure: derive the report window for a given frequency relative to `now`.
+ * Exported for unit testing.
+ */
+function reportWindowFor(frequency, now) {
+  const n = new Date(now);
+  if (frequency === 'daily') {
+    // previous full day
+    const start = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() - 1, 0, 0, 0, 0));
+    const end   = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() - 1, 23, 59, 59, 999));
+    return { startDate: start, endDate: end };
+  }
+  if (frequency === 'weekly') {
+    // previous 7 days: (now − 7 days) 00:00 UTC → yesterday 23:59:59.999 UTC
+    const start = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() - 7, 0, 0, 0, 0));
+    const end   = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate() - 1, 23, 59, 59, 999));
+    return { startDate: start, endDate: end };
+  }
+  // monthly — previous full calendar month
+  const firstOfThisMonth = new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1));
+  const start = new Date(Date.UTC(firstOfThisMonth.getUTCFullYear(), firstOfThisMonth.getUTCMonth() - 1, 1, 0, 0, 0, 0));
+  const end   = new Date(Date.UTC(firstOfThisMonth.getUTCFullYear(), firstOfThisMonth.getUTCMonth(), 0, 23, 59, 59, 999));
+  return { startDate: start, endDate: end };
+}
+
 /** Render + email every template whose schedule is due. One failure never aborts the sweep. */
 async function runDueReports(now = new Date()) {
   const due = await reportTemplateRepo.findScheduledDue(now);
@@ -41,8 +66,7 @@ async function runDueReports(now = new Date()) {
       if (recipients.length === 0) continue;
 
       const business = await businessRepository.findById(tpl.businessId);
-      const endDate = new Date(now);
-      const startDate = new Date(Date.UTC(endDate.getUTCFullYear(), 0, 1));
+      const { startDate, endDate } = reportWindowFor(tpl.schedule.frequency || 'monthly', now);
       const data = await reportBuilder.renderTemplate(tpl.businessId, tpl._id, { startDate, endDate });
 
       const pdf = await pdfExport.generateReportBuilderPDF({
@@ -84,4 +108,4 @@ function scheduleReportDelivery() {
   logger.info('[cron] scheduledReport delivery registered (hourly)');
 }
 
-module.exports = { computeNextRun, runDueReports, scheduleReportDelivery };
+module.exports = { computeNextRun, reportWindowFor, runDueReports, scheduleReportDelivery };

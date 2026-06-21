@@ -100,11 +100,15 @@ const exportTemplate = async (req, res, next) => {
     const data = await reportBuilder.renderTemplate(req.user.businessId, req.params.id, range(req.query));
     const business = await businessRepository.findById(req.user.businessId);
     if (format === 'csv') {
+      const comparative = data.columns.length > 1;
       const head = ['Line', ...data.columns].join(',');
-      const lines = data.rows.map(r => [
-        `"${(r.label || '').replace(/"/g, '""')}"`,
-        r.current ?? '', r.prior ?? '', r.change ?? '', r.changePct ?? '',
-      ].slice(0, 1 + data.columns.length).join(','));
+      const lines = data.rows.map(r => {
+        const label = `"${(r.label || '').replace(/"/g, '""')}"`;
+        if (comparative) {
+          return [label, r.current ?? '', r.prior ?? '', r.change ?? '', r.changePct ?? ''].join(',');
+        }
+        return [label, r.current ?? ''].join(',');
+      });
       const csv = [head, ...lines].join('\n');
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="${(data.template.name || 'report')}.csv"`);
