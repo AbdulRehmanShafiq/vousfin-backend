@@ -23,6 +23,8 @@ jest.mock('../../../models/JournalEntry.model',   () => ({ create:  jest.fn() })
 
 const Bill            = require('../../../models/Bill.model');
 const BillAllocation  = require('../../../models/BillAllocation.model');
+const ChartOfAccount  = require('../../../models/ChartOfAccount.model');
+const JournalEntry    = require('../../../models/JournalEntry.model');
 const svc             = require('../../../services/expenseAllocation.service');
 const { ALLOCATION_METHODS } = require('../../../config/constants');
 
@@ -171,5 +173,34 @@ describe('create()', () => {
     Bill.findOne.mockResolvedValueOnce(null);
     await expect(svc.create(ID_BILL, ID_BUSINESS, { method: 'equal', lines: [] }, {}))
       .rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('does NOT post a duplicate AP journal — the bill already books DR Expense / CR AP on approval', async () => {
+    // Regression for audit finding A1: the bill's postApLiabilityJournal is the
+    // single source of the expense + AP posting. An allocation that ALSO posted
+    // DR Expense / CR AP would double-count the expense and the liability. The
+    // allocation must only persist the cost-centre split.
+    const bill = {
+      _id: ID_BILL, billNumber: 'BILL-002', totalAmount: 1000,
+      currencyCode: 'PKR', allocationId: null, save: jest.fn().mockResolvedValue(true),
+    };
+    Bill.findOne.mockResolvedValueOnce(bill);
+    // AP account EXISTS — exercises the path the old broken code used to post on.
+    ChartOfAccount.findOne.mockReturnValueOnce({ lean: jest.fn().mockResolvedValue({ _id: 'ap-2110' }) });
+    BillAllocation.findOne.mockResolvedValueOnce(null);
+    BillAllocation.create.mockResolvedValueOnce({ _id: ID_ALLOC });
+
+    await svc.create(ID_BILL, ID_BUSINESS, {
+      method: ALLOCATION_METHODS.EQUAL,
+      lines: [
+        { costCenterType: 'department', costCenterId: 'D1', costCenterName: 'Eng' },
+        { costCenterType: 'department', costCenterId: 'D2', costCenterName: 'Mkt' },
+      ],
+    }, { _id: '507f1f77bcf86cd799439099' });
+
+    expect(JournalEntry.create).not.toHaveBeenCalled();
+    expect(BillAllocation.create).toHaveBeenCalledWith(
+      expect.objectContaining({ billId: ID_BILL, isBalanced: true })
+    );
   });
 });

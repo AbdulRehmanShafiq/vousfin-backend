@@ -14,16 +14,11 @@
 const mongoose      = require('mongoose');
 const Bill          = require('../models/Bill.model');
 const BillAllocation= require('../models/BillAllocation.model');
-const ChartOfAccount= require('../models/ChartOfAccount.model');
-const JournalEntry  = require('../models/JournalEntry.model');
 const { ApiError }  = require('../utils/ApiError');
 const logger        = require('../config/logger');
 const {
   ALLOCATION_METHODS,
   COST_CENTER_TYPES,
-  TRANSACTION_TYPES,
-  TRANSACTION_SOURCES,
-  JOURNAL_STATUS,
 } = require('../config/constants');
 
 class ExpenseAllocationService {
@@ -114,45 +109,17 @@ class ExpenseAllocationService {
     this._validateLines(data.lines, bill.totalAmount, method);
     const builtLines = this._buildLines(data.lines, bill.totalAmount, method);
 
-    // Create JE lines and allocation records
-    let apAccount = null;
-    try {
-      apAccount = await ChartOfAccount.findOne({ businessId, accountCode: '2110' }).lean();
-    } catch (_) {}
-
-    // Post a combined allocation journal entry
-    let summaryJournalId = null;
-    if (apAccount) {
-      try {
-        const je = await JournalEntry.create({
-          businessId,
-          description: `Expense allocation: ${bill.billNumber}`,
-          transactionType:   TRANSACTION_TYPES.CREDIT_PURCHASE,
-          transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
-          status:            JOURNAL_STATUS.POSTED,
-          date:              new Date(),
-          lines: builtLines.map(l => ({
-            accountId:   l.accountId || apAccount._id,
-            description: `${l.costCenterType}: ${l.costCenterName}`,
-            debit:       l.amount,
-            credit:      0,
-          })).concat([{
-            accountId:   apAccount._id,
-            description: `AP allocation for ${bill.billNumber}`,
-            debit:       0,
-            credit:      bill.totalAmount,
-          }]),
-          totalAmount:  bill.totalAmount,
-          currencyCode: bill.currencyCode,
-          referenceId:  bill._id,
-          referenceType:'Bill',
-          createdBy:    actor?._id || null,
-        });
-        summaryJournalId = je._id;
-      } catch (err) {
-        logger.warn(`[allocation] JE creation failed: ${err.message}`);
-      }
-    }
+    // NOTE (audit A1): the bill's expense + AP liability is posted to the GL ONCE,
+    // by bill.service.postApLiabilityJournal on approval (DR Expense / CR AP 2110).
+    // An expense allocation is a COST-CENTRE SPLIT of that already-booked expense —
+    // it must NOT post a second DR Expense / CR AP journal, or it would double-count
+    // both the expense and the liability. So we persist the split only.
+    // (The previous code attempted a journal here with non-schema fields; it always
+    // failed validation and was silently swallowed — removed.)
+    // FUTURE: to make cost-centre P&L reflect the split, re-post the bill's expense
+    // leg as a compound entry with one costCenterId-tagged DR line per allocation —
+    // a feature enhancement tracked separately, not a same-total posting.
+    const summaryJournalId = null;
 
     // Persist allocation
     const existing = await BillAllocation.findOne({ billId, businessId });
