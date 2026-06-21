@@ -1241,7 +1241,7 @@ class TransactionService {
    * @param {string} ipAddress
    * @returns {Promise<Object>}    - The new reversal JournalEntry
    */
-  async reverseTransaction(transactionId, businessId, { reversalDate, reason } = {}, userId, ipAddress) {
+  async reverseTransaction(transactionId, businessId, { reversalDate, reason, session } = {}, userId, ipAddress) {
     // 1. Load original with populated accounts
     const original = await transactionRepository.findByIdWithDetails(transactionId, businessId);
     if (!original) throw new ApiError(404, 'Transaction not found');
@@ -1312,7 +1312,13 @@ class TransactionService {
     // updates, the party AR/AP rollback, and marking the original REVERSED must
     // commit together or all roll back — otherwise a mid-sequence failure drifts
     // the trial balance or double-counts the position.
-    const reversal = await withTransaction(async (s) => {
+    // Join the caller's transaction when one is supplied (so an enclosing unit —
+    // e.g. creditNote.cancel — commits the reversal together with its own writes),
+    // otherwise open our own all-or-nothing transaction (legacy standalone path).
+    const runUnit = session
+      ? (fn) => fn(session)
+      : (fn) => withTransaction(fn);
+    const reversal = await runUnit(async (s) => {
       // 4. Persist reversal entry
       const rev = await transactionRepository.createTransaction(reversalData, s);
 
