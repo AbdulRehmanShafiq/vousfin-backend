@@ -183,6 +183,77 @@ describe('billService illegal transitions + lifecycle', () => {
   });
 });
 
+const { THREE_WAY_MATCH_STATUSES: TWM } = require('../../../config/constants');
+
+// ════════════════════════════════════════════════════════════════════════════
+//  Audit A12 — 3-way match gating on approval (BLOCKED blocks unless override)
+// ════════════════════════════════════════════════════════════════════════════
+describe('billService.approve() — 3-way match gating (audit A12)', () => {
+  let _origLoadOrThrow;
+  let _origApplyStateChange;
+
+  function buildBill(props) {
+    const doc = new Bill({
+      _id: new mongoose.Types.ObjectId(),
+      businessId: 'biz1',
+      approvalLog: [],
+      ...props,
+    });
+    // pre-seed into the Bill stateStore so _loadOrThrow finds it
+    doc.save();
+    return doc;
+  }
+
+  beforeEach(() => {
+    // Save originals so we can restore after each test, preventing contamination
+    // of the singleton across test blocks.
+    _origLoadOrThrow = billService._loadOrThrow.bind(billService);
+    _origApplyStateChange = billService._applyStateChange.bind(billService);
+  });
+
+  afterEach(() => {
+    billService._loadOrThrow = _origLoadOrThrow;
+    billService._applyStateChange = _origApplyStateChange;
+    // Restore any spies placed on the singleton instance (clearAllMocks only resets
+    // call counts, not implementations — we need restoreAllMocks for spyOn'd methods).
+    jest.restoreAllMocks();
+  });
+
+  test('approve throws 409 when 3-way match is BLOCKED and no override', async () => {
+    const bill = buildBill({ state: 'awaiting_approval', billNumber: 'BILL-1' });
+    billService._loadOrThrow = jest.fn().mockResolvedValue(bill);
+    billService._applyStateChange = jest.fn().mockResolvedValue(bill);
+    jest.spyOn(billMatchingService, 'runFullMatch').mockResolvedValue({
+      status: TWM.BLOCKED,
+      matchResult: { duplicateCheck: { isDuplicate: false }, summary: 'GRN: under_received' },
+      bill,
+    });
+    const postSpy = jest.spyOn(billService, 'postApLiabilityJournal');
+
+    await expect(billService.approve(bill._id, { _id: 'u1', businessId: 'b1' }, 'ok', '0.0.0.0'))
+      .rejects.toThrow(/blocked/i);
+    // AP must NOT be posted for a blocked bill.
+    expect(postSpy).not.toHaveBeenCalled();
+  });
+
+  test('approve proceeds and logs an override when override=true on a BLOCKED match', async () => {
+    const bill = buildBill({ state: 'awaiting_approval', billNumber: 'BILL-2', approvalLog: [] });
+    billService._loadOrThrow = jest.fn().mockResolvedValue(bill);
+    billService._applyStateChange = jest.fn().mockResolvedValue(bill);
+    jest.spyOn(billMatchingService, 'runFullMatch').mockResolvedValue({
+      status: TWM.BLOCKED,
+      matchResult: { duplicateCheck: { isDuplicate: false }, summary: 'GRN: under_received' },
+      bill,
+    });
+    jest.spyOn(billService, 'postApLiabilityJournal').mockResolvedValue({ _id: 'je1' });
+
+    await billService.approve(bill._id, { _id: 'u1', businessId: 'b1' }, 'override it', '0.0.0.0', { override: true });
+
+    expect(billService.postApLiabilityJournal).toHaveBeenCalled();
+    expect(bill.approvalLog.some(l => l.action === 'override')).toBe(true);
+  });
+});
+
 // ════════════════════════════════════════════════════════════════════════════
 //  AP liability journal on approval — must NOT be silently swallowed (audit P2)
 // ════════════════════════════════════════════════════════════════════════════

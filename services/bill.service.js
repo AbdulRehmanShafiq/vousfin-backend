@@ -30,6 +30,7 @@ const {
   TRANSACTION_TYPES,
   TRANSACTION_SOURCES,
   JOURNAL_STATUS,
+  THREE_WAY_MATCH_STATUSES,
 } = require('../config/constants');
 
 class BillService {
@@ -246,7 +247,7 @@ class BillService {
     return bill;
   }
 
-  async approve(id, user, note, ipAddress) {
+  async approve(id, user, note, ipAddress, { override = false } = {}) {
     const bill = await this._loadOrThrow(id, user?.businessId);
 
     // ── M6: multi-level approval — advance the chain one step ────────────────
@@ -274,13 +275,55 @@ class BillService {
     bill.approvedAt = new Date();
     const approved = await this._applyStateChange(bill, BILL_STATES.APPROVED, user, { reason: note, ipAddress });
 
-    // Phase 3.2 — auto-run 3-way match and post AP liability journal on approval
+    // Phase 3.2 — auto-run 3-way match, then GATE on it (audit A12). A BLOCKED
+    // match or a duplicate vendor invoice stops approval unless the caller passes
+    // an explicit override (admin decision, recorded below). Match-engine errors
+    // (e.g. the PO can't be loaded) degrade to advisory — we never block on an
+    // inability to run the check, only on a check that ran and said "blocked".
+    let matchOutcome = null;
     try {
-      await billMatchingService.runFullMatch(id, bill.businessId.toString());
+      matchOutcome = await billMatchingService.runFullMatch(id, bill.businessId.toString());
     } catch (e) {
-      // best-effort: 3-way match is a validation check; the AP journal (below) is the money write and is not swallowed.
-      logger.warn(`[bill] 3-way match failed on approval for ${bill.billNumber}: ${e.message}`);
+      // best-effort: a match-engine failure must not block a bill that may be fine.
+      logger.warn(`[bill] 3-way match could not run on approval for ${bill.billNumber}: ${e.message}`);
     }
+
+    if (matchOutcome) {
+      const isBlocked  = matchOutcome.status === THREE_WAY_MATCH_STATUSES.BLOCKED;
+      const isDuplicate = !!matchOutcome.matchResult?.duplicateCheck?.isDuplicate;
+      if ((isBlocked || isDuplicate) && !override) {
+        const why = matchOutcome.matchResult?.summary || 'goods/PO mismatch';
+        throw new ApiError(409, `Bill cannot be approved — the goods/PO check is blocked (${why}). To approve anyway, re-submit with override enabled.`);
+      }
+      if ((isBlocked || isDuplicate) && override) {
+        bill.approvalLog.push({
+          action:    'override',
+          actorId:   user._id,
+          actorName: user.fullName || user.email || 'Unknown',
+          actorRole: user.role || null,
+          note:      `Override of ${matchOutcome.status}: ${matchOutcome.matchResult?.summary || ''}`.trim(),
+          timestamp: new Date(),
+        });
+        await bill.save();
+        try {
+          await auditService.log({
+            businessId:      bill.businessId,
+            entityType:      ENTITY_TYPES.BILL,
+            entityId:        bill._id,
+            action:          'bill.match_override',
+            performedBy:     user._id,
+            performedByName: user.fullName || user.email || 'Unknown User',
+            beforeState:     { matchStatus: matchOutcome.status },
+            afterState:      { override: true, summary: matchOutcome.matchResult?.summary || null },
+            ipAddress,
+          });
+        } catch (e) {
+          // best-effort: audit-log write is observability only; the override was already recorded in approvalLog.
+          logger.warn(`[bill] audit log (match_override) failed: ${e.message}`);
+        }
+      }
+    }
+
     // Post the AP liability journal. Do NOT swallow a failure here — the GL must
     // reflect the liability the moment a bill is approved. The poster is atomic
     // and idempotent (guards on apLiabilityJournalId), so a surfaced error can be
