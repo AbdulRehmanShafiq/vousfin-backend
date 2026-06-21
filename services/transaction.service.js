@@ -17,6 +17,28 @@ const partyBalanceService = require('./partyBalance.service'); // ERP refactor S
 const { withTransaction } = require('../utils/withTransaction'); // all-or-nothing multi-write saves
 // Phase 5.1: Period lock model (inline require to avoid circular deps)
 
+const _r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+/**
+ * Pure settlement arithmetic (audit A6). Rounds to 2dp and snaps sub-cent residue
+ * to a full payoff so a fractional payment can't leave an AR/AP line PARTIALLY_PAID
+ * forever with floating-point dust (e.g. 0.1 + 0.2 − 0.3 = 5e-17).
+ *
+ * @param {number} remaining       parent.remainingBalance before this payment
+ * @param {number} payment         amount paid now
+ * @param {number} partiallyPaid   parent.partiallyPaidAmount before this payment
+ * @returns {{ newRemaining:number, newPartiallyPaid:number, fullyPaid:boolean }}
+ */
+function computeSettlement(remaining, payment, partiallyPaid = 0) {
+  const raw = Number(remaining) - Number(payment);
+  const newRemaining = Math.abs(raw) < 0.005 ? 0 : _r2(raw);
+  return {
+    newRemaining,
+    newPartiallyPaid: _r2((Number(partiallyPaid) || 0) + Number(payment)),
+    fullyPaid: newRemaining === 0,
+  };
+}
+
 class TransactionService {
   /**
    * R-03 tax-integrity guard. The tax engine is the authority for how much tax a
@@ -852,10 +874,12 @@ class TransactionService {
     };
 
     // 5. Pre-compute the parent's new settled state (pure — no writes yet).
-    const newRemainingBalance = parent.remainingBalance - paymentData.amount;
-    const newPartiallyPaidAmount = (parent.partiallyPaidAmount || 0) + paymentData.amount;
+    //    computeSettlement rounds and snaps sub-cent float residue to a full payoff
+    //    (audit A6) so a fractional final payment actually settles the line.
+    const { newRemaining: newRemainingBalance, newPartiallyPaid: newPartiallyPaidAmount, fullyPaid } =
+      computeSettlement(parent.remainingBalance, paymentData.amount, parent.partiallyPaidAmount || 0);
     let newPaymentStatus = PAYMENT_STATUS.PARTIALLY_PAID;
-    if (newRemainingBalance === 0) {
+    if (fullyPaid) {
       newPaymentStatus = PAYMENT_STATUS.PAID;
     } else if (parent.dueDate && new Date() > parent.dueDate) {
       newPaymentStatus = PAYMENT_STATUS.OVERDUE;
@@ -874,7 +898,7 @@ class TransactionService {
         remainingBalance: newRemainingBalance,
         partiallyPaidAmount: newPartiallyPaidAmount,
         paymentStatus: newPaymentStatus,
-        status: newRemainingBalance === 0 ? JOURNAL_STATUS.SETTLED : JOURNAL_STATUS.PARTIALLY_SETTLED,
+        status: fullyPaid ? JOURNAL_STATUS.SETTLED : JOURNAL_STATUS.PARTIALLY_SETTLED,
         $push: {
           relatedTransactions: child._id,
           settlements: {
@@ -1624,3 +1648,4 @@ class TransactionService {
 }
 
 module.exports = new TransactionService();
+module.exports.computeSettlement = computeSettlement;
