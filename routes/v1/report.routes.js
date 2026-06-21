@@ -58,4 +58,21 @@ router.get('/export',              validate(exportReportSchema,       'query'), 
 // ── FR-02.2: AI-narrated statements (English + Urdu, grounded in the GL) ─────
 router.get('/narrative',           ctrl.getNarrative);
 
+// ── FR-02.5: Custom Report Builder (CRUD + render/preview/schedule) ───────────
+const tplCtrl = require('../../controllers/reportTemplate.controller');
+const {
+  createTemplateSchema, updateTemplateSchema, renderSchema, previewSchema, scheduleSchema,
+} = require('../../validations/reportTemplate.validation');
+
+router.get('/templates',              tplCtrl.list);
+router.post('/templates',             validate(createTemplateSchema, 'body'), tplCtrl.create);
+// NOTE: /templates/preview MUST be declared before /templates/:id so "preview" is not captured as an :id
+router.post('/templates/preview',     validate(previewSchema, 'body'),        tplCtrl.preview);
+router.get('/templates/:id',          tplCtrl.getOne);
+router.put('/templates/:id',          validate(updateTemplateSchema, 'body'), tplCtrl.update);
+router.delete('/templates/:id',       tplCtrl.remove);
+router.post('/templates/:id/render',  validate(renderSchema, 'body'),         tplCtrl.render);
+router.put('/templates/:id/schedule', validate(scheduleSchema, 'body'),       tplCtrl.setSchedule);
+// NOTE: GET /templates/:id/export is added in Task 8 (after the PDF helper exists)
+
 module.exports = router;
