@@ -77,10 +77,11 @@ describe('PartyBalanceService.adjustReceivable()', () => {
     expect(customerRepository.updateReceivableBalance).not.toHaveBeenCalled();
   });
 
-  it('does NOT emit when the customer was deleted (repo returns null)', async () => {
+  it('throws ApiError(404) when the customer is gone at write time (repo returns null)', async () => {
     customerRepository.updateReceivableBalance.mockResolvedValue(null);
-    const res = await partyBalanceService.adjustReceivable(ID_BUSINESS, ID_CUSTOMER, 500, {});
-    expect(res).toBeNull();
+    await expect(
+      partyBalanceService.adjustReceivable(ID_BUSINESS, ID_CUSTOMER, 500, { reason: 'invoice_approved' })
+    ).rejects.toThrow(/customer/i);
     expect(emittedNames()).not.toContain(EVENTS.CUSTOMER_BALANCE_CHANGED);
   });
 
@@ -125,5 +126,22 @@ describe('PartyBalanceService.adjustPayable()', () => {
     const res = await partyBalanceService.adjustPayable(ID_BUSINESS, undefined, 500, {});
     expect(res).toBeNull();
     expect(vendorRepository.updatePayableBalance).not.toHaveBeenCalled();
+  });
+
+  it('throws ApiError(404) when the vendor is gone at write time (repo returns null)', async () => {
+    vendorRepository.updatePayableBalance.mockResolvedValue(null);
+    await expect(
+      partyBalanceService.adjustPayable(ID_BUSINESS, ID_VENDOR, 250, { reason: 'bill_approved' })
+    ).rejects.toThrow(/vendor/i);
+    expect(emittedNames()).not.toContain(EVENTS.VENDOR_BALANCE_CHANGED);
+  });
+});
+
+// ── zero-delta no-op (audit Phase 1.4 brief spec) ────────────────────────────
+describe('adjustReceivable zero-delta no-op (brief spec)', () => {
+  it('returns null without calling the repo for a zero delta', async () => {
+    const r = await partyBalanceService.adjustReceivable('b1', 'cust1', 0, {});
+    expect(r).toBeNull();
+    expect(customerRepository.updateReceivableBalance).not.toHaveBeenCalled();
   });
 });

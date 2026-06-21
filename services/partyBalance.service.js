@@ -51,6 +51,7 @@
 
 'use strict';
 
+const { ApiError } = require('../utils/ApiError');
 const customerRepository = require('../repositories/customer.repository');
 const vendorRepository = require('../repositories/vendor.repository');
 const { businessEvents, EVENTS } = require('./businessEventEngine.service');
@@ -81,10 +82,11 @@ class PartyBalanceService {
 
     const updated = await customerRepository.updateReceivableBalance(id, amount, ctx.session || null);
     if (!updated) {
-      // Party was deleted between read and write — log, don't throw (the ledger
-      // write that triggered this has already succeeded; never break it).
-      logger.warn(`[partyBalance] customer ${id} not found while adjusting receivable by ${amount}`);
-      return null;
+      // The party was deleted between the ledger write and this balance update.
+      // Throw so the enclosing transaction rolls back — a posted AR move with no
+      // matching customer balance is a real divergence, not something to swallow
+      // (audit Phase 1.4).
+      throw new ApiError(404, `Cannot update receivable: customer ${id} not found.`);
     }
 
     businessEvents.emit(EVENTS.CUSTOMER_BALANCE_CHANGED, {
@@ -120,8 +122,7 @@ class PartyBalanceService {
 
     const updated = await vendorRepository.updatePayableBalance(id, amount, ctx.session || null);
     if (!updated) {
-      logger.warn(`[partyBalance] vendor ${id} not found while adjusting payable by ${amount}`);
-      return null;
+      throw new ApiError(404, `Cannot update payable: vendor ${id} not found.`);
     }
 
     businessEvents.emit(EVENTS.VENDOR_BALANCE_CHANGED, {
