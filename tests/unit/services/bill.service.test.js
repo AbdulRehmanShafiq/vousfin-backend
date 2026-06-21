@@ -213,4 +213,20 @@ describe('billService.approve() — AP liability journal', () => {
 
     await expect(billService.approve(bill._id, USER, 'ok', '')).rejects.toThrow('ledger down');
   });
+
+  test('markPaid does NOT swallow a settlement posting failure (audit A10)', async () => {
+    // Seed an approved, own-AP bill with an outstanding balance so markPaid enters
+    // the settlement branch (DR AP / CR cash + vendor decrement).
+    const bill = new Bill({
+      _id: new mongoose.Types.ObjectId(), businessId: 'biz1', billNumber: 'BILL-PAY',
+      state: 'approved', vendorId: 'v1', totalAmount: 1000, remainingBalance: 1000,
+      apLiabilityJournalId: new mongoose.Types.ObjectId(),
+    });
+    await bill.save();
+    // The cash-settlement posting fails — the bill must NOT be left marked PAID
+    // (remainingBalance 0) while the AP liability is still open in the GL.
+    postBalancedJournal.mockRejectedValueOnce(new Error('settlement ledger down'));
+
+    await expect(billService.markPaid(bill._id, USER, '')).rejects.toThrow('settlement ledger down');
+  });
 });

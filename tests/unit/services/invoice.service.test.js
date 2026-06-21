@@ -229,6 +229,22 @@ describe('invoiceService approval workflow', () => {
     postBalancedJournal.mockRejectedValueOnce(new Error('ledger down'));
     await expect(invoiceService.approve(inv._id, USER, 'ok', '')).rejects.toThrow('ledger down');
   });
+
+  test('markPaid does NOT swallow a settlement posting failure (audit A10)', async () => {
+    // Seed an approved, own-AR invoice with an outstanding balance so markPaid enters
+    // the settlement branch (DR cash / CR AR + customer decrement).
+    const inv = new Invoice({
+      _id: new mongoose.Types.ObjectId(), businessId: 'biz1', invoiceNumber: 'INV-PAY',
+      state: 'approved', customerId: 'c1', totalAmount: 1000, remainingBalance: 1000,
+      arJournalId: new mongoose.Types.ObjectId(),
+    });
+    await inv.save();
+    // The cash-settlement posting fails — the invoice must NOT be left marked PAID
+    // (remainingBalance 0) while the AR balance stays open in the GL.
+    postBalancedJournal.mockRejectedValueOnce(new Error('settlement ledger down'));
+
+    await expect(invoiceService.markPaid(inv._id, USER, '')).rejects.toThrow('settlement ledger down');
+  });
 });
 
 // ── Illegal transitions ───────────────────────────────────────────────────────

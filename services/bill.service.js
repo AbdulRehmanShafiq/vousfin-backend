@@ -66,13 +66,13 @@ class BillService {
     }
   }
 
-  async _applyStateChange(bill, toState, user, { reason = null, ipAddress = null } = {}) {
+  async _applyStateChange(bill, toState, user, { reason = null, ipAddress = null, session = null } = {}) {
     this._guardTransition(bill, toState);
     const fromState = bill.state;
     bill.recordStateChange(toState, user, reason);
     bill.state = toState;
     bill.lastModifiedBy = user._id;
-    await bill.save();
+    await bill.save({ session });
     try {
       await auditService.log({
         businessId:      bill.businessId,
@@ -429,22 +429,30 @@ class BillService {
 
     bill.paidAmount = bill.totalAmount;
     bill.remainingBalance = 0;
-    const paid = await this._applyStateChange(bill, BILL_STATES.PAID, user, { ipAddress });
 
     // ── ERP Step 4: settle the AP liability + vendor balance ─────────────────
     // Only for bills that recognized their OWN AP (bill-first flow, identified by
     // apLiabilityJournalId). Transaction-first bills (synced from a journal entry)
     // are settled via transaction.service, which owns that balance lifecycle —
     // skipping them here prevents a double-decrement. (Rules 4, 5)
+    // All-or-nothing (audit A10): the PAID state change, the cash-settlement journal
+    // and the vendor-balance decrement must commit together. Previously the state
+    // change committed first and a settlement failure was swallowed — leaving the
+    // bill marked PAID while the AP liability stayed open in the GL.
+    let paid;
     if (bill.apLiabilityJournalId && bill.vendorId && outstanding > 0) {
-      try {
-        await this._postBillSettlementJournal(bill, outstanding, user);
+      paid = await withTransaction(async (s) => {
+        const p = await this._applyStateChange(bill, BILL_STATES.PAID, user, { ipAddress, session: s });
+        await this._postBillSettlementJournal(bill, outstanding, user, s);
         await partyBalanceService.adjustPayable(bill.businessId, bill.vendorId, -outstanding, {
-          userId: user._id, reason: 'bill_paid', entityType: ENTITY_TYPES.BILL, entityId: bill._id,
+          userId: user._id, reason: 'bill_paid', entityType: ENTITY_TYPES.BILL, entityId: bill._id, session: s,
         });
-      } catch (e) {
-        logger.warn(`[bill] settlement posting failed for ${bill.billNumber}: ${e.message}`);
-      }
+        return p;
+      });
+    } else {
+      // No own-AP settlement to post (transaction-first bill, no vendor, or nothing
+      // outstanding) — just the state change.
+      paid = await this._applyStateChange(bill, BILL_STATES.PAID, user, { ipAddress });
     }
 
     // Broadcast regardless so downstream caches refresh on any payment path.
@@ -469,7 +477,7 @@ class BillService {
    * if the AP or a cash/bank account can't be resolved, rather than throwing.
    * @private
    */
-  async _postBillSettlementJournal(bill, amount, user) {
+  async _postBillSettlementJournal(bill, amount, user, session = null) {
     const businessId = bill.businessId;
     // Independent lookups — fetch in parallel to save a DB round-trip (Step 10).
     const [apAccount, cashAccount] = await Promise.all([
@@ -480,13 +488,13 @@ class BillService {
       }).lean(),
     ]);
 
+    // Can't post → throw so the caller's transaction rolls back (audit A10). Marking
+    // a bill PAID with no settlement journal would leave the AP liability open.
     if (!apAccount || !cashAccount) {
-      logger.warn(`[bill] settlement JE skipped for ${bill.billNumber} — AP (2110) or cash account missing`);
-      return null;
+      throw new ApiError(500, `Cannot settle bill ${bill.billNumber}: Accounts Payable (2110) or a cash/bank account is not set up.`);
     }
     if (apAccount._id.toString() === cashAccount._id.toString()) {
-      logger.warn(`[bill] settlement JE skipped for ${bill.billNumber} — AP and cash are the same account`);
-      return null;
+      throw new ApiError(500, `Cannot settle bill ${bill.billNumber}: AP and cash resolve to the same account.`);
     }
 
     return postBalancedJournal({
@@ -505,7 +513,7 @@ class BillService {
       exchangeRate:      bill.exchangeRate || 1,
       createdBy:         user._id,
       lastModifiedBy:    user._id,
-    });
+    }, { session });
   }
 
   // ───────────────────────────────────────────────────────────────────────────

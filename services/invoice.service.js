@@ -86,13 +86,13 @@ class InvoiceService {
   }
 
   /** Centralised state-change applier that records history + emits audit. */
-  async _applyStateChange(invoice, toState, user, { reason = null, ipAddress = null } = {}) {
+  async _applyStateChange(invoice, toState, user, { reason = null, ipAddress = null, session = null } = {}) {
     this._guardTransition(invoice, toState);
     const fromState = invoice.state;
     invoice.recordStateChange(toState, user, reason);
     invoice.state = toState;
     invoice.lastModifiedBy = user._id;
-    await invoice.save();
+    await invoice.save({ session });
 
     // Emit audit log (best-effort — never block state change on audit failure)
     try {
@@ -598,22 +598,28 @@ class InvoiceService {
 
     invoice.paidAmount = invoice.totalAmount;
     invoice.remainingBalance = 0;
-    const paid = await this._applyStateChange(invoice, INVOICE_STATES.PAID, user, { ipAddress });
 
     // ── ERP Step 4: settle the AR + customer balance ─────────────────────────
     // Only for invoices that recognized their OWN AR (invoice-first flow,
     // identified by arJournalId). Transaction-first invoices (synced from a
     // journal entry) are settled via transaction.service, which owns that
     // balance lifecycle — skipping them prevents a double-decrement. (Rules 4, 5)
+    // All-or-nothing (audit A10): the PAID state change, the cash-settlement journal
+    // and the customer-balance decrement commit together. Previously the state change
+    // committed first and a settlement failure was swallowed — leaving the invoice
+    // marked PAID while the AR balance stayed open in the GL.
+    let paid;
     if (invoice.arJournalId && invoice.customerId && outstanding > 0) {
-      try {
-        await this._postInvoiceSettlementJournal(invoice, outstanding, user);
+      paid = await withTransaction(async (s) => {
+        const p = await this._applyStateChange(invoice, INVOICE_STATES.PAID, user, { ipAddress, session: s });
+        await this._postInvoiceSettlementJournal(invoice, outstanding, user, s);
         await partyBalanceService.adjustReceivable(invoice.businessId, invoice.customerId, -outstanding, {
-          userId: user._id, reason: 'invoice_paid', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id,
+          userId: user._id, reason: 'invoice_paid', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id, session: s,
         });
-      } catch (e) {
-        logger.warn(`[invoice] settlement posting failed for ${invoice.invoiceNumber}: ${e.message}`);
-      }
+        return p;
+      });
+    } else {
+      paid = await this._applyStateChange(invoice, INVOICE_STATES.PAID, user, { ipAddress });
     }
 
     // Broadcast regardless so downstream caches refresh on any payment path.
@@ -905,7 +911,7 @@ class InvoiceService {
    * if the AR or a cash/bank account can't be resolved, rather than throwing.
    * @private
    */
-  async _postInvoiceSettlementJournal(invoice, amount, user) {
+  async _postInvoiceSettlementJournal(invoice, amount, user, session = null) {
     const businessId = invoice.businessId;
     // Independent lookups — fetch in parallel to save a DB round-trip (Step 10).
     const [arAccount, cashAccount] = await Promise.all([
@@ -915,11 +921,14 @@ class InvoiceService {
         accountCode: { $in: ['1010', '1020', '1040', '1030'] }, // Cash at Bank → on Hand → Savings → Petty
       }).lean(),
     ]);
+    // Can't post → throw so the caller's transaction rolls back (audit A10). Marking
+    // an invoice PAID with no settlement journal would leave the AR open.
     if (!arAccount || !cashAccount) {
-      logger.warn(`[invoice] settlement JE skipped for ${invoice.invoiceNumber} — AR (1110) or cash account missing`);
-      return null;
+      throw new ApiError(500, `Cannot settle invoice ${invoice.invoiceNumber}: Accounts Receivable (1110) or a cash/bank account is not set up.`);
     }
-    if (arAccount._id.toString() === cashAccount._id.toString()) return null;
+    if (arAccount._id.toString() === cashAccount._id.toString()) {
+      throw new ApiError(500, `Cannot settle invoice ${invoice.invoiceNumber}: AR and cash resolve to the same account.`);
+    }
 
     return postBalancedJournal({
       businessId,
@@ -937,7 +946,7 @@ class InvoiceService {
       exchangeRate:      invoice.exchangeRate || 1,
       createdBy:         user._id,
       lastModifiedBy:    user._id,
-    });
+    }, { session });
   }
 
   // ───────────────────────────────────────────────────────────────────────────
