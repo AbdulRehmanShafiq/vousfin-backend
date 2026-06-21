@@ -55,7 +55,6 @@ const { ApiError } = require('../utils/ApiError');
 const customerRepository = require('../repositories/customer.repository');
 const vendorRepository = require('../repositories/vendor.repository');
 const { businessEvents, EVENTS } = require('./businessEventEngine.service');
-const logger = require('../config/logger');
 
 /** Round to 2dp so floating-point drift never accumulates on a balance. */
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
