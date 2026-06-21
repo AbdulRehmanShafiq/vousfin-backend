@@ -16,6 +16,9 @@ jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() })
 jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn() }));
 jest.mock('../../../services/partyBalance.service', () => ({ adjustReceivable: jest.fn() }));
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
+// Inventory service — auto-mocked so the lazy require inside invoice service gets the same
+// mock instance. Individual tests set up spies as needed.
+jest.mock('../../../services/inventory.service');
 jest.mock('../../../models/Invoice.model', () => {
   // Tiny in-memory Invoice mock that mimics the parts of the model the service uses.
   const stateStore = new Map();
@@ -329,5 +332,51 @@ describe('invoiceService dispute + write-off', () => {
     postBalancedJournal.mockRejectedValueOnce(new Error('writeoff ledger down'));
 
     await expect(invoiceService.writeOff(inv._id, USER, 'bankruptcy', '')).rejects.toThrow('writeoff ledger down');
+  });
+});
+
+// ── COGS atomicity (audit Phase 1.3) ─────────────────────────────────────────
+describe('invoiceService COGS atomicity', () => {
+  test('postArJournal rolls back AR when COGS posting fails (no revenue without COGS)', async () => {
+    // Build an invoice with a product line item (so _applyCogsForInvoice runs)
+    // and taxAmount: 0 so the AR leg is exactly ONE postBalancedJournal call.
+    const inv = new Invoice({
+      _id: new (require('mongoose').Types.ObjectId)(),
+      businessId: 'biz1',
+      invoiceNumber: 'INV-COGS-1',
+      lineItems: [{ inventoryItemId: 'item1', quantity: 2, accountId: 'rev1' }],
+      amount: 1000,
+      totalAmount: 1000,
+      taxAmount: 0,
+      issueDate: new Date(),
+      customerId: 'cust1',
+    });
+    await inv.save();
+
+    // AR account resolvable (findOne with accountCode '1110')
+    ChartOfAccount.findOne.mockImplementation((q) => ({
+      lean: async () => {
+        if (q && q.accountCode === '1110') return { _id: 'ar1' };
+        return null;
+      },
+    }));
+
+    // reduceStock succeeds, but the COGS GL post throws
+    const inventoryService = require('../../../services/inventory.service');
+    jest.spyOn(inventoryService, 'reduceStock').mockResolvedValue({ cogsAmount: 600 });
+    jest.spyOn(inventoryService, 'resolveCostAccounts').mockResolvedValue({
+      cogsAccountId: 'cogs1',
+      inventoryAccountId: 'inv1',
+    });
+
+    postBalancedJournal
+      .mockResolvedValueOnce({ _id: 'arJe' })                      // AR debit succeeds
+      .mockRejectedValueOnce(new Error('COGS post failed'));         // COGS leg fails
+
+    await expect(invoiceService.postArJournal(inv, { _id: 'u1' }, '0.0.0.0'))
+      .rejects.toThrow('COGS post failed');
+
+    // AR link must be cleared (rolled back) so a retry re-posts cleanly.
+    expect(inv.arJournalId).toBeUndefined();
   });
 });

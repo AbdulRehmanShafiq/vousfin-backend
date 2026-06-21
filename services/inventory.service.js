@@ -234,13 +234,13 @@ class InventoryService {
    *
    * @returns {{ cogsAmount: number, unitCostUsed: number, updatedStock: number }}
    */
-  async reduceStock(businessId, itemId, qty) {
-    const item = await inventoryItemRepository.model.findOne({ _id: itemId, businessId });
+  async reduceStock(businessId, itemId, qty, session = null) {
+    const item = await inventoryItemRepository.model.findOne({ _id: itemId, businessId }).session(session);
     if (!item) throw new ApiError(404, 'Inventory item not found');
 
     const stockBefore = item.currentStock;
     const valuationBefore = Math.round(stockBefore * item.unitCostPrice * 100) / 100;
-    const { cogsAmount, unitCostUsed } = await item.reduceStock(qty);
+    const { cogsAmount, unitCostUsed } = await item.reduceStock(qty, session);
     logger.info(`Stock reduced: ${qty} units of "${item.name}" → COGS ${cogsAmount}, remaining ${item.currentStock}`);
 
     const valuationAfter = Math.round(item.currentStock * item.unitCostPrice * 100) / 100;

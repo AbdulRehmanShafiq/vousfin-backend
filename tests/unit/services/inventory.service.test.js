@@ -62,6 +62,19 @@ const lastPayloadFor = (name) => {
   return call ? call[1] : undefined;
 };
 
+/**
+ * Returns a mock that works for BOTH the old direct-await call
+ * (applyPurchaseStock: `await findOne(...)`) AND the new session-chained call
+ * (reduceStock: `await findOne(...).session(session)`).
+ * The returned object is a thenable resolving to `val`, and also has a
+ * `.session()` method that returns a Promise resolving to `val`.
+ */
+const mockFindOneResult = (val) => {
+  const p = Promise.resolve(val);
+  p.session = () => Promise.resolve(val);
+  return p;
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
   // Stub emit so we record broadcasts without running detached handlers.
@@ -73,7 +86,7 @@ afterEach(() => jest.restoreAllMocks());
 describe('InventoryService.applyPurchaseStock()', () => {
   it('increments stock (weighted-avg) and broadcasts RECEIVED + VALUATION_CHANGED', async () => {
     const item = makeItem(); // stock 10 @ 5
-    inventoryItemRepo.model.findOne.mockResolvedValue(item);
+    inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(item));
 
     const res = await inventoryService.applyPurchaseStock(ID_BUSINESS, ID_ITEM, 5, 7, { vendorId: ID_VENDOR });
 
@@ -100,7 +113,7 @@ describe('InventoryService.applyPurchaseStock()', () => {
   it('falls back to the item unit cost when costPerUnit is not positive', async () => {
     const item = makeItem();
     const spy = jest.spyOn(item, 'addStock');
-    inventoryItemRepo.model.findOne.mockResolvedValue(item);
+    inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(item));
 
     await inventoryService.applyPurchaseStock(ID_BUSINESS, ID_ITEM, 4, 0);
     expect(spy).toHaveBeenCalledWith(4, 5); // 5 = item.unitCostPrice fallback
@@ -108,7 +121,7 @@ describe('InventoryService.applyPurchaseStock()', () => {
 
   it('posts NO journal entry (funding journal is owned by the caller)', async () => {
     const item = makeItem();
-    inventoryItemRepo.model.findOne.mockResolvedValue(item);
+    inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(item));
     // If applyPurchaseStock tried to post a journal it would require transaction.service;
     // here we simply assert it resolves without one and returns only { item }.
     const res = await inventoryService.applyPurchaseStock(ID_BUSINESS, ID_ITEM, 1, 5);
@@ -122,7 +135,7 @@ describe('InventoryService.applyPurchaseStock()', () => {
   });
 
   it('throws 404 when the item does not exist', async () => {
-    inventoryItemRepo.model.findOne.mockResolvedValue(null);
+    inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(null));
     await expect(inventoryService.applyPurchaseStock(ID_BUSINESS, ID_ITEM, 3, 5))
       .rejects.toMatchObject({ statusCode: 404 });
   });
@@ -132,7 +145,7 @@ describe('InventoryService.applyPurchaseStock()', () => {
 describe('InventoryService.reduceStock() — events', () => {
   it('broadcasts REDUCED + VALUATION_CHANGED + LOW_STOCK when crossing the reorder level', async () => {
     const item = makeItem({ currentStock: 5, unitCostPrice: 4, reorderLevel: 3 });
-    inventoryItemRepo.model.findOne.mockResolvedValue(item);
+    inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(item));
     jest.spyOn(inventoryService, '_fireReorderEmail').mockResolvedValue(undefined);
 
     const res = await inventoryService.reduceStock(ID_BUSINESS, ID_ITEM, 3); // 5 → 2 (crosses 3)
@@ -153,7 +166,7 @@ describe('InventoryService.reduceStock() — events', () => {
 
   it('does NOT broadcast LOW_STOCK when stock stays above the reorder level', async () => {
     const item = makeItem({ currentStock: 20, unitCostPrice: 4, reorderLevel: 3 });
-    inventoryItemRepo.model.findOne.mockResolvedValue(item);
+    inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(item));
     jest.spyOn(inventoryService, '_fireReorderEmail').mockResolvedValue(undefined);
 
     await inventoryService.reduceStock(ID_BUSINESS, ID_ITEM, 3); // 20 → 17

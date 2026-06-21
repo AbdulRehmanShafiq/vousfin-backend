@@ -47,15 +47,16 @@ describe('invoiceService._applyCogsForInvoice() — ERP Step 5', () => {
     const total = await invoiceService._applyCogsForInvoice(invoice, USER);
 
     expect(inventoryService.reduceStock).toHaveBeenCalledTimes(2);
-    expect(inventoryService.reduceStock).toHaveBeenCalledWith(BIZ, 'item1', 3);
-    expect(inventoryService.reduceStock).toHaveBeenCalledWith(BIZ, 'item2', 2);
+    expect(inventoryService.reduceStock).toHaveBeenCalledWith(BIZ, 'item1', 3, null);
+    expect(inventoryService.reduceStock).toHaveBeenCalledWith(BIZ, 'item2', 2, null);
     expect(total).toBe(380);
 
     expect(postBalancedJournal).toHaveBeenCalledTimes(1);
-    const je = postBalancedJournal.mock.calls[0][0];
+    const [je, jeOpts] = postBalancedJournal.mock.calls[0];
     expect(je.debitAccountId).toBe('cogs');     // DR Cost of Goods Sold
     expect(je.creditAccountId).toBe('inv');     // CR Inventory
     expect(je.amount).toBe(380);
+    expect(jeOpts).toEqual({ session: null });  // session threaded through
   });
 
   test('no product lines → no stock reduction and no journal', async () => {
@@ -77,6 +78,7 @@ describe('invoiceService._applyCogsForInvoice() — ERP Step 5', () => {
     const total = await invoiceService._applyCogsForInvoice(invoice, USER);
 
     expect(inventoryService.reduceStock).toHaveBeenCalledTimes(1);
+    expect(inventoryService.reduceStock).toHaveBeenCalledWith(BIZ, 'item1', 1, null);
     expect(postBalancedJournal).not.toHaveBeenCalled();
     expect(total).toBe(100); // stock already reduced — caller still informed
   });

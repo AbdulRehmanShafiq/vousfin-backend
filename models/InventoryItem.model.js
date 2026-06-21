@@ -143,12 +143,12 @@ inventoryItemSchema.methods.addStock = async function (qty, costPerUnit) {
 /**
  * Reduce stock and return the COGS amount (qty × unitCostPrice).
  */
-inventoryItemSchema.methods.reduceStock = async function (qty) {
+inventoryItemSchema.methods.reduceStock = async function (qty, session = null) {
   if (qty <= 0) throw new Error('Quantity must be positive');
   if (qty > this.currentStock) throw new Error(`Insufficient stock: ${this.currentStock} available`);
   const cogs = qty * this.unitCostPrice;
   this.currentStock -= qty;
-  await this.save();
+  await this.save({ session });
   return { cogsAmount: Math.round(cogs * 100) / 100, unitCostUsed: this.unitCostPrice };
 };
 

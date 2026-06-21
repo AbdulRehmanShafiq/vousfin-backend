@@ -816,6 +816,11 @@ class InvoiceService {
             userId: user._id, reason: 'invoice_approved', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id, session,
           });
         }
+
+        // Matching principle — recognize COGS in the SAME unit as the revenue.
+        // A COGS/stock failure now rolls back the AR recognition (audit Phase 1.3),
+        // instead of leaving revenue posted with COGS silently skipped.
+        await this._applyCogsForInvoice(invoice, user, session);
       });
     } catch (e) {
       // Everything rolled back atomically — undo the in-memory mutations so the
@@ -827,15 +832,6 @@ class InvoiceService {
       invoice.linkedJournalEntryId = preLinked;
       logger.error(`[invoice] AR recognition rolled back for ${invoice.invoiceNumber}: ${e.message}`);
       throw e;
-    }
-
-    // ── ERP Step 5: recognize COGS + reduce inventory for product line items ──
-    // Matching principle — COGS is recognized in the same step as the revenue.
-    // Best-effort: a stock/COGS hiccup must never roll back AR recognition.
-    try {
-      await this._applyCogsForInvoice(invoice, user);
-    } catch (e) {
-      logger.warn(`[invoice] COGS recognition failed for ${invoice.invoiceNumber}: ${e.message}`);
     }
 
     return primaryJe;
@@ -855,7 +851,7 @@ class InvoiceService {
    * then one consolidated COGS journal is posted at weighted-average cost.
    * @private
    */
-  async _applyCogsForInvoice(invoice, user) {
+  async _applyCogsForInvoice(invoice, user, session = null) {
     const inventoryService = require('./inventory.service'); // lazy — avoid cycle
     const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
@@ -866,14 +862,10 @@ class InvoiceService {
 
     let totalCogs = 0;
     for (const li of productLines) {
-      try {
-        const { cogsAmount } = await inventoryService.reduceStock(
-          invoice.businessId, li.inventoryItemId, Number(li.quantity)
-        );
-        totalCogs = r2(totalCogs + (cogsAmount || 0));
-      } catch (e) {
-        logger.warn(`[invoice] stock reduction failed for item ${li.inventoryItemId} on ${invoice.invoiceNumber}: ${e.message}`);
-      }
+      const { cogsAmount } = await inventoryService.reduceStock(
+        invoice.businessId, li.inventoryItemId, Number(li.quantity), session
+      );
+      totalCogs = r2(totalCogs + (cogsAmount || 0));
     }
     if (totalCogs <= 0) return null;
 
@@ -899,7 +891,7 @@ class InvoiceService {
       exchangeRate:      invoice.exchangeRate || 1,
       createdBy:         user._id,
       lastModifiedBy:    user._id,
-    });
+    }, { session });
     logger.info(`[invoice] ${invoice.invoiceNumber}: recognized COGS ${totalCogs} for ${productLines.length} line(s)`);
     return totalCogs;
   }
