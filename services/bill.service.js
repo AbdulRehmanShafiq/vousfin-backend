@@ -14,7 +14,8 @@ const vendorRepository = require('../repositories/vendor.repository');
 const auditService = require('./audit.service');
 const billMatchingService = require('./billMatching.service');
 const partyBalanceService = require('./partyBalance.service');     // ERP Step 4 — centralized AP balance
-const { postBalancedJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync
+const { postBalancedJournal, postCompoundJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync; A13 — compound GRNI-clearing AP entry
+const accountRepo = require('../repositories/account.repository');  // A13 — resolve / back-fill GRNI (2115)
 const { withTransaction } = require('../utils/withTransaction');   // R-01 — atomic recognition unit
 const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // ERP Step 4 — event broadcasts
 const { ApiError } = require('../utils/ApiError');
@@ -617,6 +618,41 @@ class BillService {
    * @param {string} ipAddress
    * @returns {Promise<Object|null>}  The primary JournalEntry, or null if skipped
    */
+  // Exposed as a method so unit tests can stub it (same pattern as goodsReceipt).
+  // Resolves a default account by code, back-filling it (additive, idempotent) if a
+  // business predates it — so the GRNI clearing works on every business out of the box.
+  async _ensureAccount(businessId, code) {
+    let acc = await accountRepo.findByCode(businessId, code);
+    if (!acc) {
+      if (typeof accountRepo.syncMissingDefaults === 'function') await accountRepo.syncMissingDefaults(businessId);
+      acc = await accountRepo.findByCode(businessId, code);
+    }
+    return acc;
+  }
+
+  // A13 — Σ posted GRNI accrual value of the GRNs feeding this bill (capped by caller).
+  // Bills link to their PO via `purchaseOrderId`; the GRNs that posted a GRNI accrual
+  // are those confirmed receipts against that PO carrying a `glJournalId`. We recompute
+  // the accrual from acceptedQty×unitCost on stocked lines (matches what the GRN posted
+  // in goodsReceipt.service). Returns 0 when there is no confirmed-GRN linkage
+  // (degrades to expense-only — back-compat with ad-hoc bills).
+  async _linkedGrniValue(bill) {
+    if (!bill.purchaseOrderId) return 0;
+    const GoodsReceipt = require('../models/GoodsReceipt.model');
+    const grns = await GoodsReceipt.find({
+      businessId: bill.businessId, purchaseOrderId: bill.purchaseOrderId, glJournalId: { $ne: null },
+    }).lean();
+    let total = 0;
+    for (const grn of (grns || [])) {
+      for (const ri of (grn.receivedItems || [])) {
+        if (!ri.inventoryItemId) continue;
+        const acceptedQty = Math.max(0, Number(ri.quantityReceived || 0) - Number(ri.quantityRejected || 0));
+        total += acceptedQty * (Number(ri.unitCost) || 0);
+      }
+    }
+    return Math.round(total * 100) / 100;
+  }
+
   async postApLiabilityJournal(bill, user, ipAddress) {
     // Skip if a JE was already created (idempotent guard)
     if (bill.apLiabilityJournalId || bill.linkedJournalEntryId) {
@@ -628,127 +664,95 @@ class BillService {
     const businessId = bill.businessId;
 
     // ── Find Accounts Payable account (code 2110) ────────────────────────────
-    const apAccount = await ChartOfAccount.findOne({
-      businessId,
-      accountCode: '2110',
-    }).lean();
-
+    const apAccount = await ChartOfAccount.findOne({ businessId, accountCode: '2110' }).lean();
     if (!apAccount) {
-      logger.warn(`[bill] AP journal skipped for ${bill.billNumber} — Accounts Payable account (2110) not found`);
+      logger.warn(`[bill] AP journal skipped for ${bill.billNumber} — Accounts Payable (2110) not found`);
       return null;
     }
 
-    // ── Find the primary debit account ───────────────────────────────────────
-    // Priority: first accountId on a line item → purchases account (5100) → fallback
-    let debitAccountId = null;
-
+    // Resolve the expense/inventory debit account (line account → purchases → fallback).
+    let expenseAccountId = null;
     if (bill.lineItems && bill.lineItems.length > 0) {
       const firstWithAccount = bill.lineItems.find((li) => li.accountId);
-      if (firstWithAccount) debitAccountId = firstWithAccount.accountId;
+      if (firstWithAccount) expenseAccountId = firstWithAccount.accountId;
+    }
+    if (!expenseAccountId) {
+      const purchasesAcc = await ChartOfAccount.findOne({ businessId, accountCode: { $in: ['5100', '5000', '6100'] } }).lean();
+      if (purchasesAcc) expenseAccountId = purchasesAcc._id;
     }
 
-    if (!debitAccountId) {
-      // Try standard purchases account (5100 — Purchases / Cost of Goods Sold)
-      const purchasesAcc = await ChartOfAccount.findOne({
-        businessId,
-        accountCode: { $in: ['5100', '5000', '6100'] },
-      }).lean();
-      if (purchasesAcc) debitAccountId = purchasesAcc._id;
-    }
-
-    if (!debitAccountId) {
-      logger.warn(`[bill] AP journal skipped for ${bill.billNumber} — no debit account found`);
-      return null;
-    }
-
-    // Ensure debit ≠ credit
-    if (debitAccountId.toString() === apAccount._id.toString()) {
-      logger.warn(`[bill] AP journal skipped — debit and credit are the same account`);
-      return null;
-    }
-
-    const netAmount = r2(bill.amount || (bill.totalAmount - (bill.taxAmount || 0)));
-    const primaryAmount = netAmount > 0 ? netAmount : r2(bill.totalAmount);
-
-    // ── Resolve the optional input-tax account up-front (read, no write) ─────
     const taxAmount = r2(bill.taxAmount || 0);
-    let inputTaxAcc = null;
-    if (taxAmount > 0) {
-      const acc = await ChartOfAccount.findOne({
-        businessId,
-        accountCode: { $in: ['1170', '1171', '1172'] },
-      }).lean();
-      if (acc && acc._id.toString() !== apAccount._id.toString()) inputTaxAcc = acc;
+    const netAmount = r2(bill.amount || (bill.totalAmount - taxAmount));
+    const billNet = netAmount > 0 ? netAmount : r2(bill.totalAmount - taxAmount);
+
+    // Stocked-line subtotal (lines that hit inventory) bounds how much GRNI we can clear.
+    const stockedSubtotal = r2((bill.lineItems || [])
+      .filter((li) => li.inventoryItemId)
+      .reduce((s, li) => s + Number(li.quantity || 0) * Number(li.unitPrice || 0), 0));
+
+    const linkedGrni = r2(await this._linkedGrniValue(bill));
+    const grniDebit = r2(Math.min(linkedGrni, stockedSubtotal));
+    const expenseDebit = r2(billNet - grniDebit);
+
+    // Build the compound lines.
+    const lines = [];
+    if (grniDebit > 0) {
+      const grniAcc = await this._ensureAccount(businessId, '2115');
+      if (!grniAcc) throw new ApiError(400, `Cannot post ${bill.billNumber}: GRNI (2115) account missing.`);
+      lines.push({ accountId: grniAcc._id, type: 'debit', amount: grniDebit, description: 'Clear goods received not invoiced' });
     }
+    if (expenseDebit > 0.0001) {
+      if (!expenseAccountId) {
+        logger.warn(`[bill] AP journal skipped for ${bill.billNumber} — no expense account for the non-GRNI remainder`);
+        return null;
+      }
+      lines.push({ accountId: expenseAccountId, type: 'debit', amount: expenseDebit, description: 'Purchase / expense' });
+    }
+    if (taxAmount > 0) {
+      const inputTaxAcc = await ChartOfAccount.findOne({ businessId, accountCode: { $in: ['1170', '1171', '1172'] } }).lean();
+      if (inputTaxAcc) lines.push({ accountId: inputTaxAcc._id, type: 'debit', amount: taxAmount, description: 'Recoverable input tax' });
+    }
+    const apCredit = r2(lines.filter((l) => l.type === 'debit').reduce((s, l) => s + l.amount, 0));
+    lines.push({ accountId: apAccount._id, type: 'credit', amount: apCredit, description: 'Accounts payable' });
 
     // ── R-01: recognize AP atomically ────────────────────────────────────────
-    // The primary JE, the optional input-tax JE, the bill document update and the
-    // vendor balance move now commit together or roll back together (standalone
-    // dev falls back to non-atomic). A failure rolls everything back, so a bill is
-    // never half-recognized (e.g. AP posted but the vendor balance missing).
+    // The single compound JE, the bill document update and the vendor balance move
+    // commit together or roll back together (standalone dev falls back to non-atomic).
+    // A failure rolls everything back, so a bill is never half-recognized (e.g. AP
+    // posted but the vendor balance missing). The compound poster rejects an
+    // unbalanced entry — keep that as the balance guard.
     let primaryJe = null;
     const preLinked = bill.linkedJournalEntryId; // remember to restore on rollback
     try {
       await withTransaction(async (session) => {
-        let apCredited = 0;
-        primaryJe = await postBalancedJournal({
+        primaryJe = await postCompoundJournal({
           businessId,
-          transactionDate:  bill.issueDate,
-          description:      `AP Liability — ${bill.billNumber}${bill.vendorSnapshot?.vendorName ? ' (' + bill.vendorSnapshot.vendorName + ')' : ''}`,
-          transactionType:  TRANSACTION_TYPES.CREDIT_PURCHASE,
-          amount:           primaryAmount,
-          debitAccountId:   debitAccountId,
-          creditAccountId:  apAccount._id,
-          status:           JOURNAL_STATUS.POSTED,
+          transactionDate:   bill.issueDate,
+          description:       `AP Liability — ${bill.billNumber}${bill.vendorSnapshot?.vendorName ? ' (' + bill.vendorSnapshot.vendorName + ')' : ''}`,
+          transactionType:   TRANSACTION_TYPES.CREDIT_PURCHASE,
           transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
-          invoiceNumber:    bill.billNumber,
-          vendorId:         bill.vendorId || null,
-          currencyCode:     bill.currencyCode || 'PKR',
-          exchangeRate:     bill.exchangeRate || 1,
-          createdBy:        user._id,
-          lastModifiedBy:   user._id,
+          invoiceNumber:     bill.billNumber,
+          vendorId:          bill.vendorId || null,
+          currencyCode:      bill.currencyCode || 'PKR',
+          exchangeRate:      bill.exchangeRate || 1,
+          createdBy:         user._id,
+          lastModifiedBy:    user._id,
+          taxAmount:         taxAmount || 0,
           // M9 — this entry is the immutable projection of the authoritative bill.
-          isProjection:     true,
-          projectionOf:     { documentType: 'bill', documentId: bill._id },
+          isProjection:      true,
+          projectionOf:      { documentType: 'bill', documentId: bill._id },
+          idempotencyKey:    `bill:ap:${bill._id}`,
+          lines,
         }, { session });
-        apCredited = r2(apCredited + primaryAmount);
 
         bill.apLiabilityJournalId = primaryJe._id;
         if (!bill.linkedJournalEntryId) bill.linkedJournalEntryId = primaryJe._id;
         await bill.save({ session });
 
-        // Input-tax JE: DR Input Tax Receivable, CR Accounts Payable.
-        // taxAmount/taxType tagged so this entry counts toward recoverable input
-        // tax on the tax return. 'GST Receivable' → taxType 'GST'.
-        if (inputTaxAcc) {
-          const inputTaxType = (inputTaxAcc.accountName || 'Tax')
-            .replace(/\b(Payable|Receivable|Input)\b/ig, '').replace(/\(.*?\)/g, '').trim() || 'Tax';
-          await postBalancedJournal({
-            businessId,
-            transactionDate:  bill.issueDate,
-            description:      `AP Input Tax — ${bill.billNumber}`,
-            transactionType:  TRANSACTION_TYPES.CREDIT_PURCHASE,
-            amount:           taxAmount,
-            taxAmount:        taxAmount,
-            taxType:          inputTaxType,
-            debitAccountId:   inputTaxAcc._id,
-            creditAccountId:  apAccount._id,
-            status:           JOURNAL_STATUS.POSTED,
-            transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
-            invoiceNumber:    bill.billNumber,
-            vendorId:         bill.vendorId || null,
-            currencyCode:     bill.currencyCode || 'PKR',
-            exchangeRate:     bill.exchangeRate || 1,
-            createdBy:        user._id,
-            lastModifiedBy:   user._id,
-          }, { session });
-          apCredited = r2(apCredited + taxAmount);
-        }
-
         // Mirror the AP credit onto the vendor's payable balance (broadcasts
         // VENDOR_BALANCE_CHANGED). Joined to the same transaction.
-        if (bill.vendorId && apCredited > 0) {
-          await partyBalanceService.adjustPayable(businessId, bill.vendorId, apCredited, {
+        if (bill.vendorId && apCredit > 0) {
+          await partyBalanceService.adjustPayable(businessId, bill.vendorId, apCredit, {
             userId: user._id, reason: 'bill_approved', entityType: ENTITY_TYPES.BILL, entityId: bill._id, session,
           });
         }

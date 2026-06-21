@@ -7,7 +7,7 @@ jest.mock('../../../services/audit.service');
 // AP-liability posting dependencies — previously UNMOCKED, which let the
 // silent swallow in approve() hide postApLiabilityJournal throwing without a DB.
 jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() }));
-jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn() }));
+jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn(), postCompoundJournal: jest.fn() }));
 jest.mock('../../../services/partyBalance.service', () => ({ adjustPayable: jest.fn() }));
 jest.mock('../../../services/billMatching.service', () => ({ runFullMatch: jest.fn() }));
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
@@ -67,7 +67,7 @@ const billService = require('../../../services/bill.service');
 const auditService = require('../../../services/audit.service');
 const vendorRepository = require('../../../repositories/vendor.repository');
 const ChartOfAccount = require('../../../models/ChartOfAccount.model');
-const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
+const { postBalancedJournal, postCompoundJournal } = require('../../../services/ledgerPosting.service');
 const partyBalanceService = require('../../../services/partyBalance.service');
 const billMatchingService = require('../../../services/billMatching.service');
 
@@ -95,6 +95,7 @@ beforeEach(() => {
     },
   }));
   postBalancedJournal.mockResolvedValue({ _id: new mongoose.Types.ObjectId() });
+  postCompoundJournal.mockResolvedValue({ _id: new mongoose.Types.ObjectId() });
   partyBalanceService.adjustPayable.mockResolvedValue(undefined);
   billMatchingService.runFullMatch.mockResolvedValue({});
 });
@@ -277,7 +278,7 @@ describe('billService.approve() — AP liability journal', () => {
     const ap = await billService.approve(bill._id, USER, 'ok', '');
 
     expect(ap.state).toBe('approved');
-    expect(postBalancedJournal).toHaveBeenCalled();
+    expect(postCompoundJournal).toHaveBeenCalled();
     expect(ap.apLiabilityJournalId).toBeDefined();
   });
 
@@ -285,9 +286,112 @@ describe('billService.approve() — AP liability journal', () => {
     const bill = await submittedBill();
     // The ledger poster fails — the bill must NOT be reported as cleanly approved
     // with no AP journal. The error has to propagate to the caller.
-    postBalancedJournal.mockRejectedValueOnce(new Error('ledger down'));
+    postCompoundJournal.mockRejectedValueOnce(new Error('ledger down'));
 
     await expect(billService.approve(bill._id, USER, 'ok', '')).rejects.toThrow('ledger down');
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  //  Audit A13 — compound AP entry clears GRNI for the received-stock portion
+  // ──────────────────────────────────────────────────────────────────────────
+  describe('postApLiabilityJournal — GRNI split (audit A13)', () => {
+    const service = billService;
+
+    function buildBill(props) {
+      return new Bill({
+        _id: new mongoose.Types.ObjectId(),
+        businessId: 'biz1',
+        issueDate: new Date(),
+        ...props,
+      });
+    }
+
+    test('clears GRNI for received stock and expenses the remainder', async () => {
+      // Bill: net 1000 (stocked 800 backed by a GRN + 200 services), tax 0.
+      const bill = buildBill({
+        billNumber: 'BILL-GRNI', amount: 1000, totalAmount: 1000, taxAmount: 0,
+        apLiabilityJournalId: null, linkedJournalEntryId: null,
+        lineItems: [
+          { inventoryItemId: 'item1', quantity: 8, unitPrice: 100, accountId: null }, // 800 stocked
+          { inventoryItemId: null, quantity: 1, unitPrice: 200, accountId: 'exp1' },   // 200 service
+        ],
+      });
+      service._ensureAccount = jest.fn().mockResolvedValue({ _id: 'grni1', accountCode: '2115' });
+      service._linkedGrniValue = jest.fn().mockResolvedValue(800);
+      ChartOfAccount.findOne.mockImplementation(({ accountCode }) => ({
+        lean: async () => {
+          if (accountCode === '2110') return { _id: 'ap1' };
+          return { _id: 'exp1' };
+        },
+      }));
+
+      await service.postApLiabilityJournal(bill, { _id: 'u1' }, '0.0.0.0');
+
+      expect(postCompoundJournal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lines: expect.arrayContaining([
+            expect.objectContaining({ accountId: 'grni1', type: 'debit', amount: 800 }),
+            expect.objectContaining({ accountId: 'exp1', type: 'debit', amount: 200 }),
+            expect.objectContaining({ accountId: 'ap1', type: 'credit', amount: 1000 }),
+          ]),
+        }),
+        // The unit harness mocks withTransaction as `fn(null)`, so the session is null
+        // here; what matters is the second arg carries the session key through.
+        expect.objectContaining({ session: null }),
+      );
+    });
+
+    test('with no GRN debits the full net to expense (back-compat)', async () => {
+      const bill = buildBill({
+        billNumber: 'BILL-NOGRN', amount: 500, totalAmount: 500, taxAmount: 0,
+        apLiabilityJournalId: null, linkedJournalEntryId: null,
+        lineItems: [{ inventoryItemId: null, quantity: 1, unitPrice: 500, accountId: 'exp1' }],
+      });
+      service._ensureAccount = jest.fn().mockResolvedValue({ _id: 'grni1' });
+      service._linkedGrniValue = jest.fn().mockResolvedValue(0);
+      ChartOfAccount.findOne.mockImplementation(({ accountCode }) => ({
+        lean: async () => ({ _id: accountCode === '2110' ? 'ap1' : 'exp1' }),
+      }));
+
+      await service.postApLiabilityJournal(bill, { _id: 'u1' }, '0.0.0.0');
+
+      const call = postCompoundJournal.mock.calls.at(-1)[0];
+      expect(call.lines.find((l) => l.accountId === 'grni1')).toBeUndefined(); // no GRNI leg
+      expect(call.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ accountId: 'exp1', type: 'debit', amount: 500 }),
+        expect.objectContaining({ accountId: 'ap1', type: 'credit', amount: 500 }),
+      ]));
+    });
+
+    test('with tax adds an input-tax leg and the entry balances to AP', async () => {
+      // net 800 (all GRN-backed) + tax 100 → AP 900.
+      const bill = buildBill({
+        billNumber: 'BILL-TAX', amount: 800, totalAmount: 900, taxAmount: 100,
+        apLiabilityJournalId: null, linkedJournalEntryId: null,
+        lineItems: [{ inventoryItemId: 'item1', quantity: 8, unitPrice: 100, accountId: null }],
+      });
+      service._ensureAccount = jest.fn().mockResolvedValue({ _id: 'grni1', accountCode: '2115' });
+      service._linkedGrniValue = jest.fn().mockResolvedValue(800);
+      ChartOfAccount.findOne.mockImplementation(({ accountCode }) => ({
+        lean: async () => {
+          if (accountCode === '2110') return { _id: 'ap1' };
+          if (accountCode && accountCode.$in && accountCode.$in.includes('1170')) return { _id: 'tax1', accountName: 'GST Receivable' };
+          return { _id: 'exp1' };
+        },
+      }));
+
+      await service.postApLiabilityJournal(bill, { _id: 'u1' }, '0.0.0.0');
+
+      const call = postCompoundJournal.mock.calls.at(-1)[0];
+      expect(call.lines).toEqual(expect.arrayContaining([
+        expect.objectContaining({ accountId: 'grni1', type: 'debit', amount: 800 }),
+        expect.objectContaining({ accountId: 'tax1', type: 'debit', amount: 100 }),
+        expect.objectContaining({ accountId: 'ap1', type: 'credit', amount: 900 }),
+      ]));
+      const debits = call.lines.filter((l) => l.type === 'debit').reduce((s, l) => s + l.amount, 0);
+      const credits = call.lines.filter((l) => l.type === 'credit').reduce((s, l) => s + l.amount, 0);
+      expect(debits).toBe(credits);
+    });
   });
 
   test('markPaid does NOT swallow a settlement posting failure (audit A10)', async () => {
