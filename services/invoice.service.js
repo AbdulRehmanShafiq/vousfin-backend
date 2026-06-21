@@ -531,8 +531,13 @@ class InvoiceService {
       ((invoice.remainingBalance != null ? invoice.remainingBalance : invoice.totalAmount) || 0) * 100
     ) / 100;
 
+    // All-or-nothing (audit A10): the bad-debt journal (DR Bad Debt Expense / CR AR),
+    // the customer-balance decrement and the WRITTEN_OFF state change commit together.
+    // Previously the GL post sat in a swallowing try/catch and the state change ran
+    // regardless — leaving an invoice written off with the receivable still open in
+    // the GL (overstated assets, unrecorded expense).
     if (outstanding > 0) {
-      try {
+      return withTransaction(async (s) => {
         const [badDebtAcct, arAcct] = await Promise.all([
           ChartOfAccount.findOne({
             businessId: invoice.businessId,
@@ -544,47 +549,43 @@ class InvoiceService {
           }).lean(),
         ]);
 
-        if (badDebtAcct && arAcct) {
-          const je = await postBalancedJournal({
-            businessId:         invoice.businessId,
-            transactionDate:    new Date(),
-            description:        `Write-off: Invoice ${invoice.invoiceNumber} — ${reason || 'bad debt'}`,
-            transactionType:    TRANSACTION_TYPES.ADJUSTING_ENTRY,
-            amount:             outstanding,
-            debitAccountId:     badDebtAcct._id,
-            creditAccountId:    arAcct._id,
-            transactionSource:  TRANSACTION_SOURCES.SYSTEM_GENERATED,
-            status:             JOURNAL_STATUS.POSTED,
-            entryType:          'adjusting',
-            invoiceNumber:      invoice.invoiceNumber,
-            createdBy:          user._id,
-            lastModifiedBy:     user._id,
-            currencyCode:       invoice.currencyCode || 'PKR',
-            baseCurrencyCode:   invoice.baseCurrencyCode || 'PKR',
-            exchangeRate:       invoice.exchangeRate || 1,
-            baseCurrencyAmount: outstanding,
-          });
-          invoice.writeOffJournalId = je._id;
+        if (!badDebtAcct || !arAcct) {
+          throw new ApiError(500, `Cannot write off invoice ${invoice.invoiceNumber}: Bad Debt Expense (6370) or Accounts Receivable (1110) account is not set up.`);
+        }
 
-          // Decrement the customer's receivable balance
-          if (invoice.customerId) {
-            await partyBalanceService.adjustReceivable(
-              invoice.businessId,
-              invoice.customerId,
-              -outstanding,
-              { userId: user._id, reason: 'write_off', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id }
-            );
-          }
-        } else {
-          logger.warn(
-            `[invoice.writeOff] Could not find Bad Debt or AR account for business ` +
-            `${invoice.businessId} — GL not posted for invoice ${invoice.invoiceNumber}`
+        const je = await postBalancedJournal({
+          businessId:         invoice.businessId,
+          transactionDate:    new Date(),
+          description:        `Write-off: Invoice ${invoice.invoiceNumber} — ${reason || 'bad debt'}`,
+          transactionType:    TRANSACTION_TYPES.ADJUSTING_ENTRY,
+          amount:             outstanding,
+          debitAccountId:     badDebtAcct._id,
+          creditAccountId:    arAcct._id,
+          transactionSource:  TRANSACTION_SOURCES.SYSTEM_GENERATED,
+          status:             JOURNAL_STATUS.POSTED,
+          entryType:          'adjusting',
+          invoiceNumber:      invoice.invoiceNumber,
+          createdBy:          user._id,
+          lastModifiedBy:     user._id,
+          currencyCode:       invoice.currencyCode || 'PKR',
+          baseCurrencyCode:   invoice.baseCurrencyCode || 'PKR',
+          exchangeRate:       invoice.exchangeRate || 1,
+          baseCurrencyAmount: outstanding,
+        }, { session: s });
+        invoice.writeOffJournalId = je._id;
+
+        // Decrement the customer's receivable balance
+        if (invoice.customerId) {
+          await partyBalanceService.adjustReceivable(
+            invoice.businessId,
+            invoice.customerId,
+            -outstanding,
+            { userId: user._id, reason: 'write_off', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id, session: s }
           );
         }
-      } catch (glErr) {
-        logger.error(`[invoice.writeOff] GL posting failed for ${invoice.invoiceNumber}: ${glErr.message}`);
-        // Do NOT re-throw — state change still proceeds; GL drift is logged
-      }
+
+        return this._applyStateChange(invoice, INVOICE_STATES.WRITTEN_OFF, user, { reason, ipAddress, session: s });
+      });
     }
 
     return this._applyStateChange(invoice, INVOICE_STATES.WRITTEN_OFF, user, { reason, ipAddress });

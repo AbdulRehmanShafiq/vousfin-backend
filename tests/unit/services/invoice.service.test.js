@@ -311,4 +311,23 @@ describe('invoiceService dispute + write-off', () => {
     expect(wo.state).toBe('written_off');
     expect(wo.writeOffReason).toBe('bankruptcy');
   });
+
+  test('write-off does NOT swallow a bad-debt posting failure (audit A10)', async () => {
+    // Seed an outstanding invoice so write-off enters the bad-debt GL path.
+    const inv = new Invoice({
+      _id: new mongoose.Types.ObjectId(), businessId: 'biz1', invoiceNumber: 'INV-WO2',
+      state: 'partially_paid', customerId: 'c1', totalAmount: 1000, remainingBalance: 1000,
+    });
+    await inv.save();
+    // Supply Bad Debt + AR accounts (write-off uses $or queries the default mock skips)
+    // so execution reaches the poster, which we then fail.
+    ChartOfAccount.findOne.mockReturnValue({
+      lean: async () => ({ _id: new mongoose.Types.ObjectId() }),
+    });
+    // The bad-debt journal fails — the invoice must NOT be left WRITTEN_OFF with the
+    // receivable still open in the GL.
+    postBalancedJournal.mockRejectedValueOnce(new Error('writeoff ledger down'));
+
+    await expect(invoiceService.writeOff(inv._id, USER, 'bankruptcy', '')).rejects.toThrow('writeoff ledger down');
+  });
 });
