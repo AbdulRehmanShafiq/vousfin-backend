@@ -222,18 +222,23 @@ describe('billService.approve() — 3-way match gating (audit A12)', () => {
   test('approve throws 409 when 3-way match is BLOCKED and no override', async () => {
     const bill = buildBill({ state: 'awaiting_approval', billNumber: 'BILL-1' });
     billService._loadOrThrow = jest.fn().mockResolvedValue(bill);
-    billService._applyStateChange = jest.fn().mockResolvedValue(bill);
+    const applyStateChangeSpy = jest.fn().mockResolvedValue(bill);
+    billService._applyStateChange = applyStateChangeSpy;
     jest.spyOn(billMatchingService, 'runFullMatch').mockResolvedValue({
       status: TWM.BLOCKED,
       matchResult: { duplicateCheck: { isDuplicate: false }, summary: 'GRN: under_received' },
       bill,
     });
-    const postSpy = jest.spyOn(billService, 'postApLiabilityJournal');
+    const postSpy = jest.spyOn(billService, 'postApLiabilityJournal').mockResolvedValue(undefined);
 
     await expect(billService.approve(bill._id, { _id: 'u1', businessId: 'b1' }, 'ok', '0.0.0.0'))
       .rejects.toThrow(/blocked/i);
     // AP must NOT be posted for a blocked bill.
     expect(postSpy).not.toHaveBeenCalled();
+    // The gate must fire BEFORE the state is committed — _applyStateChange must
+    // never be called when the match blocks without an override.  This is the
+    // regression guard for the reorder introduced in the Task-6 review fix.
+    expect(applyStateChangeSpy).not.toHaveBeenCalled();
   });
 
   test('approve proceeds and logs an override when override=true on a BLOCKED match', async () => {

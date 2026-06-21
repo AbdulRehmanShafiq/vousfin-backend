@@ -262,24 +262,17 @@ class BillService {
       }
     }
 
-    bill.approvalLog.push({
-      action: 'approved',
-      actorId: user._id,
-      actorName: user.fullName || user.email || 'Unknown',
-      actorRole: user.role || null,
-      note: note || null,
-      timestamp: new Date(),
-    });
-    bill.approvalStatus = APPROVAL_STATUS.APPROVED;
-    bill.approvedBy = user._id;
-    bill.approvedAt = new Date();
-    const approved = await this._applyStateChange(bill, BILL_STATES.APPROVED, user, { reason: note, ipAddress });
-
     // Phase 3.2 — auto-run 3-way match, then GATE on it (audit A12). A BLOCKED
     // match or a duplicate vendor invoice stops approval unless the caller passes
     // an explicit override (admin decision, recorded below). Match-engine errors
     // (e.g. the PO can't be loaded) degrade to advisory — we never block on an
     // inability to run the check, only on a check that ran and said "blocked".
+    //
+    // IMPORTANT: the gate runs HERE, BEFORE any approval-state mutation (approvalLog
+    // push, approvalStatus set, _applyStateChange). A blocked bill without override
+    // must throw while the bill is still in its prior state (e.g. 'awaiting_approval')
+    // — nothing committed to the database. (Task-6 review: prior code ran the gate
+    // after _applyStateChange, leaving the DB in state='approved' with no AP journal.)
     let matchOutcome = null;
     try {
       matchOutcome = await billMatchingService.runFullMatch(id, bill.businessId.toString());
@@ -323,6 +316,19 @@ class BillService {
         }
       }
     }
+
+    bill.approvalLog.push({
+      action: 'approved',
+      actorId: user._id,
+      actorName: user.fullName || user.email || 'Unknown',
+      actorRole: user.role || null,
+      note: note || null,
+      timestamp: new Date(),
+    });
+    bill.approvalStatus = APPROVAL_STATUS.APPROVED;
+    bill.approvedBy = user._id;
+    bill.approvedAt = new Date();
+    const approved = await this._applyStateChange(bill, BILL_STATES.APPROVED, user, { reason: note, ipAddress });
 
     // Post the AP liability journal. Do NOT swallow a failure here — the GL must
     // reflect the liability the moment a bill is approved. The poster is atomic
