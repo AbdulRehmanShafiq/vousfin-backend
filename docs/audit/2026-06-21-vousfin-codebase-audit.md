@@ -220,6 +220,23 @@ Full backend suite after fixes: **165 suites / 1201 tests green**; **ledger drif
 
 ---
 
+## THIRD PASS — A10 swallows + procurement 3-way match (2026-06-21)
+
+### FIXED (TDD, committed)
+- **A10 (settlement/write-off swallows):** `bill.markPaid` (`54e6668`), `invoice.markPaid` (`54e6668`), `invoice.writeOff` (`12f10e7`) committed the document state change first, then posted the settlement/bad-debt journal + party-balance adjustment inside a swallowing try/catch (and the posters returned null on missing accounts). A posting failure left the doc PAID/WRITTEN_OFF with the AP/AR liability still open in the GL. Now each runs the state change + GL post + party decrement in ONE `withTransaction` (session threaded through `_applyStateChange`→`save`, the settlement/bad-debt poster, and `partyBalance`); posters throw on missing/duplicate accounts → full rollback. Regression tests assert each rejects when the post fails.
+- **A11 (3-way match zero-received hole):** `billMatching.validateQuantityVariance` used `pct(billed, received)` which returns 0 on a zero denominator, so **billing for goods where `receivedQty=0` passed as "ok"** — defeating the core fraud control. Now `receivedQty=0` with a positive billed/ordered qty → 100% → BLOCK (`5e49828`). Tests added.
+
+### NEW findings (documented, not yet fixed — need policy/design decisions)
+- 🟠 **A12 — 3-way match is advisory-only (control gap).** `billMatching.runFullMatch` computes and stores `bill.threeWayMatchStatus` (incl. `BLOCKED`, duplicate-invoice, over-billed, under-received) but `bill.approve` runs it inside a swallowing try/catch and **never blocks approval** on a `BLOCKED` result — a mismatched/duplicate bill is still approved and AP-posted. *Recommended fix:* on approve, if status is `BLOCKED` (or duplicate), refuse unless an explicit `override` flag is supplied (mirror the period-lock `forcePost` pattern). This changes the approval contract, so it's a **business decision** — not changed unilaterally. (`services/bill.service.js` approve; `billMatching.service.js:434-457`)
+- 🟠 **A13 — GRN has no GL/GRNI accrual → inventory subledger ↔ GL divergence.** `goodsReceipt` receives goods into the inventory **subledger** (`inventoryService.applyPurchaseStock` — currentStock + weighted-avg cost) but **posts no journal** ([goodsReceipt.service.js:287-288](services/goodsReceipt.service.js)); the GL Inventory account is only touched when the Bill is approved. Between receipt and billing, the subledger inventory value and the GL Inventory account diverge (and the AP liability for received-not-invoiced goods is unaccrued). Worse, if a bill debits an **Expense** account (not Inventory) for a stocked item, the GL Inventory debit never happens while the subledger rose at receipt → permanent divergence, and a later sale's COGS drives GL Inventory negative. *Recommended fix:* post a GRNI accrual at receipt (DR Inventory / CR Goods-Received-Not-Invoiced) and have the bill clear GRNI (DR GRNI / CR AP). This is a **design addition**, not a one-line fix.
+- 🟡 **A14 — GRN stock-in is swallowed.** `goodsReceipt` wraps `applyPurchaseStock` in a try/catch that only warns ([:271, :323](services/goodsReceipt.service.js)) — a GRN can be marked "received" with no stock actually added to the subledger (idempotent re-apply mitigates, but the divergence is silent). Same swallow class as A1/A10.
+
+### Still deferred from prior passes
+- **creditNote.cancel** (A10 class) — swallows its GL reversal + balance restore; atomic fix needs `reverseTransaction` to accept an external session (it opens its own transaction). Scoped core change.
+- **A7-residual / T2 / T3** as previously noted.
+
+---
+
 ## EXTENDED COVERAGE (second pass) — AR/AP docs, inventory, installments, AI, frontend
 
 This pass deep-checked the areas previously marked **(survey)**. Net result: mostly **positive confirmations and downgrades**, plus **one new systemic finding (A9)** and **one correction**.
