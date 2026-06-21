@@ -5,7 +5,7 @@
 // and the fx-rates controller (month-end revaluation endpoint).
 const JournalEntry   = require('../models/JournalEntry.model');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
-const { applyRunningBalance } = require('./ledgerPosting.service');
+const { applyRunningBalance, postCompoundJournal } = require('./ledgerPosting.service');
 const fxService      = require('./fx.service');
 const reportCache    = require('../utils/reportCache');
 const logger         = require('../config/logger');
@@ -15,6 +15,37 @@ const {
   INPUT_METHODS,
   TRANSACTION_SOURCES,
 } = require('../config/constants');
+
+/**
+ * Pure: decide the debit/credit legs and gain/loss for an unrealised FX month-end
+ * revaluation of a monetary item (IAS 21 §23(a)). Exported for unit testing.
+ *
+ *   diff = currentBaseValue − bookedBaseValue
+ *   AR (asset):     diff>0 = GAIN  (DR AR / CR Unrealised);  diff<0 = LOSS (DR Unrealised / CR AR)
+ *   AP (liability): diff>0 = LOSS  (DR Unrealised / CR AP);  diff<0 = GAIN (DR AP / CR Unrealised)
+ *
+ * The monetary account always moves in its natural direction as its base value
+ * rises: AR (asset) is debited when value rises; AP (liability) is credited when
+ * value rises.
+ *
+ * @param {{ isAR:boolean, diff:number, monetaryAccId:any, unrealisedAccId:any }} p
+ * @returns {{ isGain:boolean, absAmt:number, debitId:any, creditId:any }}
+ */
+function buildUnrealisedFxRevaluation({ isAR, diff, monetaryAccId, unrealisedAccId }) {
+  const absAmt = Math.round(Math.abs(Number(diff) || 0) * 100) / 100;
+  const isGain = isAR ? diff > 0 : diff < 0;
+  let debitId, creditId;
+  if (diff > 0) {
+    // base value rose: AR is debited (asset up); AP is credited (liability up)
+    if (isAR) { debitId = monetaryAccId; creditId = unrealisedAccId; }
+    else      { debitId = unrealisedAccId; creditId = monetaryAccId; }
+  } else {
+    // base value fell: AR is credited (asset down); AP is debited (liability down)
+    if (isAR) { debitId = unrealisedAccId; creditId = monetaryAccId; }
+    else      { debitId = monetaryAccId; creditId = unrealisedAccId; }
+  }
+  return { isGain, absAmt, debitId, creditId };
+}
 
 class JournalGeneratorService {
   // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -189,31 +220,24 @@ class JournalGeneratorService {
         // Reverse any prior unrealised entry for this source transaction (idempotent)
         await this._reversePriorUnrealisedEntry(businessId, tx._id, asOf, userId);
 
-        // Create new unrealised adjusting entry
-        const isGain = diff > 0;
-        const absAmt = Math.abs(diff);
+        // Create new unrealised adjusting entry. Direction is computed by the pure
+        // helper so AR (asset) and AP (liability) get the correct IAS 21 polarity
+        // (see audit A2 — the old inline branch booked payables backwards).
         const monetaryAccId = isAR ? tx.debitAccountId._id : tx.creditAccountId._id;
+        const { isGain, absAmt, debitId, creditId } = buildUnrealisedFxRevaluation({
+          isAR, diff, monetaryAccId, unrealisedAccId: fxAccts.unrealised._id,
+        });
 
-        let debitId, creditId;
-        if (isAR) {
-          debitId  = isGain ? monetaryAccId        : fxAccts.unrealised._id;
-          creditId = isGain ? fxAccts.unrealised._id : monetaryAccId;
-        } else {
-          // AP: gain = AP goes down (debit AP / credit Unrealised)
-          debitId  = isGain ? monetaryAccId        : fxAccts.unrealised._id;
-          creditId = isGain ? fxAccts.unrealised._id : monetaryAccId;
-        }
-
-        const entry = await JournalEntry.create({
+        // Post atomically through the canonical poster (audit A4): the JE and both
+        // running-balance updates commit together, and the idempotencyKey makes a
+        // re-run of the same month for the same source a no-op.
+        const entry = await postCompoundJournal({
           businessId,
           transactionDate:   asOf,
           description:       `Unrealised FX Revaluation — ${tx.currencyCode}/${baseCurrency} (source: ${tx._id})`,
           transactionType:   TRANSACTION_TYPES.FX_REVALUATION,
-          amount:            absAmt,
           baseCurrencyAmount: absAmt,
           exchangeRate:      1,
-          debitAccountId:    debitId,
-          creditAccountId:   creditId,
           inputMethod:       INPUT_METHODS.FORM,
           status:            JOURNAL_STATUS.POSTED,
           transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
@@ -228,10 +252,12 @@ class JournalGeneratorService {
             bookingRate,
             revaluationDate: asOf.toISOString(),
           },
+          idempotencyKey: `fx:unrealised:${tx._id}:${asOf.toISOString()}`,
+          lines: [
+            { accountId: debitId,  type: 'debit',  amount: absAmt },
+            { accountId: creditId, type: 'credit', amount: absAmt },
+          ],
         });
-
-        await applyRunningBalance(debitId,  absAmt, 'debit');
-        await applyRunningBalance(creditId, absAmt, 'credit');
 
         stats.created++;
         logger.info(`[FX] Unrealised revaluation for tx ${tx._id}: ${isGain ? '+' : '-'}${absAmt} ${baseCurrency}`);
@@ -293,3 +319,4 @@ class JournalGeneratorService {
 }
 
 module.exports = new JournalGeneratorService();
+module.exports.buildUnrealisedFxRevaluation = buildUnrealisedFxRevaluation;
