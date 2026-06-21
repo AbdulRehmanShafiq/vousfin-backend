@@ -19,6 +19,7 @@ const AccountingPeriod = require('../models/AccountingPeriod.model');
 const JournalEntry   = require('../models/JournalEntry.model');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
 const { postBalancedJournal } = require('./ledgerPosting.service');
+const transactionRepository = require('../repositories/transaction.repository');
 const {
   FISCAL_YEAR_STATUS, PERIOD_STATUS, PERIOD_TYPE,
   PERIOD_ACTION, ENTRY_TYPE, JOURNAL_STATUS, TRANSACTION_TYPES,
@@ -363,48 +364,16 @@ async function _runClosingEntries(businessId, bizId, fy, userId) {
     return { closingEntryIds: [], retainedEarningsTransferred: 0 };
   }
 
-  // Aggregate total revenue and expenses for this fiscal year
-  const [revRow, expRow] = await Promise.all([
-    JournalEntry.aggregate([
-      {
-        $match: {
-          businessId: bizId,
-          transactionDate: { $gte: fy.startDate, $lte: fy.endDate },
-          status: { $in: [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.PARTIALLY_SETTLED] },
-          isArchived: { $ne: true },
-        },
-      },
-      { $lookup: { from: 'chartofaccounts', localField: 'creditAccountId', foreignField: '_id', as: 'creditAcc' } },
-      { $unwind: { path: '$creditAcc', preserveNullAndEmptyArrays: true } },
-      {
-        $group: {
-          _id: null,
-          totalRevenue: { $sum: { $cond: [{ $eq: ['$creditAcc.accountType', 'Revenue'] }, '$amount', 0] } },
-        },
-      },
-    ]),
-    JournalEntry.aggregate([
-      {
-        $match: {
-          businessId: bizId,
-          transactionDate: { $gte: fy.startDate, $lte: fy.endDate },
-          status: { $in: [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.PARTIALLY_SETTLED] },
-          isArchived: { $ne: true },
-        },
-      },
-      { $lookup: { from: 'chartofaccounts', localField: 'debitAccountId', foreignField: '_id', as: 'debitAcc' } },
-      { $unwind: { path: '$debitAcc', preserveNullAndEmptyArrays: true } },
-      {
-        $group: {
-          _id: null,
-          totalExpenses: { $sum: { $cond: [{ $in: ['$debitAcc.accountType', ['Expense', 'Direct Cost']] }, '$amount', 0] } },
-        },
-      },
-    ]),
-  ]);
-
-  const totalRevenue  = revRow[0]?.totalRevenue  || 0;
-  const totalExpenses = expRow[0]?.totalExpenses || 0;
+  // Aggregate total revenue and expenses for this fiscal year. Use the SAME
+  // effective-lines income-statement aggregation the financial statements use
+  // (EFFECTIVE_LINES_STAGE under the hood) so compound entries whose COGS / tax
+  // legs live ONLY in journalLines are fully counted (audit A7). The previous
+  // top-level creditAccountId/debitAccountId aggregation missed those legs,
+  // mis-splitting Retained Earnings vs Current-Year-Earnings.
+  const { revenue, expenses } =
+    await transactionRepository.getIncomeStatementData(businessId, fy.startDate, fy.endDate);
+  const totalRevenue  = revenue.reduce((s, r) => s + (r.amount || 0), 0);
+  const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
   const netIncome     = totalRevenue - totalExpenses;
 
   if (netIncome === 0) {
@@ -533,19 +502,11 @@ async function _loadPeriod(businessId, periodId) {
 
 async function _computePeriodSummary(businessId, startDate, endDate) {
   const bizId = new mongoose.Types.ObjectId(String(businessId));
-  const [revRow, expRow, countRow] = await Promise.all([
-    JournalEntry.aggregate([
-      { $match: { businessId: bizId, transactionDate: { $gte: startDate, $lte: endDate }, isArchived: { $ne: true } } },
-      { $lookup: { from: 'chartofaccounts', localField: 'creditAccountId', foreignField: '_id', as: 'cAcc' } },
-      { $unwind: { path: '$cAcc', preserveNullAndEmptyArrays: true } },
-      { $group: { _id: null, total: { $sum: { $cond: [{ $eq: ['$cAcc.accountType', 'Revenue'] }, '$amount', 0] } } } },
-    ]),
-    JournalEntry.aggregate([
-      { $match: { businessId: bizId, transactionDate: { $gte: startDate, $lte: endDate }, isArchived: { $ne: true } } },
-      { $lookup: { from: 'chartofaccounts', localField: 'debitAccountId', foreignField: '_id', as: 'dAcc' } },
-      { $unwind: { path: '$dAcc', preserveNullAndEmptyArrays: true } },
-      { $group: { _id: null, total: { $sum: { $cond: [{ $in: ['$dAcc.accountType', ['Expense', 'Direct Cost']] }, '$amount', 0] } } } },
-    ]),
+  // Revenue / expense come from the effective-lines income statement so a period
+  // snapshot counts compound journalLines legs (COGS / tax) exactly like the P&L
+  // (audit A7). transactionCount stays a raw document count over the date range.
+  const [{ revenue, expenses }, transactionCount] = await Promise.all([
+    transactionRepository.getIncomeStatementData(businessId, startDate, endDate),
     JournalEntry.countDocuments({
       businessId: bizId,
       transactionDate: { $gte: startDate, $lte: endDate },
@@ -553,13 +514,13 @@ async function _computePeriodSummary(businessId, startDate, endDate) {
     }),
   ]);
 
-  const totalRevenue  = revRow[0]?.total || 0;
-  const totalExpenses = expRow[0]?.total || 0;
+  const totalRevenue  = revenue.reduce((s, r) => s + (r.amount || 0), 0);
+  const totalExpenses = expenses.reduce((s, e) => s + (e.amount || 0), 0);
   return {
     totalRevenue,
     totalExpenses,
     netIncome: totalRevenue - totalExpenses,
-    transactionCount: countRow,
+    transactionCount,
   };
 }
 
@@ -629,30 +590,13 @@ async function createOpeningBalances(businessId, fiscalYearId, userId) {
   const asOf = new Date(fy.startDate);
   asOf.setDate(asOf.getDate() - 1);
 
-  const [debitTotals, creditTotals] = await Promise.all([
-    JournalEntry.aggregate([
-      {
-        $match: {
-          businessId: bizId,
-          transactionDate: { $lte: asOf },
-          status: { $in: [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.PARTIALLY_SETTLED] },
-          isArchived: { $ne: true },
-        },
-      },
-      { $group: { _id: '$debitAccountId', total: { $sum: '$amount' } } },
-    ]),
-    JournalEntry.aggregate([
-      {
-        $match: {
-          businessId: bizId,
-          transactionDate: { $lte: asOf },
-          status: { $in: [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.PARTIALLY_SETTLED] },
-          isArchived: { $ne: true },
-        },
-      },
-      { $group: { _id: '$creditAccountId', total: { $sum: '$amount' } } },
-    ]),
-  ]);
+  // Per-account ending balances from the SAME effective-lines aggregation the
+  // Trial Balance / Balance Sheet use (EFFECTIVE_LINES_STAGE) so an account whose
+  // balance exists only through compound journalLines legs still carries forward
+  // (audit A7). getDebitCreditTotals already filters to report statuses and
+  // transactionDate <= asOf, matching the previous behaviour.
+  const { debitTotals, creditTotals } =
+    await transactionRepository.getDebitCreditTotals(businessId, asOf);
 
   const debitMap  = new Map(debitTotals.map(r => [r._id.toString(), r.total]));
   const creditMap = new Map(creditTotals.map(r => [r._id.toString(), r.total]));
