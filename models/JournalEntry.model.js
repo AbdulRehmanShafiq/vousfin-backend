@@ -736,6 +736,22 @@ journalEntrySchema.pre('save', async function () {
 });
 
 // ===============================
+// Field-level immutability of posted entries (audit T1)
+// ===============================
+// This middleware enforces PERIOD locks, not field-level immutability of the
+// financial columns (amount / debitAccountId / creditAccountId / journalLines).
+// A blanket model-level freeze is intentionally NOT applied because in-place
+// edits of posted entries are a *sanctioned* path: transaction.service.editTransaction
+// changes those fields only under explicit guards — a GAAP 30-day edit lock, a
+// "no payments applied" check, a period-lock check, and an atomic reverse-and-
+// reapply of the affected running balances inside one withTransaction — and
+// records the change in the audit trail. Reversals are the correction path for
+// anything outside those guards. Field immutability of posted entries therefore
+// relies on the service layer; do NOT bypass editTransaction with a raw
+// findOneAndUpdate of financial fields (it would move the cached balances out of
+// step with the ledger without the compensating balance writes).
+//
+// ===============================
 // Pre-update / Delete Middleware for Period Immutability
 // ===============================
 // Mongoose 9 async middleware must NOT use the next() callback — it should

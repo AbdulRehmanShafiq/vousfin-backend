@@ -436,11 +436,11 @@ class InvoiceService {
     // Previously approve() posted NO ledger entry (despite the header comment) and
     // never moved the customer's receivable — so an approved invoice-first invoice
     // was invisible to the GL and to AR aging. postArJournal closes that gap.
-    try {
-      await this.postArJournal(approved, user, ipAddress);
-    } catch (e) {
-      logger.warn(`[invoice] AR journal failed on approval for ${invoice.invoiceNumber}: ${e.message}`);
-    }
+    // Post the AR recognition journal. Do NOT swallow a failure — the GL must
+    // reflect the receivable the moment an invoice is approved. The poster is
+    // atomic and idempotent (guards on arJournalId), so a surfaced error can be
+    // retried safely; a silent failure would leave AR understated (audit T3).
+    await this.postArJournal(approved, user, ipAddress);
 
     businessEvents.emit(EVENTS.INVOICE_APPROVED, {
       businessId:    invoice.businessId.toString(),
@@ -811,12 +811,15 @@ class InvoiceService {
         }
       });
     } catch (e) {
-      // Everything rolled back — undo the in-memory mutations so the returned doc
-      // doesn't reference a JE that no longer exists.
+      // Everything rolled back atomically — undo the in-memory mutations so the
+      // returned doc doesn't reference a JE that no longer exists, then RE-THROW.
+      // Never swallow: an invoice must not be reported as approved while its AR
+      // recognition silently failed to post (audit T3, mirrors the bill AP fix).
+      // Guard fields are reset so a retry re-posts cleanly.
       invoice.arJournalId = undefined;
       invoice.linkedJournalEntryId = preLinked;
       logger.error(`[invoice] AR recognition rolled back for ${invoice.invoiceNumber}: ${e.message}`);
-      return null;
+      throw e;
     }
 
     // ── ERP Step 5: recognize COGS + reduce inventory for product line items ──

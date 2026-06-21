@@ -10,6 +10,12 @@ jest.mock('../../../services/fx.service', () => ({
   prepareFxFields: jest.fn().mockResolvedValue({ currencyCode: 'PKR', exchangeRate: 1, baseCurrencyAmount: 0 }),
   getBaseCurrency: jest.fn().mockResolvedValue('PKR'),
 }));
+// AR-recognition posting deps — previously UNMOCKED, so the silent swallow in
+// approve() hid postArJournal throwing without a DB.
+jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() }));
+jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn() }));
+jest.mock('../../../services/partyBalance.service', () => ({ adjustReceivable: jest.fn() }));
+jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
 jest.mock('../../../models/Invoice.model', () => {
   // Tiny in-memory Invoice mock that mimics the parts of the model the service uses.
   const stateStore = new Map();
@@ -83,12 +89,18 @@ jest.mock('../../../models/Invoice.model', () => {
   return Invoice;
 });
 
+const mongoose = require('mongoose');
 const Invoice = require('../../../models/Invoice.model');
 const invoiceService = require('../../../services/invoice.service');
 const auditService   = require('../../../services/audit.service');
 const customerRepository = require('../../../repositories/customer.repository');
+const ChartOfAccount = require('../../../models/ChartOfAccount.model');
+const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
+const partyBalanceService = require('../../../services/partyBalance.service');
 
 const USER = { _id: 'user-1', fullName: 'Alice Owner', email: 'alice@example.com', role: 'owner' };
+const AR_ID  = new mongoose.Types.ObjectId();
+const REV_ID = new mongoose.Types.ObjectId();
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -99,6 +111,18 @@ beforeEach(() => {
   auditService.log        = jest.fn().mockResolvedValue(undefined);
   auditService.logCreate  = jest.fn().mockResolvedValue(undefined);
   auditService.logDelete  = jest.fn().mockResolvedValue(undefined);
+
+  // Happy-path AR-posting deps: AR (1110) + revenue account exist, poster +
+  // customer-balance move succeed.
+  ChartOfAccount.findOne.mockImplementation((q) => ({
+    lean: async () => {
+      if (q.accountCode === '1110') return { _id: AR_ID, accountCode: '1110' };
+      if (q.accountCode && q.accountCode.$in) return { _id: REV_ID, accountCode: '4110' };
+      return null;
+    },
+  }));
+  postBalancedJournal.mockResolvedValue({ _id: new mongoose.Types.ObjectId() });
+  partyBalanceService.adjustReceivable.mockResolvedValue(undefined);
 });
 
 // ── createDraft ───────────────────────────────────────────────────────────────
@@ -187,6 +211,23 @@ describe('invoiceService approval workflow', () => {
     expect(rejected.state).toBe('draft');
     expect(rejected.approvalStatus).toBe('rejected');
     expect(rejected.approvalLog.at(-1).action).toBe('rejected');
+  });
+
+  // AR recognition on approval must NOT be silently swallowed (audit P2/T3).
+  test('posts the AR recognition journal on approval', async () => {
+    const inv = await makeAboveThreshold();
+    await invoiceService.submitForApproval(inv._id, USER, '');
+    const approved = await invoiceService.approve(inv._id, USER, 'ok', '');
+    expect(approved.state).toBe('approved');
+    expect(postBalancedJournal).toHaveBeenCalled();
+    expect(approved.arJournalId).toBeDefined();
+  });
+
+  test('surfaces (does not swallow) a failure to post the AR recognition journal', async () => {
+    const inv = await makeAboveThreshold();
+    await invoiceService.submitForApproval(inv._id, USER, '');
+    postBalancedJournal.mockRejectedValueOnce(new Error('ledger down'));
+    await expect(invoiceService.approve(inv._id, USER, 'ok', '')).rejects.toThrow('ledger down');
   });
 });
 
