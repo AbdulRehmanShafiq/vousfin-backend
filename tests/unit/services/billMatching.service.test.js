@@ -130,6 +130,18 @@ describe('BillMatchingService', () => {
       const r = svc.validateQuantityVariance(10, 10, 9.8);
       expect(r.level).toBe('ok');
     });
+
+    it('BLOCKS when goods are billed but NONE were received (audit A11)', () => {
+      // billed 100, ordered 100, received 0 → the classic "billed for goods never
+      // received" case. The old pct() returned 0 on divide-by-zero → wrongly 'ok'.
+      const r = svc.validateQuantityVariance(100, 100, 0);
+      expect(r.level).toBe('block');
+    });
+
+    it('BLOCKS over-billing against zero received (audit A11)', () => {
+      const r = svc.validateQuantityVariance(50, 0, 0); // billed 50, received 0
+      expect(r.level).toBe('block');
+    });
   });
 
   // ── validatePriceVariance ─────────────────────────────────────────────────

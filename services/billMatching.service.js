@@ -77,8 +77,16 @@ class BillMatchingService {
     orderedQty  = Number(orderedQty)  || 0;
     receivedQty = Number(receivedQty) || 0;
 
-    const overBilledPct    = billedQty > receivedQty ? pct(billedQty, receivedQty) : 0;
-    const underReceivedPct = receivedQty < orderedQty ? pct(orderedQty, receivedQty) : 0;
+    // Guard divide-by-zero (audit A11): when receivedQty is 0 but a positive
+    // quantity was billed/ordered, pct() would return 0 and wrongly pass the match —
+    // the exact "billed for goods never received" fraud case. Treat it as 100%
+    // (definitively over the block threshold).
+    const overBilledPct    = billedQty > receivedQty
+      ? (receivedQty === 0 ? 100 : pct(billedQty, receivedQty))
+      : 0;
+    const underReceivedPct = receivedQty < orderedQty
+      ? (receivedQty === 0 ? 100 : pct(orderedQty, receivedQty))
+      : 0;
 
     // Worst level wins
     const levelOB = varLevel(overBilledPct, cfg);
