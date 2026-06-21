@@ -537,6 +537,78 @@ async function generateAgingPDF({ businessName, data, currency = 'PKR' }) {
   }
 }
 
+// ── 7. Statement of Changes in Equity ────────────────────────────────────────
+
+async function generateEquityStatementPDF({ businessName, data, dateRange, currency = 'PKR' }) {
+  const { doc, buffers } = buildDoc();
+  try {
+    docHeader(doc, businessName, 'Statement of Changes in Equity', `For the period: ${dateRange}`);
+
+    // Build component list from the first row's values keys
+    const components = data.components || [];
+    const rows       = data.rows       || [];
+
+    // Column layout: label column + one column per component + total column
+    const colCount   = 1 + components.length + 1;
+    const labelW     = 130;
+    const amtW       = Math.floor((CONTENT_W - labelW) / (components.length + 1));
+
+    // Header row
+    const hy = doc.y;
+    doc.rect(COL_L, hy, CONTENT_W, 18).fill(COLORS.primary);
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(8);
+    doc.text('', COL_L + 4, hy + 5, { width: labelW });
+    components.forEach((c, i) => {
+      const x = COL_L + labelW + i * amtW;
+      doc.text(c.label || c.key || '', x, hy + 5, { width: amtW, align: 'right' });
+    });
+    doc.text('Total', COL_L + labelW + components.length * amtW, hy + 5, { width: amtW, align: 'right' });
+    doc.moveDown(0.1);
+
+    // Data rows
+    rows.forEach((row, idx) => {
+      if (doc.y > doc.page.height - 60) doc.addPage();
+      const ry = doc.y;
+      if (idx % 2 === 0) doc.rect(COL_L, ry, CONTENT_W, 14).fill(COLORS.rowEven);
+
+      const isBold = row.key === 'opening' || row.key === 'closing';
+      doc.fillColor(COLORS.text)
+         .font(isBold ? 'Helvetica-Bold' : 'Helvetica')
+         .fontSize(8);
+      doc.text(row.label || row.key || '', COL_L + 4, ry + 3, { width: labelW - 4 });
+      components.forEach((c, i) => {
+        const val = (row.values || {})[c.key] || 0;
+        const x   = COL_L + labelW + i * amtW;
+        doc.text(fmt(val, currency), x, ry + 3, { width: amtW, align: 'right' });
+      });
+      const total = typeof row.total === 'number' ? row.total : 0;
+      doc.text(fmt(total, currency), COL_L + labelW + components.length * amtW, ry + 3, { width: amtW, align: 'right' });
+      doc.moveDown(0.05);
+    });
+
+    // Reconciliation footer
+    doc.moveDown(0.5);
+    const reconciles = data.reconciliation?.reconciles;
+    const recY = doc.y;
+    doc.rect(COL_L, recY, CONTENT_W, 18)
+       .fill(reconciles ? '#c6f6d5' : '#fed7d7');
+    doc.fillColor(reconciles ? COLORS.success : COLORS.danger)
+       .font('Helvetica-Bold').fontSize(9)
+       .text(
+         reconciles
+           ? '✓ Equity reconciles — closing balance matches balance sheet equity'
+           : '✗ Equity does not reconcile — review journal entries',
+         COL_L + 8, recY + 4, { width: CONTENT_W - 16 }
+       );
+    doc.moveDown(1);
+
+    return finalise(doc, buffers);
+  } catch (err) {
+    logger.error('PDF generation failed (Equity Statement):', err);
+    throw err;
+  }
+}
+
 // ── Legacy aliases (backward compat) ─────────────────────────────────────────
 
 const generateIncomeStatement     = generateIncomeStatementPDF;
@@ -583,6 +655,7 @@ module.exports = {
   generateTrialBalancePDF,
   generateGeneralLedgerPDF,
   generateAgingPDF,
+  generateEquityStatementPDF,
   // Backward-compat aliases
   generateIncomeStatement,
   generateBalanceSheet,

@@ -86,23 +86,35 @@ const kpiSchema = Joi.object({
   endDate:   isoDate().optional(),
 }).custom(dateRangeValidation);
 
+// ─── Equity Statement ─────────────────────────────────────────────────────────
+const equityStatementSchema = Joi.object({
+  startDate: isoDate().optional(),
+  endDate:   isoDate().optional(),
+}).custom(dateRangeValidation);
+
+// ─── Revenue Notes ────────────────────────────────────────────────────────────
+const revenueNotesSchema = Joi.object({
+  startDate: isoDate().optional(),
+  endDate:   isoDate().optional(),
+}).custom(dateRangeValidation);
+
 // ─── Export ───────────────────────────────────────────────────────────────────
 const exportReportSchema = Joi.object({
   type: Joi.string()
-    .valid('incomeStatement', 'balanceSheet', 'cashFlow', 'trialBalance', 'generalLedger', 'aging')
+    .valid('incomeStatement', 'balanceSheet', 'cashFlow', 'trialBalance', 'generalLedger', 'aging', 'equity')
     .required()
     .messages({
-      'any.only':     'type must be one of: incomeStatement, balanceSheet, cashFlow, trialBalance, generalLedger, aging',
+      'any.only':     'type must be one of: incomeStatement, balanceSheet, cashFlow, trialBalance, generalLedger, aging, equity',
       'any.required': 'type is required',
     }),
   format: Joi.string().valid('pdf', 'xlsx').required()
     .messages({ 'any.only': 'format must be pdf or xlsx', 'any.required': 'format is required' }),
   startDate:  Joi.when('type', {
-    is: Joi.string().valid('incomeStatement', 'cashFlow', 'generalLedger'),
+    is: Joi.string().valid('incomeStatement', 'cashFlow', 'generalLedger', 'equity'),
     then: isoDate().required(), otherwise: Joi.optional(),
   }),
   endDate:    Joi.when('type', {
-    is: Joi.string().valid('incomeStatement', 'cashFlow', 'generalLedger'),
+    is: Joi.string().valid('incomeStatement', 'cashFlow', 'generalLedger', 'equity'),
     then: isoDate().required(), otherwise: Joi.optional(),
   }),
   asOfDate:   Joi.when('type', {
@@ -116,7 +128,7 @@ const exportReportSchema = Joi.object({
   }),
   accountId:  Joi.string().hex().length(24).optional(),
 }).custom((value, helpers) => {
-  const rangeTypes = ['incomeStatement', 'cashFlow', 'generalLedger'];
+  const rangeTypes = ['incomeStatement', 'cashFlow', 'generalLedger', 'equity'];
   if (rangeTypes.includes(value.type) && value.startDate && value.endDate) {
     if (new Date(value.startDate) > new Date(value.endDate))
       return helpers.error('date.greater', { message: 'startDate cannot be after endDate' });
@@ -136,4 +148,6 @@ module.exports = {
   comparativeBalanceSchema,
   kpiSchema,
   exportReportSchema,
+  equityStatementSchema,
+  revenueNotesSchema,
 };

@@ -200,6 +200,30 @@ const getKPISummary = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ─── Statement of Changes in Equity ──────────────────────────────────────────
+
+const getStatementOfChangesInEquity = async (req, res, next) => {
+  try {
+    const { startDate, endDate } = resolveReportDates(req.query);
+    const data = await reportService.getStatementOfChangesInEquity(
+      req.user.businessId, toStartOfDay(startDate), toEndOfDay(endDate)
+    );
+    ApiResponse.success(res, data, 'Statement of changes in equity generated');
+  } catch (err) { next(err); }
+};
+
+// ─── Revenue Notes (IFRS-15) — stub; service built in Task 3 ─────────────────
+
+const getRevenueNotes = async (req, res, next) => {
+  try {
+    const { startDate, endDate } = resolveReportDates(req.query);
+    const data = await reportService.getRevenueNotes(
+      req.user.businessId, toStartOfDay(startDate), toEndOfDay(endDate)
+    );
+    ApiResponse.success(res, data, 'Revenue notes generated');
+  } catch (err) { next(err); }
+};
+
 // ─── Export (PDF / Excel) ─────────────────────────────────────────────────────
 
 const exportReport = async (req, res, next) => {
@@ -299,6 +323,20 @@ const exportReport = async (req, res, next) => {
         }
         break;
       }
+      case 'equity': {
+        reportData = await reportService.getStatementOfChangesInEquity(businessId, toStartOfDay(startDate), toEndOfDay(endDate));
+        const period = `${startDate} to ${endDate}`;
+        if (format === 'pdf') {
+          fileBuffer  = await pdfExport.generateEquityStatementPDF({ businessName, data: reportData, dateRange: period, currency });
+          filename    = `statement_of_changes_in_equity_${startDate}_to_${endDate}.pdf`;
+          contentType = 'application/pdf';
+        } else {
+          fileBuffer  = await excelExport.generateExcelReport('equityStatement', reportData, { startDate, endDate });
+          filename    = `statement_of_changes_in_equity_${startDate}_to_${endDate}.xlsx`;
+          contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        }
+        break;
+      }
       default:
         throw new ApiError(400, 'Invalid report type');
     }
@@ -348,4 +386,6 @@ module.exports = {
   getKPISummary,
   exportReport,
   getNarrative,
+  getStatementOfChangesInEquity,
+  getRevenueNotes,
 };

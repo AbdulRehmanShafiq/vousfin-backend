@@ -16,6 +16,8 @@ const {
   liabilityReportSchema,
   comparativeIncomeSchema,
   comparativeBalanceSchema,
+  equityStatementSchema,
+  revenueNotesSchema,
 } = require('../../validations/report.validation');
 
 router.use(authMiddleware, requireBusiness);
@@ -44,6 +46,10 @@ router.get('/liabilities',         validate(liabilityReportSchema,    'query'), 
 // ── Comparative ──────────────────────────────────────────────────────────────
 router.get('/comparative/income',   validate(comparativeIncomeSchema,  'query'), ctrl.getComparativeIncomeStatement);
 router.get('/comparative/balance',  validate(comparativeBalanceSchema, 'query'), ctrl.getComparativeBalanceSheet);
+
+// ── Equity & IFRS notes ───────────────────────────────────────────────────────
+router.get('/equity',              validate(equityStatementSchema,    'query'), ctrl.getStatementOfChangesInEquity);
+router.get('/notes/revenue',       validate(revenueNotesSchema,       'query'), ctrl.getRevenueNotes);
 
 // ── KPI & export ─────────────────────────────────────────────────────────────
 router.get('/kpi',                 validate(kpiSchema,                'query'), ctrl.getKPISummary);

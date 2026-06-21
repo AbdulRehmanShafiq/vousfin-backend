@@ -181,12 +181,13 @@ async function generateExcelReport(reportType, reportData, meta = {}) {
   wb.created  = new Date();
 
   switch (reportType) {
-    case 'incomeStatement': return _incomeStatement(wb, reportData, meta);
-    case 'balanceSheet':    return _balanceSheet(wb, reportData, meta);
-    case 'cashFlow':        return _cashFlow(wb, reportData, meta);
-    case 'trialBalance':    return _trialBalance(wb, reportData, meta);
-    case 'generalLedger':   return _generalLedger(wb, reportData, meta);
-    case 'aging':           return _agingReport(wb, reportData, meta);
+    case 'incomeStatement':  return _incomeStatement(wb, reportData, meta);
+    case 'balanceSheet':     return _balanceSheet(wb, reportData, meta);
+    case 'cashFlow':         return _cashFlow(wb, reportData, meta);
+    case 'trialBalance':     return _trialBalance(wb, reportData, meta);
+    case 'generalLedger':    return _generalLedger(wb, reportData, meta);
+    case 'aging':            return _agingReport(wb, reportData, meta);
+    case 'equityStatement':  return _equityStatement(wb, reportData, meta);
     default:
       throw new Error(`Unsupported report type: ${reportType}`);
   }
@@ -499,6 +500,79 @@ async function _agingReport(wb, d, meta) {
     });
     addSubtotal(dsh, dr + 1, `Total ${b.label}`, b.total, 6);
   }
+
+  const buf = await wb.xlsx.writeBuffer();
+  return Buffer.from(buf);
+}
+
+async function _equityStatement(wb, d, meta) {
+  const components = d.components || [];
+  const rows       = d.rows       || [];
+
+  // Column headers: blank label column + one per component + Total
+  const headers  = ['', ...components.map(c => c.label || c.key || ''), 'Total'];
+  const colCount = headers.length;
+  // Widths: label 35, each component 18, total 18
+  const widths   = [35, ...components.map(() => 18), 18];
+
+  const sh = wb.addWorksheet('Equity Statement');
+  let row  = addDocHeader(
+    sh,
+    meta.businessName || 'Business',
+    'Statement of Changes in Equity',
+    `For the period: ${meta.startDate} to ${meta.endDate}`,
+    colCount
+  ) + 1;
+
+  row = addColHeaders(sh, row, headers, widths);
+
+  rows.forEach((r, idx) => {
+    const exRow = sh.getRow(row);
+    exRow.height = 17;
+    const isBold = r.key === 'opening' || r.key === 'closing';
+
+    // Label cell
+    const labelCell     = exRow.getCell(1);
+    labelCell.value     = r.label || r.key || '';
+    labelCell.font      = isBold ? STYLES.subtotalFont : STYLES.bodyFont;
+    labelCell.fill      = isBold ? STYLES.subtotalFill : (idx % 2 === 0 ? STYLES.evenFill : STYLES.white);
+    labelCell.alignment = { horizontal: 'left', indent: 1 };
+
+    // Component value cells
+    components.forEach((c, i) => {
+      const cell      = exRow.getCell(i + 2);
+      const val       = (r.values || {})[c.key] || 0;
+      cell.value      = val;
+      cell.numFmt     = STYLES.currency;
+      cell.font       = isBold ? STYLES.subtotalFont : STYLES.bodyFont;
+      cell.fill       = labelCell.fill;
+      cell.alignment  = { horizontal: 'right' };
+    });
+
+    // Total cell
+    const totalCell      = exRow.getCell(colCount);
+    totalCell.value      = typeof r.total === 'number' ? r.total : 0;
+    totalCell.numFmt     = STYLES.currency;
+    totalCell.font       = isBold ? STYLES.subtotalFont : STYLES.bodyFont;
+    totalCell.fill       = labelCell.fill;
+    totalCell.alignment  = { horizontal: 'right' };
+
+    applyBorders(exRow);
+    row++;
+  });
+
+  // Reconciliation footer
+  const rec      = d.reconciliation || {};
+  const recRow   = sh.getRow(row + 1);
+  sh.mergeCells(row + 1, 1, row + 1, colCount);
+  recRow.height  = 18;
+  const recCell  = recRow.getCell(1);
+  recCell.value  = rec.reconciles
+    ? '✓ Equity reconciles — closing balance matches balance sheet equity'
+    : '✗ Equity does not reconcile — review journal entries';
+  recCell.font   = { bold: true, size: 10, color: { argb: rec.reconciles ? 'FF276749' : 'FFC53030' } };
+  recCell.fill   = rec.reconciles ? STYLES.successFill : STYLES.dangerFill;
+  recCell.alignment = { horizontal: 'center' };
 
   const buf = await wb.xlsx.writeBuffer();
   return Buffer.from(buf);
