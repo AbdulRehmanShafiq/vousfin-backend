@@ -24,8 +24,14 @@ app.use(helmet());
 app.use(
   cors({
     origin(origin, callback) {
-      // Allow non-browser clients (no Origin header) and whitelisted frontends
-      if (!origin || config.CLIENT_ORIGINS.includes(origin)) {
+      // Allow non-browser clients (no Origin header) and whitelisted frontends.
+      // Normalize trailing slashes + case so a CLIENT_URL set as
+      // "https://app.example.com/" still matches the browser origin
+      // "https://app.example.com" (a very common deploy-config slip).
+      const norm = (o) => String(o || '').replace(/\/+$/, '').toLowerCase();
+      if (!origin) return callback(null, true);
+      const allowed = config.CLIENT_ORIGINS.map(norm);
+      if (allowed.includes(norm(origin))) {
         return callback(null, true);
       }
       logger.warn(`CORS blocked origin: ${origin}. Allowed: ${config.CLIENT_ORIGINS.join(', ')}`);
