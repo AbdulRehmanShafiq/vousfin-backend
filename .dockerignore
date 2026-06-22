@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log
+.env
+.env.*
+.git
+.gitignore
+logs
+*.log
+outputs
+coverage
+tests
+__tests__
+.superpowers
+docs
+*.md
