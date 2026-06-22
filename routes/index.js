@@ -93,6 +93,7 @@ router.use('/cost-centers',          require('./v1/costCenter.routes'));  // SRS
 router.use('/payroll',               require('./v1/payroll.routes'));     // SRS FR-08 — payroll
 router.use('/budgets',               require('./v1/budget.routes'));      // SRS FR-04.1/.2 — budgeting & variance
 router.use('/cost',                  require('./v1/cost.routes'));        // SRS FR-07.2/.3/.4 — cost accounting
+router.use('/jobs',                  require('./v1/jobs.routes'));        // Deploy: manual job triggers for an external scheduler (serverless has no cron)
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
