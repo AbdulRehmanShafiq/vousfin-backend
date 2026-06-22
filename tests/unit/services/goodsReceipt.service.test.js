@@ -13,6 +13,7 @@ jest.mock('../../../services/purchaseOrder.service', () => ({
 // ERP Step 5 — stub the inventory engine so we can assert receive→stock wiring.
 jest.mock('../../../services/inventory.service', () => ({
   applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
+  reduceStock:        jest.fn().mockResolvedValue({ updatedStock: 0 }),
   resolveCostAccounts: jest.fn(),
 }));
 // A13 — stub the ledger poster so we can assert the GRNI accrual entry.
@@ -269,6 +270,56 @@ describe('grnService.cancel()', () => {
     expect(grn.inventoryApplied).toBe(false);
   });
 
+  // A13 (Finding 2) — multi-item GRN cancel must reverse stock for EACH stocked
+  // line and call reverseTransaction with the session (atomicity check).
+  test('cancel multi-item GRN reverses stock for every stocked line with the transaction session', async () => {
+    const mongoose = require('mongoose');
+    const ITEM_A = new mongoose.Types.ObjectId();
+    const ITEM_B = new mongoose.Types.ObjectId();
+
+    const grn = await grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(),
+        receivedItems: [
+          { poLineItemId: LINE_1, inventoryItemId: ITEM_A, name: 'WidgetA', quantityOrdered: 3, quantityReceived: 3, quantityRejected: 0, unitCost: 100 },
+          { poLineItemId: LINE_2, inventoryItemId: ITEM_B, name: 'WidgetB', quantityOrdered: 5, quantityReceived: 5, quantityRejected: 1, unitCost: 200 },
+        ] },
+      USER
+    );
+    grn.state = 'confirmed';
+    grn.glJournalId = new mongoose.Types.ObjectId('cccccccccccccccccccccccc');
+    grn.inventoryApplied = true;
+
+    jest.spyOn(grnService, '_loadOrThrow').mockResolvedValue(grn);
+
+    const revSpy       = jest.spyOn(transactionService, 'reverseTransaction');
+    const reduceStockSpy = jest.spyOn(require('../../../services/inventory.service'), 'reduceStock')
+      .mockResolvedValue({ updatedStock: 0 });
+
+    await grnService.cancel(grn._id, { _id: 'u1', businessId: BIZ }, 'wrong delivery', '0.0.0.0');
+
+    // reverseTransaction must be called exactly once with a session argument
+    expect(revSpy).toHaveBeenCalledTimes(1);
+    expect(revSpy).toHaveBeenCalledWith(
+      'cccccccccccccccccccccccc',
+      expect.anything(),
+      expect.objectContaining({ session: expect.anything() }),
+      'u1',
+      '0.0.0.0'
+    );
+
+    // reduceStock called once per stocked line (2 lines) with accepted qty and the session
+    expect(reduceStockSpy).toHaveBeenCalledTimes(2);
+    // Line A: 3 accepted (3 received − 0 rejected)
+    expect(reduceStockSpy).toHaveBeenCalledWith(BIZ, ITEM_A, 3, expect.anything());
+    // Line B: 4 accepted (5 received − 1 rejected)
+    expect(reduceStockSpy).toHaveBeenCalledWith(BIZ, ITEM_B, 4, expect.anything());
+
+    // Guard fields must be cleared inside the txn
+    expect(grn.glJournalId).toBeNull();
+    expect(grn.inventoryApplied).toBe(false);
+    expect(grn.state).toBe('cancelled');
+  });
+
   // A13 — cancel must re-throw if the reversal fails (no swallow)
   test('cancel re-throws when reversal fails (no silent swallow)', async () => {
     const mongoose = require('mongoose');
@@ -287,6 +338,31 @@ describe('grnService.cancel()', () => {
     await expect(
       grnService.cancel(grn._id, { _id: 'u1', businessId: BIZ }, 'bad receipt', '0.0.0.0')
     ).rejects.toThrow('GL reversal failed');
+  });
+
+  // A13 (Finding 2) — cancel must re-throw if stock reversal fails mid-loop (no swallow)
+  test('cancel re-throws when stock reversal fails (no silent swallow)', async () => {
+    const mongoose = require('mongoose');
+    const ITEM_A = new mongoose.Types.ObjectId();
+
+    const grn = await grnService.createDraft(
+      { businessId: BIZ, purchaseOrderId: PO_ID, receivedDate: new Date(),
+        receivedItems: [
+          { poLineItemId: LINE_1, inventoryItemId: ITEM_A, name: 'W', quantityOrdered: 5, quantityReceived: 5, quantityRejected: 0, unitCost: 100 },
+        ] },
+      USER
+    );
+    grn.state = 'confirmed';
+    grn.glJournalId = new mongoose.Types.ObjectId('dddddddddddddddddddddddd');
+    grn.inventoryApplied = true;
+
+    jest.spyOn(grnService, '_loadOrThrow').mockResolvedValue(grn);
+    jest.spyOn(require('../../../services/inventory.service'), 'reduceStock')
+      .mockRejectedValueOnce(new Error('stock reduce failed'));
+
+    await expect(
+      grnService.cancel(grn._id, { _id: 'u1', businessId: BIZ }, 'bad receipt', '0.0.0.0')
+    ).rejects.toThrow('stock reduce failed');
   });
 });
 
