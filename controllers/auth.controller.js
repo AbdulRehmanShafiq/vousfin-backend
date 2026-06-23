@@ -1,5 +1,8 @@
 // controllers/auth.controller.js
+const jwt = require('jsonwebtoken');
 const authService = require('../services/auth.service');
+// mfaService is lazy-required inside MFA handlers to avoid ESM parse issues in Jest
+// when the module is loaded in unit tests that don't use MFA.
 const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
 const config = require('../config');
@@ -40,8 +43,15 @@ const register = async (req, res, next) => {
 const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-    const { user, token } = await authService.loginUser(email, password, req.ip);
-    
+    const result = await authService.loginUser(email, password, req.ip);
+
+    // MFA challenge — client must call /auth/mfa/verify with the short-lived token
+    if (result.mfaRequired) {
+      return ApiResponse.success(res, { mfaRequired: true, mfaToken: result.mfaToken }, 'MFA required');
+    }
+
+    const { user, token } = result;
+
     // Set JWT as HTTP‑only cookie
     res.cookie('token', token, {
       httpOnly: true,
@@ -51,6 +61,92 @@ const login = async (req, res, next) => {
     });
 
     ApiResponse.success(res, { user, token }, 'Login successful');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Complete MFA login challenge.
+ * POST /api/v1/auth/mfa/verify
+ */
+const mfaVerify = async (req, res, next) => {
+  try {
+    const mfaService = require('../services/mfa.service');
+    const { mfaToken, token } = req.body;
+    if (!mfaToken || !token) throw new ApiError(400, 'mfaToken and token are required');
+
+    let decoded;
+    try {
+      decoded = jwt.verify(mfaToken, config.JWT_SECRET);
+    } catch {
+      throw new ApiError(401, 'MFA session expired. Please log in again.');
+    }
+    if (!decoded.mfaChallenge) throw new ApiError(401, 'Invalid MFA token.');
+
+    const valid = await mfaService.verifyToken(decoded.userId, token);
+    if (!valid) throw new ApiError(401, 'Invalid authenticator code.');
+
+    // Issue the full JWT now that MFA is satisfied
+    const userRepository = require('../repositories/user.repository');
+    await userRepository.update(decoded.userId, { lastLogin: new Date() });
+    const user = await userRepository.findActiveById(decoded.userId);
+    const fullToken = authService.generateTokenForUser(user);
+
+    res.cookie('token', fullToken, {
+      httpOnly: true,
+      secure: config.NODE_ENV === 'production',
+      sameSite: config.NODE_ENV === 'production' ? 'strict' : 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    ApiResponse.success(res, { user: authService._sanitizeUser(user), token: fullToken }, 'Login successful');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Start MFA setup (generate secret + backup codes).
+ * GET /api/v1/auth/mfa/setup
+ */
+const mfaSetup = async (req, res, next) => {
+  try {
+    const mfaService = require('../services/mfa.service');
+    const data = await mfaService.generateSetup(req.user.id);
+    ApiResponse.success(res, data, 'MFA setup initiated');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Confirm MFA enrolment with first TOTP code.
+ * POST /api/v1/auth/mfa/confirm
+ */
+const mfaConfirm = async (req, res, next) => {
+  try {
+    const mfaService = require('../services/mfa.service');
+    const { token } = req.body;
+    if (!token) throw new ApiError(400, 'token is required');
+    const data = await mfaService.confirmEnrollment(req.user.id, token);
+    ApiResponse.success(res, data, 'MFA enabled successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Disable MFA (requires current TOTP code to confirm).
+ * DELETE /api/v1/auth/mfa
+ */
+const mfaDisable = async (req, res, next) => {
+  try {
+    const mfaService = require('../services/mfa.service');
+    const { token } = req.body;
+    if (!token) throw new ApiError(400, 'token is required');
+    const data = await mfaService.disableMFA(req.user.id, token);
+    ApiResponse.success(res, data, 'MFA disabled');
   } catch (error) {
     next(error);
   }
@@ -221,4 +317,8 @@ module.exports = {
   googleAuth,
   googleCallback,
   refreshToken,
+  mfaVerify,
+  mfaSetup,
+  mfaConfirm,
+  mfaDisable,
 };

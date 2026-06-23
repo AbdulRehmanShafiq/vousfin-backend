@@ -71,6 +71,11 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    mfa: {
+      enabled: { type: Boolean, default: false },
+      secret: { type: String, default: null, select: false }, // excluded from normal queries
+      backupCodes: { type: [String], default: [], select: false },
+    },
   },
   {
     timestamps: true,

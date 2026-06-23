@@ -22,6 +22,14 @@ router.post('/logout', authMiddleware, authController.logout);
 router.post('/forgot-password', validate(forgotPasswordSchema), authController.forgotPassword);
 router.post('/reset-password', validate(resetPasswordSchema), authController.resetPassword);
 
+// MFA routes — NFR-SEC-01
+// /auth/mfa/verify is public (called before full auth is established)
+router.post('/mfa/verify', authController.mfaVerify);
+// These 3 require normal auth
+router.get('/mfa/setup', authMiddleware, authController.mfaSetup);
+router.post('/mfa/confirm', authMiddleware, authController.mfaConfirm);
+router.delete('/mfa', authMiddleware, authController.mfaDisable);
+
 // Google OAuth
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 router.get(

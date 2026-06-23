@@ -1,5 +1,6 @@
 // services/auth.service.js
 const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
 const userRepository = require('../repositories/user.repository');
 const businessRepository = require('../repositories/business.repository');
 const { hashPassword, comparePassword } = require('../utils/password.utils');
@@ -148,6 +149,17 @@ class AuthService {
     if (!isPasswordValid) {
       // Track failed attempts (optional – for lockout logic, you can add attempt counter)
       throw new ApiError(401, 'Invalid email or password');
+    }
+
+    // If user has MFA enabled, return a short-lived challenge token instead of the full JWT.
+    if (user.mfa?.enabled) {
+      const mfaToken = jwt.sign(
+        { mfaChallenge: true, userId: user._id.toString() },
+        config.JWT_SECRET,
+        { expiresIn: '5m' }
+      );
+      logger.info(`User ${email} requires MFA from IP ${ipAddress}`);
+      return { mfaRequired: true, mfaToken };
     }
 
     // Generate JWT
