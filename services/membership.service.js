@@ -74,6 +74,7 @@ class MembershipService {
    */
   async invite(businessId, { email, roles }, actor) {
     assertRoles(roles);
+    await require('./sod.service').checkRoleAssignment(businessId, roles); // 6B: block conflicting role pairs
     const actorId = actor._id || actor.id;
     const lower = String(email || '').toLowerCase().trim();
     if (!lower) throw new ApiError(400, 'An email address is required.');
@@ -199,7 +200,8 @@ class MembershipService {
       throw new ApiError(409, 'A business must have at least one owner. Assign another owner before changing this role.');
     }
 
-    // NOTE (6B): SoD conflict check on `roles` will be inserted here.
+    // 6B: block assigning a conflicting role pair (segregation of duties).
+    await require('./sod.service').checkRoleAssignment(businessId, roles);
     const before = [...m.roles];
     m.roles = roles;
     m.lastModifiedBy = actorId;

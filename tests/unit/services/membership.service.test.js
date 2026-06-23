@@ -5,7 +5,9 @@ jest.mock('../../../repositories/membership.repository');
 jest.mock('../../../repositories/user.repository');
 jest.mock('../../../services/audit.service');
 jest.mock('../../../utils/email.utils');
+jest.mock('../../../services/sod.service'); // 6B: SoD check is a no-op here unless a test overrides it
 
+const sodService = require('../../../services/sod.service');
 const repo = require('../../../repositories/membership.repository');
 const userRepo = require('../../../repositories/user.repository');
 const email = require('../../../utils/email.utils');
@@ -60,6 +62,14 @@ test('acceptInvite rejects when the email does not match', async () => {
     inviteTokenExpiresAt: new Date(Date.now() + 1e6), save: jest.fn(),
   });
   await expect(service.acceptInvite('tok', { _id: 'u9', email: 'other@x.com' })).rejects.toThrow(/match|invite/i);
+});
+
+test('updateRoles is blocked by an SoD conflict (6B)', async () => {
+  repo.findByBusinessAndUser.mockResolvedValue({ _id: 'm1', businessId: 'biz1', userId: 'u2', roles: ['viewer'], status: 'active' });
+  repo.countActiveOwners.mockResolvedValue(2);
+  sodService.checkRoleAssignment.mockRejectedValue(new Error('SoD conflict: accountant + approver'));
+  await expect(service.updateRoles('biz1', 'u2', ['accountant', 'approver'], { _id: 'u1' }))
+    .rejects.toThrow(/SoD|conflict/i);
 });
 
 test('removeMember blocks removing the last owner', async () => {
