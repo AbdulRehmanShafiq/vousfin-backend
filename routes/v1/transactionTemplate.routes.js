@@ -8,8 +8,10 @@ const validate = require('../../middleware/validate.middleware');
 const {
   createTemplateSchema, updateTemplateSchema, applyTemplateSchema, templateIdParamSchema,
 } = require('../../validations/transactionTemplate.validation');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership, writeGuard(PERMISSIONS.TRANSACTION_CREATE));
 
 router.get('/', controller.list);
 router.post('/', validate(createTemplateSchema), controller.create);

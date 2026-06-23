@@ -7,8 +7,10 @@ const router = express.Router();
 const vcController = require('../../controllers/vendorCredit.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership, writeGuard(PERMISSIONS.TRANSACTION_CREATE));
 
 // Available credits query (used by Bill editor sidebar)
 router.get('/available', vcController.getAvailableCredits);

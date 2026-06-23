@@ -11,11 +11,15 @@ const {
   customerFiltersSchema,
 } = require('../../validations/customer.validation');
 
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
+
 const router = express.Router();
 
 // Apply auth and business middleware to all routes
 router.use(authMiddleware);
 router.use(requireBusiness);
+router.use(attachMembership, writeGuard(PERMISSIONS.TRANSACTION_CREATE));
 
 router
   .route('/')

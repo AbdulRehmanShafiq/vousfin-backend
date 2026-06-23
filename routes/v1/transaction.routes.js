@@ -18,12 +18,12 @@ const {
   batchTransactionsSchema,
 } = require('../../validations/transaction.validation');
 
-const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { attachMembership, requirePermission, domainWriteGuard } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
 const { PERMISSIONS } = require('../../config/constants');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-router.use(authMiddleware, requireBusiness, attachMembership);
+router.use(authMiddleware, requireBusiness, attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, reverse: PERMISSIONS.TRANSACTION_REVERSE }));
 
 // Transaction Creation (v2)
 router.post('/form', validate(createTransactionSchema), transactionController.createFormTransaction);

@@ -6,10 +6,13 @@ const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
 const validate = require('../../middleware/validate.middleware');
 const { createBudgetSchema, updateBudgetSchema, seedSchema, approvalNoteSchema } = require('../../validations/budget.validation');
+const { attachMembership, domainWriteGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
 const router = express.Router();
 router.use(authMiddleware);
 router.use(requireBusiness);
+router.use(attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, approve: PERMISSIONS.TRANSACTION_APPROVE }));
 
 router.get('/', ctrl.list);
 router.post('/', validate(createBudgetSchema), ctrl.create);

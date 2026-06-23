@@ -8,10 +8,13 @@ const validate = require('../../middleware/validate.middleware');
 const {
   createEmployeeSchema, updateEmployeeSchema, processRunSchema, payRunSchema,
 } = require('../../validations/payroll.validation');
+const { attachMembership, domainWriteGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
 const router = express.Router();
 router.use(authMiddleware);
 router.use(requireBusiness);
+router.use(attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, reverse: PERMISSIONS.TRANSACTION_REVERSE }));
 
 router.get('/employees', ctrl.listEmployees);
 router.post('/employees', validate(createEmployeeSchema), ctrl.createEmployee);

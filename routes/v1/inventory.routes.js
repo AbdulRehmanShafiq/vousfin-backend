@@ -3,10 +3,13 @@ const express = require('express');
 const inventoryController = require('../../controllers/inventory.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
 const router = express.Router();
 router.use(authMiddleware);
 router.use(requireBusiness);
+router.use(attachMembership, writeGuard(PERMISSIONS.TRANSACTION_CREATE));
 
 router.route('/')
   .post(inventoryController.createItem)

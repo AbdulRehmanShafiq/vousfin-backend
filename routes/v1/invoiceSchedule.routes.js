@@ -4,8 +4,10 @@ const express = require('express');
 const router  = express.Router();
 const ctrl    = require('../../controllers/invoiceSchedule.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware);
+router.use(authMiddleware, attachMembership, writeGuard(PERMISSIONS.TRANSACTION_CREATE));
 
 router.post('/',                ctrl.create);
 router.get('/',                 ctrl.list);

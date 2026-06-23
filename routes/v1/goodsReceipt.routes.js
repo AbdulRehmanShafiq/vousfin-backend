@@ -7,8 +7,10 @@ const router = express.Router();
 const grnController = require('../../controllers/goodsReceipt.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const { attachMembership, domainWriteGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, reverse: PERMISSIONS.TRANSACTION_REVERSE }));
 
 // Listing + creation
 router.post('/', grnController.createDraft);

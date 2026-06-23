@@ -9,10 +9,10 @@ const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
 const validate = require('../../middleware/validate.middleware'); // M4
 const { createInvoiceSchema, updateInvoiceSchema } = require('../../validations/invoice.validation'); // M4
-const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { attachMembership, requirePermission, domainWriteGuard } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
 const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness, attachMembership);
+router.use(authMiddleware, requireBusiness, attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, approve: PERMISSIONS.TRANSACTION_APPROVE, reverse: PERMISSIONS.TRANSACTION_REVERSE }));
 
 // Listing + creation
 router.post('/', validate(createInvoiceSchema), invoiceController.createDraft);

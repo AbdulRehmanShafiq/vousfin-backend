@@ -9,8 +9,10 @@ const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
 const validate = require('../../middleware/validate.middleware');
 const { createRecognitionScheduleSchema } = require('../../validations/recognitionSchedule.validation');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership, writeGuard(PERMISSIONS.TRANSACTION_CREATE));
 
 router.post('/',          validate(createRecognitionScheduleSchema), controller.create);
 router.get('/',           controller.list);

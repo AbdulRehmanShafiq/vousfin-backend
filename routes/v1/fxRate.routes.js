@@ -13,9 +13,11 @@ const {
   revaluationSchema,
   rateIdParamSchema,
 } = require('../../validations/fxRate.validation');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
 // All routes require authentication + an active business
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership, writeGuard(PERMISSIONS.SETTINGS_MANAGE));
 
 // ── Utility (no :id, must come first to avoid route collision) ──────────────
 router.get( '/convert',        fxRateCtrl.convertPreview);   // ?from=USD&to=PKR&amount=1000

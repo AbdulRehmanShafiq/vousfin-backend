@@ -4,8 +4,10 @@ const router  = express.Router();
 const paymentCtrl = require('../../controllers/payment.controller');
 const { authMiddleware }  = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership, writeGuard(PERMISSIONS.TRANSACTION_CREATE));
 
 router.post('/',              paymentCtrl.record);   // record + apply (multi-allocation)
 router.post('/auto-allocate', paymentCtrl.autoAllocate); // Phase 2: auto allocation

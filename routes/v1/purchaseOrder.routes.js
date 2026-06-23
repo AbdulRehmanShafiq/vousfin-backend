@@ -7,10 +7,10 @@ const router = express.Router();
 const poController = require('../../controllers/purchaseOrder.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
-const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { attachMembership, requirePermission, domainWriteGuard } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
 const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness, attachMembership);
+router.use(authMiddleware, requireBusiness, attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, approve: PERMISSIONS.TRANSACTION_APPROVE, reverse: PERMISSIONS.TRANSACTION_REVERSE }));
 
 // Listing + creation
 router.post('/', poController.createDraft);

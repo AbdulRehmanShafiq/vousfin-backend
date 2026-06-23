@@ -12,9 +12,11 @@ const {
   countryCodeParamSchema,
   payrollAccrualSchema,
 } = require('../../validations/tax.validation');
+const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
+const { PERMISSIONS } = require('../../config/constants');
 
 // All routes require authentication + active business
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership, writeGuard(PERMISSIONS.SETTINGS_MANAGE));
 
 // ── Configuration ────────────────────────────────────────────────────────────
 router.get('/config',               taxCtrl.getConfig);
