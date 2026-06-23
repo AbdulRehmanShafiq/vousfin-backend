@@ -40,4 +40,24 @@ const requireRole = (...roles) => (req, res, next) => {
   next();
 };
 
-module.exports = { attachMembership, requirePermission, requireRole };
+/** Guard every write (non-GET) under a router with one permission. Reads stay open. */
+const writeGuard = (perm) => (req, res, next) =>
+  (req.method === 'GET' ? next() : requirePermission(perm)(req, res, next));
+
+/**
+ * One guard for a mixed-domain router: picks the permission by what the write does.
+ *   approve / reject / escalate / reassign  → `approve`
+ *   DELETE, or void / write-off / reverse    → `reverse`
+ *   everything else (create / edit / lifecycle) → `create`
+ * GET stays open. Omit `approve`/`reverse` for routers that don't have them.
+ * Use AFTER attachMembership.
+ */
+const domainWriteGuard = ({ create, approve, reverse }) => (req, res, next) => {
+  if (req.method === 'GET') return next();
+  const p = (req.path || '').toLowerCase();
+  if (approve && /(approve|reject|escalat|reassign)/.test(p)) return requirePermission(approve)(req, res, next);
+  if (reverse && (req.method === 'DELETE' || /(void|write-?off|reverse)/.test(p))) return requirePermission(reverse)(req, res, next);
+  return requirePermission(create)(req, res, next);
+};
+
+module.exports = { attachMembership, requirePermission, requireRole, writeGuard, domainWriteGuard };
