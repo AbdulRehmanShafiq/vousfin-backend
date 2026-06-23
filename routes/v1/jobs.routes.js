@@ -25,6 +25,15 @@ const JOBS = {
   'forecast-materialize':   () => require('../../jobs/forecastMaterialize.job').runMaterializeSweep(),
   'forecast-retrain':       () => require('../../jobs/forecastRetrain.job').runRetrainSweep(),
   'compliance-reminders':   () => require('../../jobs/complianceReminder.job').runComplianceReminderJob(),
+  'thirteen-week-cash':     async () => {
+    const Business = require('../../models/Business.model');
+    const svc = require('../../services/thirteenWeekCashFlow.service');
+    const businesses = await Business.find({ status: 'active' }).select('_id').lean();
+    const results = await Promise.allSettled(
+      businesses.map(b => svc.buildForecast(String(b._id))),
+    );
+    return { processed: businesses.length, fulfilled: results.filter(r => r.status === 'fulfilled').length };
+  },
 };
 
 // List available job names (no secret required — names only, no execution).

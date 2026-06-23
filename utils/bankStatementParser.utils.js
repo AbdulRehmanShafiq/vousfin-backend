@@ -1,16 +1,19 @@
 // utils/bankStatementParser.utils.js
 //
-// Parses a bank statement (.csv / .xlsx / .xls) Buffer into normalised lines:
+// Parses a bank statement (.csv / .xlsx / .xls / .ofx / .qfx / .mt940 / .sta) Buffer into normalised lines:
 //   { lineRef, date, description, reference, amount (>=0), direction 'in'|'out', runningBalance }
 //
-// Handles the common bank-export shapes:
-//   • single signed Amount column            (+ = money in, − = money out)
-//   • separate Debit / Credit columns        (Debit = out,  Credit = in)
-//   • separate Withdrawal / Deposit columns   (Withdrawal = out, Deposit = in)
+// Format detection order:
+//   1. OFX 1.x  — starts with "OFXHEADER:" or <?OFX
+//   2. OFX 2.x  — starts with "<?xml"
+//   3. MT940     — starts with ":20:" (SWIFT)
+//   4. CSV/XLSX  — fallback (existing logic)
 //
 'use strict';
 const XLSX = require('xlsx');
 const crypto = require('crypto');
+const { parseOFX }   = require('./ofxParser.util');
+const { parseMT940 } = require('./mt940Parser.util');
 
 const norm = (s) => String(s == null ? '' : s).trim().toLowerCase().replace(/[._]/g, ' ').replace(/\s+/g, ' ');
 
@@ -71,8 +74,58 @@ function toDate(v) {
 /**
  * @returns {{ lines: Array, columns: Object, warnings: string[] }}
  */
+/**
+ * Convert an OFX/MT940 transactions array into the normalised bank-statement
+ * lines format used by bankReconciliation.service.
+ */
+function _normaliseParsedTransactions(transactions) {
+  return transactions.map(t => ({
+    lineRef: crypto.randomUUID(),
+    date: t.date,
+    description: String(t.description || '').slice(0, 500),
+    reference: String(t.fitid || '').slice(0, 100),
+    amount: Math.abs(Number(t.amount) || 0),
+    direction: (Number(t.amount) || 0) < 0 ? 'out' : 'in',
+    runningBalance: null,
+  })).filter(l => l.amount > 0 && l.date instanceof Date && !isNaN(l.date));
+}
+
 function parseBankStatement(buffer, fileName = '') {
   const warnings = [];
+
+  // ── Format detection: try to read as text first ─────────────────────────
+  let textContent = null;
+  try {
+    textContent = Buffer.isBuffer(buffer)
+      ? buffer.toString('utf8')
+      : (typeof buffer === 'string' ? buffer : null);
+  } catch { /* ignore decode errors — will fall through to XLSX */ }
+
+  if (textContent) {
+    const trimmed = textContent.trimStart();
+
+    // OFX 1.x (SGML)
+    if (/^OFXHEADER:/i.test(trimmed) || /^<\?OFX/i.test(trimmed)) {
+      const parsed = parseOFX(trimmed);
+      const lines = _normaliseParsedTransactions(parsed.transactions);
+      if (lines.length) return { lines, columns: { format: 'OFX' }, warnings };
+    }
+
+    // OFX 2.x (XML)
+    if (/^<\?xml/i.test(trimmed) && /<OFX/i.test(trimmed)) {
+      const parsed = parseOFX(trimmed);
+      const lines = _normaliseParsedTransactions(parsed.transactions);
+      if (lines.length) return { lines, columns: { format: 'OFX-XML' }, warnings };
+    }
+
+    // MT940 (SWIFT)
+    if (/^:20:/m.test(trimmed)) {
+      const parsed = parseMT940(trimmed);
+      const lines = _normaliseParsedTransactions(parsed.transactions);
+      if (lines.length) return { lines, columns: { format: 'MT940' }, warnings };
+    }
+  }
+
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   if (!sheet) throw new Error('The file has no readable sheet');

@@ -102,6 +102,8 @@ router.use('/leases',                require('./v1/lease.routes'));        // FR
 router.use('/impairment',            require('./v1/impairment.routes'));   // FR-10.2 — IAS-36 impairment
 router.use('/aml',                   require('./v1/aml.routes'));          // FR-10.3 — AML/KYC screening
 router.use('/retention',             require('./v1/retention.routes'));    // FR-10.4 — document retention
+router.use('/benchmarking',          require('./v1/benchmarking.routes'));          // Phase 8 FR-09.3 — industry benchmarking
+router.use('/cash-flow/thirteen-week', require('./v1/thirteenWeekCashFlow.routes')); // Phase 8 FR-06.3 — 13-week cash forecast
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
