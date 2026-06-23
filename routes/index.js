@@ -96,6 +96,7 @@ router.use('/cost',                  require('./v1/cost.routes'));        // SRS
 router.use('/jobs',                  require('./v1/jobs.routes'));        // Deploy: manual job triggers for an external scheduler (serverless has no cron)
 router.use('/team',                  require('./v1/team.routes'));         // Phase 6A — team & RBAC
 router.use('/sod',                   require('./v1/sod.routes'));          // Phase 6B — segregation-of-duties matrix
+router.use('/internal-audit',        require('./v1/internalAudit.routes')); // Phase 6C — internal audit workspace
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
