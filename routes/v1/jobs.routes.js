@@ -24,6 +24,7 @@ const JOBS = {
   'forecast-accuracy':      () => require('../../jobs/forecastAccuracy.job').runAccuracyCapture(),
   'forecast-materialize':   () => require('../../jobs/forecastMaterialize.job').runMaterializeSweep(),
   'forecast-retrain':       () => require('../../jobs/forecastRetrain.job').runRetrainSweep(),
+  'compliance-reminders':   () => require('../../jobs/complianceReminder.job').runComplianceReminderJob(),
 };
 
 // List available job names (no secret required — names only, no execution).

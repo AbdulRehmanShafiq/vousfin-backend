@@ -13,6 +13,7 @@ const Bill         = require('../models/Bill.model');
 const { ApiError } = require('../utils/ApiError');
 const { DOCUMENT_TYPES, DOCUMENT_STATES } = require('../config/constants');
 const logger = require('../config/logger');
+const retentionService = require('./retention.service');
 
 class BillDocumentService {
 
@@ -166,6 +167,9 @@ class BillDocumentService {
 
     const doc = await BillDocument.findOne({ _id: id, businessId });
     if (!doc) throw new ApiError(404, 'Document not found');
+
+    // Retention enforcement — throws 403 if too young to delete
+    await retentionService.checkDeletion(businessId, 'financial_record', doc.createdAt);
 
     doc.isArchived = true;
     doc.auditLog.push({

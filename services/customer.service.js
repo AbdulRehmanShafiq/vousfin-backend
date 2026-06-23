@@ -1,5 +1,6 @@
 const customerRepository = require('../repositories/customer.repository');
 const transactionRepository = require('../repositories/transaction.repository');
+const amlScreening = require('./amlScreening.service');
 const JournalEntry = require('../models/JournalEntry.model');
 const { ApiError } = require('../utils/ApiError');
 const { TRANSACTION_TYPES, PAYMENT_STATUS } = require('../config/constants');
@@ -22,6 +23,12 @@ class CustomerService {
       ...customerData
     });
     logger.info(`Customer created for business ${businessId}: ${customer._id}`);
+    // AML screening — fire-and-forget, must not block customer creation
+    amlScreening.screenCounterparty(businessId, {
+      counterpartyType: 'customer',
+      counterpartyId: customer._id,
+      counterpartyName: customer.name || customer.businessName || '',
+    }).catch(console.error);
     return customer;
   }
 

@@ -730,6 +730,7 @@ module.exports = {
     REPORT_MANAGE:       'report:manage',
     AUDIT_MANAGE:        'audit:manage',
     SOD_MANAGE:          'sod:manage',
+    COMPLIANCE_MANAGE:   'compliance:manage',
   },
 
   // role -> permission strings. '*' = all permissions.

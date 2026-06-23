@@ -1,5 +1,6 @@
 const vendorRepository = require('../repositories/vendor.repository');
 const transactionRepository = require('../repositories/transaction.repository');
+const amlScreening = require('./amlScreening.service');
 const JournalEntry = require('../models/JournalEntry.model');
 const { ApiError } = require('../utils/ApiError');
 const { TRANSACTION_TYPES, PAYMENT_STATUS } = require('../config/constants');
@@ -22,6 +23,12 @@ class VendorService {
       ...vendorData
     });
     logger.info(`Vendor created for business ${businessId}: ${vendor._id}`);
+    // AML screening — fire-and-forget, must not block vendor creation
+    amlScreening.screenCounterparty(businessId, {
+      counterpartyType: 'vendor',
+      counterpartyId: vendor._id,
+      counterpartyName: vendor.name || vendor.businessName || '',
+    }).catch(console.error);
     return vendor;
   }
 
