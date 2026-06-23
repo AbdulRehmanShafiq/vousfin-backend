@@ -570,6 +570,11 @@ module.exports = {
     // ── AR/AP Refactor M9 — event sourcing / projection integrity ─────────────
     EVENT_REPLAYED:      'Event Replayed',
     PROJECTION_REBUILT:  'Projection Rebuilt',
+    // ── Phase 6A: Team & RBAC foundation ──────────────────────────────────────
+    MEMBER_INVITED:      'Member Invited',
+    MEMBER_JOINED:       'Member Joined',
+    MEMBER_ROLES_CHANGED: 'Member Roles Changed',
+    MEMBER_REMOVED:      'Member Removed',
   },
 
   ENTITY_TYPES: {
@@ -607,6 +612,8 @@ module.exports = {
     PROPOSED_ACTION:      'proposedAction',
     // ── Autonomy Phase 2: ingested source document (Bookkeeper agent) ─────────
     SOURCE_DOCUMENT:      'sourceDocument',
+    // ── Phase 6A: Team & RBAC foundation ──────────────────────────────────────
+    MEMBERSHIP:           'membership',
   },
 
   // ===============================
@@ -703,6 +710,34 @@ module.exports = {
     ACCOUNTANT: 'accountant',     // accountant role — standard approval
     MANAGER:    'manager',        // manager — mid-tier approval
     ADMIN:      'admin',          // platform admin — override approval
+  },
+
+  // ===============================
+  // Phase 6A — Team & RBAC Foundation
+  // ===============================
+  BUSINESS_ROLES: { OWNER: 'owner', ACCOUNTANT: 'accountant', APPROVER: 'approver', VIEWER: 'viewer' },
+
+  MEMBERSHIP_STATUS: { ACTIVE: 'active', INVITED: 'invited', SUSPENDED: 'suspended' },
+
+  // RBAC permission catalog (action strings).
+  PERMISSIONS: {
+    MEMBER_MANAGE:       'member:manage',
+    SETTINGS_MANAGE:     'settings:manage',
+    TRANSACTION_CREATE:  'transaction:create',
+    TRANSACTION_APPROVE: 'transaction:approve',
+    TRANSACTION_REVERSE: 'transaction:reverse',
+    REPORT_VIEW:         'report:view',
+    REPORT_MANAGE:       'report:manage',
+    AUDIT_MANAGE:        'audit:manage',
+    SOD_MANAGE:          'sod:manage',
+  },
+
+  // role -> permission strings. '*' = all permissions.
+  ROLE_PERMISSIONS: {
+    owner:      ['*'],
+    accountant: ['transaction:create', 'transaction:reverse', 'report:view', 'report:manage'],
+    approver:   ['transaction:approve', 'report:view'],
+    viewer:     ['report:view'],
   },
 
   /**
