@@ -9,8 +9,10 @@ const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
 const validate = require('../../middleware/validate.middleware'); // M4
 const { createBillSchema, updateBillSchema } = require('../../validations/bill.validation'); // M4
+const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership);
 
 // Listing + creation
 router.post('/', validate(createBillSchema), billController.createDraft);
@@ -26,13 +28,13 @@ router.put('/:id', validate(updateBillSchema), billController.updateDraft);
 
 // Approval workflow
 router.post('/:id/submit',  billController.submitForApproval);
-router.post('/:id/approve', billController.approve);
+router.post('/:id/approve', requirePermission(PERMISSIONS.TRANSACTION_APPROVE), billController.approve);
 router.post('/:id/reject',  billController.reject);
 
 // Lifecycle
 router.post('/:id/schedule',   billController.schedule);
 router.post('/:id/cancel',     billController.cancel);
-router.post('/:id/void',        billController.void);            // M5 — GL-correct void
+router.post('/:id/void',        requirePermission(PERMISSIONS.TRANSACTION_REVERSE), billController.void); // M5 — GL-correct void
 router.post('/:id/credit-memo', billController.applyCreditMemo); // M5 — vendor credit memo
 router.get('/:id/early-payment-discount',  billController.previewEarlyPaymentDiscount); // M8 — preview
 router.post('/:id/early-payment-discount', billController.applyEarlyPaymentDiscount);   // M8 — realize
@@ -41,7 +43,7 @@ router.post('/:id/escalate-approval', billController.escalateApproval); // M6
 router.post('/:id/transition', billController.transitionState);
 
 // Soft delete
-router.delete('/:id', billController.softDelete);
+router.delete('/:id', requirePermission(PERMISSIONS.TRANSACTION_REVERSE), billController.softDelete);
 
 // Phase 3.2 — 3-way match on demand
 router.post('/:id/match', billController.runMatch);

@@ -20,7 +20,9 @@ const {
   revenueNotesSchema,
 } = require('../../validations/report.validation');
 
-router.use(authMiddleware, requireBusiness);
+const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { PERMISSIONS } = require('../../config/constants');
+router.use(authMiddleware, requireBusiness, attachMembership);
 
 // ── Core financial statements ────────────────────────────────────────────────
 router.get('/income-statement',    validate(incomeStatementSchema,    'query'), ctrl.getIncomeStatement);
@@ -65,14 +67,14 @@ const {
 } = require('../../validations/reportTemplate.validation');
 
 router.get('/templates',              tplCtrl.list);
-router.post('/templates',             validate(createTemplateSchema, 'body'), tplCtrl.create);
+router.post('/templates',             requirePermission(PERMISSIONS.REPORT_MANAGE), validate(createTemplateSchema, 'body'), tplCtrl.create);
 // NOTE: /templates/preview MUST be declared before /templates/:id so "preview" is not captured as an :id
 router.post('/templates/preview',     validate(previewSchema, 'body'),        tplCtrl.preview);
 router.get('/templates/:id',          tplCtrl.getOne);
-router.put('/templates/:id',          validate(updateTemplateSchema, 'body'), tplCtrl.update);
-router.delete('/templates/:id',       tplCtrl.remove);
+router.put('/templates/:id',          requirePermission(PERMISSIONS.REPORT_MANAGE), validate(updateTemplateSchema, 'body'), tplCtrl.update);
+router.delete('/templates/:id',       requirePermission(PERMISSIONS.REPORT_MANAGE), tplCtrl.remove);
 router.post('/templates/:id/render',  validate(renderSchema, 'body'),         tplCtrl.render);
-router.put('/templates/:id/schedule', validate(scheduleSchema, 'body'),       tplCtrl.setSchedule);
+router.put('/templates/:id/schedule', requirePermission(PERMISSIONS.REPORT_MANAGE), validate(scheduleSchema, 'body'), tplCtrl.setSchedule);
 router.get('/templates/:id/export',   tplCtrl.exportTemplate);
 
 module.exports = router;

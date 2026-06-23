@@ -7,8 +7,10 @@ const router = express.Router();
 const poController = require('../../controllers/purchaseOrder.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { PERMISSIONS } = require('../../config/constants');
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership);
 
 // Listing + creation
 router.post('/', poController.createDraft);
@@ -23,7 +25,7 @@ router.put('/:id', poController.updateDraft);
 
 // Approval workflow
 router.post('/:id/submit',  poController.submitForApproval);
-router.post('/:id/approve', poController.approve);
+router.post('/:id/approve', requirePermission(PERMISSIONS.TRANSACTION_APPROVE), poController.approve);
 router.post('/:id/reject',  poController.reject);
 
 // Lifecycle

@@ -18,9 +18,12 @@ const {
   batchTransactionsSchema,
 } = require('../../validations/transaction.validation');
 
+const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { PERMISSIONS } = require('../../config/constants');
+
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
-router.use(authMiddleware, requireBusiness);
+router.use(authMiddleware, requireBusiness, attachMembership);
 
 // Transaction Creation (v2)
 router.post('/form', validate(createTransactionSchema), transactionController.createFormTransaction);
@@ -67,10 +70,10 @@ router.post('/excel/confirm', transactionController.confirmExcelImport);
 router.get('/', validate(transactionFiltersSchema, 'query'), transactionController.getTransactions);
 router.get('/:id', validate(transactionIdParamSchema, 'params'), transactionController.getTransactionById);
 router.put('/:id', validate(transactionIdParamSchema, 'params'), validate(updateTransactionSchema), transactionController.updateTransaction);
-router.delete('/:id', validate(transactionIdParamSchema, 'params'), transactionController.deleteTransaction);
+router.delete('/:id', validate(transactionIdParamSchema, 'params'), requirePermission(PERMISSIONS.TRANSACTION_REVERSE), transactionController.deleteTransaction);
 
 // Reversal & Audit Trail (GAAP-compliant correction flow)
-router.post('/:id/reverse',  validate(transactionIdParamSchema, 'params'), validate(reverseTransactionSchema), transactionController.reverseTransaction);
+router.post('/:id/reverse',  validate(transactionIdParamSchema, 'params'), validate(reverseTransactionSchema), requirePermission(PERMISSIONS.TRANSACTION_REVERSE), transactionController.reverseTransaction);
 router.get('/:id/history',   validate(transactionIdParamSchema, 'params'), transactionController.getTransactionAuditHistory);
 
 module.exports = router;
