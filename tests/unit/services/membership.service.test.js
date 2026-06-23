@@ -61,3 +61,10 @@ test('acceptInvite rejects when the email does not match', async () => {
   });
   await expect(service.acceptInvite('tok', { _id: 'u9', email: 'other@x.com' })).rejects.toThrow(/match|invite/i);
 });
+
+test('removeMember blocks removing the last owner', async () => {
+  repo.findByBusinessAndUser.mockResolvedValue({ _id: 'm1', businessId: 'biz1', userId: 'u2', roles: ['owner'], status: 'active' });
+  repo.countActiveOwners.mockResolvedValue(1);
+  await expect(service.removeMember('biz1', 'u2', { _id: 'u1' })).rejects.toThrow(/owner/i);
+  expect(repo.delete).not.toHaveBeenCalled();
+});

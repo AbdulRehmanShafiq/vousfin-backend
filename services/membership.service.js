@@ -145,7 +145,7 @@ class MembershipService {
     if (m.inviteTokenExpiresAt && m.inviteTokenExpiresAt.getTime() < Date.now()) {
       throw new ApiError(400, 'This invitation has expired. Ask for a new one.');
     }
-    if (m.invitedEmail && String(user.email).toLowerCase() !== m.invitedEmail) {
+    if (!m.invitedEmail || String(user.email).toLowerCase() !== m.invitedEmail) {
       throw new ApiError(403, 'This invitation was sent to a different email address. It does not match your account.');
     }
 
