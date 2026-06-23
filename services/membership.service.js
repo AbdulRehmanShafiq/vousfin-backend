@@ -74,6 +74,7 @@ class MembershipService {
    */
   async invite(businessId, { email, roles }, actor) {
     assertRoles(roles);
+    const actorId = actor._id || actor.id;
     const lower = String(email || '').toLowerCase().trim();
     if (!lower) throw new ApiError(400, 'An email address is required.');
 
@@ -97,7 +98,7 @@ class MembershipService {
       invitedEmail: lower,
       inviteToken,
       inviteTokenExpiresAt: new Date(Date.now() + INVITE_TTL_MS),
-      invitedBy: actor._id,
+      invitedBy: actorId,
       invitedAt: new Date(),
     });
 
@@ -123,7 +124,7 @@ class MembershipService {
       entityType: ENTITY_TYPES.MEMBERSHIP,
       entityId: membership._id,
       action: AUDIT_ACTIONS.MEMBER_INVITED,
-      performedBy: actor._id,
+      performedBy: actorId,
       metadata: { invitedEmail: lower, roles },
     });
 
@@ -138,6 +139,7 @@ class MembershipService {
    * @returns {Promise<Object>} The updated membership document
    */
   async acceptInvite(token, user) {
+    const userId = user._id || user.id;
     const m = await repo.findByInviteToken(token);
     if (!m || m.status !== MEMBERSHIP_STATUS.INVITED) {
       throw new ApiError(400, 'This invitation is invalid or already used.');
@@ -149,7 +151,7 @@ class MembershipService {
       throw new ApiError(403, 'This invitation was sent to a different email address. It does not match your account.');
     }
 
-    m.userId = user._id;
+    m.userId = userId;
     m.status = MEMBERSHIP_STATUS.ACTIVE;
     m.inviteToken = null;
     m.inviteTokenExpiresAt = null;
@@ -161,7 +163,7 @@ class MembershipService {
       entityType: ENTITY_TYPES.MEMBERSHIP,
       entityId: m._id,
       action: AUDIT_ACTIONS.MEMBER_JOINED,
-      performedBy: user._id,
+      performedBy: userId,
       metadata: { roles: m.roles },
     });
 
@@ -179,6 +181,7 @@ class MembershipService {
    */
   async updateRoles(businessId, targetUserId, roles, actor) {
     assertRoles(roles);
+    const actorId = actor._id || actor.id;
     const m = await repo.findByBusinessAndUser(businessId, targetUserId);
     if (!m) throw new ApiError(404, 'That member was not found.');
 
@@ -191,7 +194,7 @@ class MembershipService {
     // NOTE (6B): SoD conflict check on `roles` will be inserted here.
     const before = [...m.roles];
     m.roles = roles;
-    m.lastModifiedBy = actor._id;
+    m.lastModifiedBy = actorId;
     await m.save();
 
     await auditService.log({
@@ -199,7 +202,7 @@ class MembershipService {
       entityType: ENTITY_TYPES.MEMBERSHIP,
       entityId: m._id,
       action: AUDIT_ACTIONS.MEMBER_ROLES_CHANGED,
-      performedBy: actor._id,
+      performedBy: actorId,
       beforeState: { roles: before },
       afterState: { roles },
     });
@@ -216,6 +219,7 @@ class MembershipService {
    * @returns {Promise<{ removed: boolean }>}
    */
   async removeMember(businessId, targetUserId, actor) {
+    const actorId = actor._id || actor.id;
     const m = await repo.findByBusinessAndUser(businessId, targetUserId);
     if (!m) throw new ApiError(404, 'That member was not found.');
     if (m.roles.includes(BUSINESS_ROLES.OWNER) && (await repo.countActiveOwners(businessId)) <= 1) {
@@ -229,7 +233,7 @@ class MembershipService {
       entityType: ENTITY_TYPES.MEMBERSHIP,
       entityId: m._id,
       action: AUDIT_ACTIONS.MEMBER_REMOVED,
-      performedBy: actor._id,
+      performedBy: actorId,
       metadata: { removedUserId: String(targetUserId) },
     });
 

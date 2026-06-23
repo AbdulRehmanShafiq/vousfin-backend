@@ -167,11 +167,20 @@ class AuthService {
 
   /**
    * Return current authenticated user profile (includes businessId).
+   * Also lazily self-heals the owner membership so existing owners get a
+   * membership row on first profile load after Phase 6A is deployed.
    */
   async getProfile(userId) {
     const user = await userRepository.findActiveById(userId);
     if (!user) {
       throw new ApiError(401, 'User account not found or has been deleted.');
+    }
+    if (user.businessId) {
+      try {
+        await require('./membership.service').ensureOwnerMembership(user.businessId, user._id);
+      } catch (err) {
+        logger.warn(`[auth] ensureOwnerMembership failed for user ${userId}: ${err.message}`);
+      }
     }
     return this._sanitizeUser(user);
   }

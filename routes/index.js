@@ -94,6 +94,7 @@ router.use('/payroll',               require('./v1/payroll.routes'));     // SRS
 router.use('/budgets',               require('./v1/budget.routes'));      // SRS FR-04.1/.2 — budgeting & variance
 router.use('/cost',                  require('./v1/cost.routes'));        // SRS FR-07.2/.3/.4 — cost accounting
 router.use('/jobs',                  require('./v1/jobs.routes'));        // Deploy: manual job triggers for an external scheduler (serverless has no cron)
+router.use('/team',                  require('./v1/team.routes'));         // Phase 6A — team & RBAC
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
