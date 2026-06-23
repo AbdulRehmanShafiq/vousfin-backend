@@ -3,6 +3,11 @@
 const membershipService = require('../services/membership.service');
 const ApiResponse = require('../utils/ApiResponse');
 
+// The current user's own roles + permissions for this business (any member).
+exports.me = (req, res) => {
+  ApiResponse.success(res, req.membership || { roles: [], permissions: [] }, 'Your access');
+};
+
 exports.list = async (req, res, next) => {
   try {
     ApiResponse.success(res, await membershipService.listMembers(req.user.businessId), 'Members retrieved');
