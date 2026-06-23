@@ -158,6 +158,14 @@ class MembershipService {
     m.joinedAt = new Date();
     await m.save();
 
+    // If the invitee has no active business yet, make this their active business so
+    // they land inside it after accepting. Existing-business users keep theirs
+    // (multi-business switching is a future enhancement).
+    if (!user.businessId) {
+      try { await userRepository.update(userId, { businessId: m.businessId }); }
+      catch (e) { logger.warn(`[membership] could not set active business for ${userId}: ${e.message}`); }
+    }
+
     await auditService.log({
       businessId: m.businessId,
       entityType: ENTITY_TYPES.MEMBERSHIP,
