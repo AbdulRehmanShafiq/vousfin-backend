@@ -326,6 +326,34 @@ const sendCustomerPaymentReminderEmail = async (opts) => {
   }
 };
 
+/**
+ * Send a team invitation email to a new team member.
+ * Best-effort — the invite row is already persisted; a failed email can be resent.
+ *
+ * @param {string} to           Recipient email address
+ * @param {string} inviteToken  Secure random token for the accept-invite link
+ * @param {string} businessName Display name of the business
+ * @param {string[]} roles      Array of role strings granted to the invitee
+ * @returns {Promise<void>}
+ */
+const sendTeamInviteEmail = async (to, inviteToken, businessName, roles) => {
+  // CLIENT_URL may be comma-separated; use the first origin for the link base.
+  const base = String(config.CLIENT_URL || '').split(',')[0].trim();
+  const acceptLink = `${base}/accept-invite?token=${inviteToken}`;
+  const roleText = (roles || []).join(', ');
+  const html = `
+    <!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+    <body><div style="max-width:600px;margin:0 auto;padding:20px;">
+      <h2>You've been invited to ${businessName} on vousFin</h2>
+      <p>You've been added as: <b>${roleText}</b>.</p>
+      <p>Click below to join the team and set up your access:</p>
+      <p><a href="${acceptLink}">Accept invitation</a></p>
+      <p>This invitation expires in 7 days.</p>
+      <hr><p>vousFin</p>
+    </div></body></html>`;
+  await sendEmail({ to, subject: `You're invited to ${businessName} on vousFin`, html });
+};
+
 module.exports = {
   sendEmail,
   sendVerificationEmail,
@@ -333,4 +361,5 @@ module.exports = {
   sendPasswordResetEmail,
   sendReorderRequestEmail,
   sendCustomerPaymentReminderEmail,
+  sendTeamInviteEmail,
 };
