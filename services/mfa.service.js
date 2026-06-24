@@ -1,7 +1,7 @@
 // services/mfa.service.js
 // TOTP Multi-Factor Authentication service (NFR-SEC-01)
 // Backup codes stored as plaintext — for production consider hashing with bcrypt.
-const { authenticator } = require('otplib');
+const totp = require('../utils/totp.util');
 const crypto = require('crypto');
 const User = require('../models/User.model');
 const { ApiError } = require('../utils/ApiError');
@@ -18,10 +18,10 @@ class MfaService {
     if (!user) throw new ApiError(404, 'User not found');
     if (user.mfa?.enabled) throw new ApiError(400, 'MFA is already enabled. Disable it first to re-enrol.');
 
-    const secret = authenticator.generateSecret();
+    const secret = totp.generateSecret();
     // 8 backup codes — 8 hex bytes each = 16 char strings
     const backupCodes = Array.from({ length: 8 }, () => crypto.randomBytes(4).toString('hex'));
-    const otpauthUrl = authenticator.keyuri(user.email, 'VousFin', secret);
+    const otpauthUrl = totp.keyuri(user.email, 'VousFin', secret);
 
     user.mfa = { enabled: false, secret, backupCodes };
     await user.save();
@@ -39,7 +39,7 @@ class MfaService {
     if (!user) throw new ApiError(404, 'User not found');
     if (!user.mfa?.secret) throw new ApiError(400, 'Setup not started. Call /auth/mfa/setup first.');
 
-    const valid = authenticator.verify({ token: String(token), secret: user.mfa.secret });
+    const valid = totp.verifyToken(user.mfa.secret, String(token));
     if (!valid) throw new ApiError(400, 'Invalid code. Check the 6-digit code in your authenticator app.');
 
     user.mfa.enabled = true;
@@ -62,7 +62,7 @@ class MfaService {
     if (!user.mfa?.enabled) return true;
 
     // Check TOTP
-    const totpValid = authenticator.verify({ token: String(token), secret: user.mfa.secret });
+    const totpValid = totp.verifyToken(user.mfa.secret, String(token));
     if (totpValid) return true;
 
     // Check backup codes

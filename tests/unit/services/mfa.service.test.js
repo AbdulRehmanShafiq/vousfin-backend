@@ -3,15 +3,13 @@
 // User model is mocked so no DB connection is required.
 
 jest.mock('../../../models/User.model');
-jest.mock('otplib', () => ({
-  authenticator: {
-    generateSecret: jest.fn(() => 'MOCKSECRET'),
-    keyuri: jest.fn((email, issuer, secret) => `otpauth://totp/${issuer}:${email}?secret=${secret}`),
-    verify: jest.fn(),
-  },
+jest.mock('../../../utils/totp.util', () => ({
+  generateSecret: jest.fn(() => 'MOCKSECRET'),
+  keyuri: jest.fn((email, issuer, secret) => `otpauth://totp/${issuer}:${email}?secret=${secret}`),
+  verifyToken: jest.fn(),
 }));
 
-const { authenticator } = require('otplib');
+const totp = require('../../../utils/totp.util');
 const User = require('../../../models/User.model');
 const mfaService = require('../../../services/mfa.service');
 
@@ -62,7 +60,7 @@ describe('mfaService', () => {
     it('enables MFA when TOTP token is valid', async () => {
       const user = mockUser({ mfa: { enabled: false, secret: 'MOCKSECRET', backupCodes: [] } });
       User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(user) });
-      authenticator.verify.mockReturnValue(true);
+      totp.verifyToken.mockReturnValue(true);
 
       const result = await mfaService.confirmEnrollment('user123', '123456');
 
@@ -74,7 +72,7 @@ describe('mfaService', () => {
     it('throws 400 when TOTP code is wrong', async () => {
       const user = mockUser({ mfa: { enabled: false, secret: 'MOCKSECRET', backupCodes: [] } });
       User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(user) });
-      authenticator.verify.mockReturnValue(false);
+      totp.verifyToken.mockReturnValue(false);
 
       await expect(mfaService.confirmEnrollment('user123', '000000')).rejects.toMatchObject({ statusCode: 400 });
     });
@@ -92,7 +90,7 @@ describe('mfaService', () => {
     it('returns true when TOTP code is correct', async () => {
       const user = mockUser({ mfa: { enabled: true, secret: 'MOCKSECRET', backupCodes: ['aa11bb22'] } });
       User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(user) });
-      authenticator.verify.mockReturnValue(true);
+      totp.verifyToken.mockReturnValue(true);
 
       expect(await mfaService.verifyToken('user123', '123456')).toBe(true);
     });
@@ -100,7 +98,7 @@ describe('mfaService', () => {
     it('returns false when TOTP code is wrong and no backup match', async () => {
       const user = mockUser({ mfa: { enabled: true, secret: 'MOCKSECRET', backupCodes: ['aa11bb22'] } });
       User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(user) });
-      authenticator.verify.mockReturnValue(false);
+      totp.verifyToken.mockReturnValue(false);
 
       expect(await mfaService.verifyToken('user123', '999999')).toBe(false);
     });
@@ -108,7 +106,7 @@ describe('mfaService', () => {
     it('consumes and accepts a valid backup code', async () => {
       const user = mockUser({ mfa: { enabled: true, secret: 'MOCKSECRET', backupCodes: ['aa11bb22', 'cc33dd44'] } });
       User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(user) });
-      authenticator.verify.mockReturnValue(false);
+      totp.verifyToken.mockReturnValue(false);
 
       const result = await mfaService.verifyToken('user123', 'aa11bb22');
 
@@ -134,7 +132,7 @@ describe('mfaService', () => {
       User.findById
         .mockReturnValueOnce({ select: jest.fn().mockResolvedValue(user) }) // verifyToken
         .mockReturnValueOnce({ select: jest.fn().mockResolvedValue(user) }); // disableMFA fetch
-      authenticator.verify.mockReturnValue(true);
+      totp.verifyToken.mockReturnValue(true);
 
       const result = await mfaService.disableMFA('user123', '123456');
 
@@ -146,7 +144,7 @@ describe('mfaService', () => {
     it('throws 401 when token is invalid', async () => {
       const user = mockUser({ mfa: { enabled: true, secret: 'MOCKSECRET', backupCodes: [] } });
       User.findById.mockReturnValue({ select: jest.fn().mockResolvedValue(user) });
-      authenticator.verify.mockReturnValue(false);
+      totp.verifyToken.mockReturnValue(false);
 
       await expect(mfaService.disableMFA('user123', 'wrong')).rejects.toMatchObject({ statusCode: 401 });
     });
