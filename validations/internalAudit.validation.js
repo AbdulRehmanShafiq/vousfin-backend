@@ -8,7 +8,8 @@ const createPlanSchema = Joi.object({
   name:           Joi.string().trim().max(120).required(),
   scope:          Joi.string().max(300).allow('', null),
   periodStart:    Joi.date().iso().required(),
-  periodEnd:      Joi.date().iso().required(),
+  periodEnd:      Joi.date().iso().min(Joi.ref('periodStart')).required()
+                    .messages({ 'date.min': 'periodEnd must be on or after periodStart' }),
   sampleStrategy: Joi.string().valid('random', 'risk_based'),
   sampleSize:     Joi.number().integer().min(1).max(100),
 });

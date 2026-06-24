@@ -5,7 +5,7 @@ const ApiResponse = require('../utils/ApiResponse');
 
 exports.generate = async (req, res, next) => {
   try {
-    const year = parseInt(req.body.year) || new Date().getFullYear();
+    const year = req.body.year; // Joi-validated integer 2000-2100
     const count = await complianceService.generateObligations(req.user.businessId, year);
     ApiResponse.success(res, { generated: count, year }, `Generated ${count} obligation records for ${year}`);
   } catch (e) { next(e); }

@@ -5,6 +5,8 @@ const ctrl = require('../../controllers/aml.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
 const { attachMembership, requirePermission } = require('../../middleware/rbac.middleware');
+const validate = require('../../middleware/validate.middleware');
+const { amlJustifySchema } = require('../../validations/lease.validation');
 const { PERMISSIONS } = require('../../config/constants');
 
 const router = express.Router();
@@ -12,6 +14,6 @@ router.use(authMiddleware, requireBusiness, attachMembership, requirePermission(
 
 router.get('/',                ctrl.list);
 router.get('/:id/str-draft',   ctrl.draftSTR);
-router.patch('/:id/justify',   ctrl.addJustification);
+router.patch('/:id/justify',   validate(amlJustifySchema), ctrl.addJustification);
 
 module.exports = router;
