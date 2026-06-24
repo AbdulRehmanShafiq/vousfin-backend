@@ -88,19 +88,18 @@ class AdminService {
       throw new ApiError(400, 'Account is already deleted');
     }
 
-    const beforeState = { status: user.status };
     const updatedUser = await userRepository.updateStatus(customerId, USER_STATUS.SUSPENDED);
-    
+
     // Audit log
     await auditService.logStatusChange('user', customerId, user.businessId, adminId, user.status, USER_STATUS.SUSPENDED, ipAddress);
-    
+
     // Send email notification
     try {
       await sendAccountStatusEmail(user.email, user.fullName, 'suspended', reason);
     } catch (emailErr) {
       logger.error(`Failed to send suspension email to ${user.email}: ${emailErr.message}`);
     }
-    
+
     logger.info(`Admin ${adminId} suspended customer ${customerId} from IP ${ipAddress}`);
     return updatedUser;
   }
@@ -121,17 +120,16 @@ class AdminService {
       throw new ApiError(400, 'Account is not suspended');
     }
 
-    const beforeState = { status: user.status };
     const updatedUser = await userRepository.updateStatus(customerId, USER_STATUS.ACTIVE);
-    
+
     await auditService.logStatusChange('user', customerId, user.businessId, adminId, user.status, USER_STATUS.ACTIVE, ipAddress);
-    
+
     try {
       await sendAccountStatusEmail(user.email, user.fullName, 'reinstated');
     } catch (emailErr) {
       logger.error(`Failed to send reinstatement email to ${user.email}: ${emailErr.message}`);
     }
-    
+
     logger.info(`Admin ${adminId} reinstated customer ${customerId}`);
     return updatedUser;
   }
@@ -165,15 +163,15 @@ class AdminService {
 
     // Soft delete user
     await userRepository.updateStatus(customerId, USER_STATUS.DELETED);
-    
+
     await auditService.logDelete('user', customerId, user.businessId, adminId, { email: user.email, fullName: user.fullName }, ipAddress);
-    
+
     try {
       await sendAccountStatusEmail(user.email, user.fullName, 'deleted');
     } catch (emailErr) {
       logger.error(`Failed to send deletion email to ${user.email}: ${emailErr.message}`);
     }
-    
+
     logger.warn(`Admin ${adminId} deleted customer ${customerId} (${user.email})`);
   }
 
@@ -182,19 +180,135 @@ class AdminService {
    * @returns {Promise<Object>}
    */
   async getSystemStats() {
-    const [totalUsers, activeCustomers, suspendedCustomers, totalBusinesses] = await Promise.all([
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const [
+      totalUsers,
+      activeCustomers,
+      suspendedCustomers,
+      totalBusinesses,
+      pendingCustomers,
+      adminCount,
+      totalTransactions,
+      newUsersLast30Days,
+    ] = await Promise.all([
       userRepository.count(),
       userRepository.count({ role: USER_ROLES.CUSTOMER, status: USER_STATUS.ACTIVE }),
       userRepository.count({ role: USER_ROLES.CUSTOMER, status: USER_STATUS.SUSPENDED }),
       businessRepository.getTotalBusinessCount(),
+      userRepository.count({ role: USER_ROLES.CUSTOMER, status: USER_STATUS.PENDING }),
+      userRepository.count({ role: USER_ROLES.ADMIN }),
+      transactionRepository.count({}),
+      userRepository.count({ createdAt: { $gte: thirtyDaysAgo } }),
     ]);
+
     return {
       totalUsers,
       activeCustomers,
       suspendedCustomers,
       totalBusinesses,
-      // Additional stats can be added here
+      pendingCustomers,
+      adminCount,
+      totalTransactions,
+      newUsersLast30Days,
     };
+  }
+
+  /**
+   * Get all businesses with owner info, paginated.
+   * @param {Object} options - { page, limit, search }
+   * @returns {Promise<{data: Array, total: number, page: number, limit: number}>}
+   */
+  async getAllBusinesses(options = {}) {
+    const { page = 1, limit = 25, search = '' } = options;
+    const result = await businessRepository.findAllWithOwner({ page, limit, search });
+    // Normalize: rename userId -> owner for cleaner API surface
+    return {
+      ...result,
+      data: result.data.map((b) => {
+        const { userId, ...rest } = b;
+        return { ...rest, owner: userId || null };
+      }),
+    };
+  }
+
+  /**
+   * Manually activate a pending customer (admin override of email verification).
+   * @param {string} customerId
+   * @param {string} adminId
+   * @param {string} ipAddress
+   * @returns {Promise<Object>} Updated user
+   */
+  async verifyCustomer(customerId, adminId, ipAddress) {
+    const user = await userRepository.findById(customerId);
+    if (!user || user.role !== USER_ROLES.CUSTOMER) {
+      throw new ApiError(404, 'Customer not found');
+    }
+    if (user.status === USER_STATUS.ACTIVE) {
+      throw new ApiError(400, 'Account is already active');
+    }
+    if (user.status === USER_STATUS.DELETED) {
+      throw new ApiError(400, 'Account is already deleted');
+    }
+
+    const beforeStatus = user.status;
+    const updatedUser = await userRepository.update(customerId, {
+      status: USER_STATUS.ACTIVE,
+      verificationToken: null,
+    });
+
+    await auditService.logStatusChange(
+      'user', customerId, user.businessId, adminId,
+      beforeStatus, USER_STATUS.ACTIVE, ipAddress,
+    );
+
+    logger.info(`Admin ${adminId} manually verified customer ${customerId}`);
+    return updatedUser;
+  }
+
+  /**
+   * Change the role of a user (promote to admin / demote to customer).
+   * @param {string} userId
+   * @param {string} adminId - performing admin
+   * @param {string} newRole - 'admin' | 'customer'
+   * @returns {Promise<Object>} Updated user
+   */
+  async changeRole(userId, adminId, newRole) {
+    if (userId === adminId) {
+      throw new ApiError(403, 'You cannot change your own role.');
+    }
+    if (![USER_ROLES.ADMIN, USER_ROLES.CUSTOMER].includes(newRole)) {
+      throw new ApiError(400, `Invalid role: ${newRole}`);
+    }
+
+    const user = await userRepository.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
+    }
+
+    // Guard: cannot demote the last admin
+    if (user.role === USER_ROLES.ADMIN && newRole === USER_ROLES.CUSTOMER) {
+      const adminCount = await userRepository.count({ role: USER_ROLES.ADMIN });
+      if (adminCount <= 1) {
+        throw new ApiError(400, 'Cannot demote the last admin.');
+      }
+    }
+
+    const updatedUser = await userRepository.update(userId, { role: newRole });
+
+    await auditService.log({
+      entityType: 'user',
+      entityId: userId,
+      businessId: user.businessId,
+      action: 'ROLE_CHANGED',
+      performedBy: adminId,
+      beforeState: { role: user.role },
+      afterState: { role: newRole },
+    });
+
+    logger.info(`Admin ${adminId} changed role of user ${userId}: ${user.role} → ${newRole}`);
+    return updatedUser;
   }
 }
 

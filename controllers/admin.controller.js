@@ -88,6 +88,51 @@ const getSystemStats = async (req, res, next) => {
   }
 };
 
+/**
+ * Get all businesses with owner info (paginated).
+ * GET /api/v1/admin/businesses
+ * Query: page, limit, search
+ */
+const getAllBusinesses = async (req, res, next) => {
+  try {
+    const { page, limit, search } = req.query;
+    const result = await adminService.getAllBusinesses({ page, limit, search });
+    ApiResponse.success(res, result, 'Businesses retrieved successfully');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Manually verify (activate) a pending customer.
+ * PUT /api/v1/admin/customers/:id/verify
+ */
+const verifyCustomer = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const updated = await adminService.verifyCustomer(id, req.user.id, req.ip);
+    ApiResponse.success(res, updated, 'Customer account verified and activated');
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Change a user's role (promote/demote).
+ * PUT /api/v1/admin/customers/:id/role
+ * Body: { role }
+ */
+const changeRole = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+    const updated = await adminService.changeRole(id, req.user.id, role);
+    ApiResponse.success(res, updated, `User role updated to ${role}`);
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getAllCustomers,
   getCustomerById,
@@ -95,4 +140,7 @@ module.exports = {
   reinstateCustomer,
   deleteCustomer,
   getSystemStats,
+  getAllBusinesses,
+  verifyCustomer,
+  changeRole,
 };
