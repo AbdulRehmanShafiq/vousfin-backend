@@ -15,12 +15,11 @@
 
 process.env.LOG_DIR = process.env.LOG_DIR || '/tmp/logs';
 
-// This serverless deployment has no SMTP configured, so a verification email can
-// never actually be sent — which would otherwise leave every new account stuck as
-// PENDING and unable to log in. Default to skipping email verification so signup +
-// login work out of the box. Override by setting SKIP_EMAIL_VERIFICATION=false in
-// the environment AND configuring the SMTP_* vars.
-process.env.SKIP_EMAIL_VERIFICATION = process.env.SKIP_EMAIL_VERIFICATION || 'true';
+// Email verification is REQUIRED. Brevo SMTP is configured (same path as team
+// invites / password resets), so verification emails actually send. Verification
+// is ON by default; only an explicit SKIP_EMAIL_VERIFICATION=true disables it
+// (e.g. local/dev). New signups land as PENDING until they click the email link.
+process.env.SKIP_EMAIL_VERIFICATION = process.env.SKIP_EMAIL_VERIFICATION || 'false';
 
 const app = require('../app');
 const connectDB = require('../config/database');

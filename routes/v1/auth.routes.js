@@ -12,6 +12,7 @@ const {
   resendVerificationSchema,
 } = require('../../validations/auth.validation');
 const { authMiddleware } = require('../../middleware/auth.middleware');
+const config = require('../../config');
 
 router.post('/register', validate(registerSchema), authController.register);
 router.post('/login', validate(loginSchema), authController.login);
@@ -34,7 +35,7 @@ router.delete('/mfa', authMiddleware, authController.mfaDisable);
 router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 router.get(
   '/google/callback',
-  passport.authenticate('google', { failureRedirect: '/login', session: false }),
+  passport.authenticate('google', { failureRedirect: `${config.CLIENT_URL}/login?error=google`, session: false }),
   authController.googleCallback
 );
 

@@ -275,15 +275,11 @@ const googleCallback = async (req, res, next) => {
     if (!req.user) {
       throw new ApiError(401, 'Google authentication failed');
     }
-    const token = authService.generateTokenForUser(req.user); // You'll need to add this method or use existing
-    // Set cookie and redirect to frontend
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: config.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 24 * 60 * 60 * 1000,
-    });
-    res.redirect(`${config.CLIENT_URL}/dashboard`);
+    const token = authService.generateTokenForUser(req.user);
+    // The SPA keeps its JWT in localStorage, so hand the token to a frontend
+    // success route that captures it and completes login. (The axios layer does
+    // not read cookies.)
+    res.redirect(`${config.CLIENT_URL}/auth/google/success?token=${encodeURIComponent(token)}`);
   } catch (error) {
     next(error);
   }
