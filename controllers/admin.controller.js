@@ -133,6 +133,103 @@ const changeRole = async (req, res, next) => {
   }
 };
 
+// ─── Feedback ─────────────────────────────────────────────────────────────────
+
+const listFeedback = async (req, res, next) => {
+  try {
+    const { status, type, page, limit } = req.query;
+    const result = await adminService.listFeedback({ status, type, page, limit });
+    ApiResponse.success(res, result, 'Feedback retrieved');
+  } catch (err) { next(err); }
+};
+
+const updateFeedbackStatus = async (req, res, next) => {
+  try {
+    const doc = await adminService.updateFeedbackStatus(req.params.id, req.body);
+    ApiResponse.success(res, doc, 'Feedback updated');
+  } catch (err) { next(err); }
+};
+
+// ─── Support tickets ──────────────────────────────────────────────────────────
+
+const listSupportTickets = async (req, res, next) => {
+  try {
+    const { status, priority, page, limit } = req.query;
+    const result = await adminService.listSupportTickets({ status, priority, page, limit });
+    ApiResponse.success(res, result, 'Support tickets retrieved');
+  } catch (err) { next(err); }
+};
+
+const getSupportTicket = async (req, res, next) => {
+  try {
+    const ticket = await adminService.getSupportTicket(req.params.id);
+    ApiResponse.success(res, ticket, 'Ticket retrieved');
+  } catch (err) { next(err); }
+};
+
+const addAdminTicketReply = async (req, res, next) => {
+  try {
+    const ticket = await adminService.addAdminTicketReply(req.params.id, req.user.id, req.body.body);
+    ApiResponse.success(res, ticket, 'Reply added');
+  } catch (err) { next(err); }
+};
+
+const updateSupportTicket = async (req, res, next) => {
+  try {
+    const ticket = await adminService.updateSupportTicket(req.params.id, req.body);
+    ApiResponse.success(res, ticket, 'Ticket updated');
+  } catch (err) { next(err); }
+};
+
+// ─── Announcements ────────────────────────────────────────────────────────────
+
+const listAnnouncements = async (req, res, next) => {
+  try {
+    const data = await adminService.listAnnouncements();
+    ApiResponse.success(res, data, 'Announcements retrieved');
+  } catch (err) { next(err); }
+};
+
+const createAnnouncement = async (req, res, next) => {
+  try {
+    const doc = await adminService.createAnnouncement(req.body, req.user);
+    ApiResponse.created(res, doc, 'Announcement created');
+  } catch (err) { next(err); }
+};
+
+const updateAnnouncement = async (req, res, next) => {
+  try {
+    const doc = await adminService.updateAnnouncement(req.params.id, req.body);
+    ApiResponse.success(res, doc, 'Announcement updated');
+  } catch (err) { next(err); }
+};
+
+const removeAnnouncement = async (req, res, next) => {
+  try {
+    await adminService.removeAnnouncement(req.params.id);
+    ApiResponse.success(res, null, 'Announcement deleted');
+  } catch (err) { next(err); }
+};
+
+// ─── Platform activity ────────────────────────────────────────────────────────
+
+const getRecentActivity = async (req, res, next) => {
+  try {
+    const { page, limit } = req.query;
+    const result = await adminService.getRecentActivity({ page, limit });
+    ApiResponse.success(res, result, 'Platform activity retrieved');
+  } catch (err) { next(err); }
+};
+
+// ─── Reset MFA ────────────────────────────────────────────────────────────────
+
+const resetUserMfa = async (req, res, next) => {
+  try {
+    const result = await adminService.resetUserMfa(req.params.id, req.user.id);
+    ApiResponse.success(res, result, result.message);
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getAllCustomers,
   getCustomerById,
@@ -143,4 +240,17 @@ module.exports = {
   getAllBusinesses,
   verifyCustomer,
   changeRole,
+  // new
+  listFeedback,
+  updateFeedbackStatus,
+  listSupportTickets,
+  getSupportTicket,
+  addAdminTicketReply,
+  updateSupportTicket,
+  listAnnouncements,
+  createAnnouncement,
+  updateAnnouncement,
+  removeAnnouncement,
+  getRecentActivity,
+  resetUserMfa,
 };

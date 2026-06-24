@@ -105,6 +105,9 @@ router.use('/aml',                   require('./v1/aml.routes'));          // FR
 router.use('/retention',             require('./v1/retention.routes'));    // FR-10.4 — document retention
 router.use('/benchmarking',          require('./v1/benchmarking.routes'));          // Phase 8 FR-09.3 — industry benchmarking
 router.use('/cash-flow/thirteen-week', require('./v1/thirteenWeekCashFlow.routes')); // Phase 8 FR-06.3 — 13-week cash forecast
+router.use('/feedback',       require('./v1/feedback.routes'));       // User feedback submissions
+router.use('/support',        require('./v1/support.routes'));        // Support tickets
+router.use('/announcements',  require('./v1/announcement.routes'));   // Platform announcements (active)
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {

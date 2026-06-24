@@ -9,6 +9,11 @@ const { ApiError } = require('../utils/ApiError');
 const { USER_STATUS, USER_ROLES } = require('../config/constants');
 const logger = require('../config/logger');
 
+const AuditLog = require('../models/AuditLog.model');
+const userFeedbackService = require('./userFeedback.service');
+const supportService = require('./support.service');
+const announcementService = require('./announcement.service');
+
 class AdminService {
   /**
    * Get all customer accounts with pagination and filters.
@@ -265,6 +270,68 @@ class AdminService {
 
     logger.info(`Admin ${adminId} manually verified customer ${customerId}`);
     return updatedUser;
+  }
+
+  // ─── Feedback (admin) ────────────────────────────────────────────────────────
+
+  async listFeedback(opts) { return userFeedbackService.listAll(opts); }
+  async updateFeedbackStatus(id, data) { return userFeedbackService.updateStatus(id, data); }
+
+  // ─── Support tickets (admin) ──────────────────────────────────────────────────
+
+  async listSupportTickets(opts) { return supportService.listAll(opts); }
+  async getSupportTicket(id) { return supportService.getTicketAdmin(id); }
+  async addAdminTicketReply(id, adminId, body) { return supportService.addAdminReply(id, adminId, body); }
+  async updateSupportTicket(id, data) { return supportService.updateTicket(id, data); }
+
+  // ─── Announcements (admin) ────────────────────────────────────────────────────
+
+  async listAnnouncements() { return announcementService.listAll(); }
+  async createAnnouncement(data, actor) { return announcementService.create(data, actor); }
+  async updateAnnouncement(id, data) { return announcementService.update(id, data); }
+  async removeAnnouncement(id) { return announcementService.remove(id); }
+
+  // ─── Platform activity log ───────────────────────────────────────────────────
+
+  /**
+   * Cross-business platform activity — newest first, paginated.
+   */
+  async getRecentActivity({ page = 1, limit = 50 } = {}) {
+    const skip = (page - 1) * limit;
+    const [data, total] = await Promise.all([
+      AuditLog.find({}).sort({ timestamp: -1 }).skip(skip).limit(Number(limit)).lean(),
+      AuditLog.countDocuments({}),
+    ]);
+    return { data, total, page: Number(page), limit: Number(limit) };
+  }
+
+  // ─── Reset user MFA (admin) ───────────────────────────────────────────────────
+
+  /**
+   * Clear MFA for a user. Audit-logs the action.
+   */
+  async resetUserMfa(userId, adminId) {
+    const user = await userRepository.findById(userId);
+    if (!user) throw new ApiError(404, 'User not found');
+
+    await userRepository.update(userId, {
+      'mfa.enabled':     false,
+      'mfa.secret':      null,
+      'mfa.backupCodes': [],
+    });
+
+    await auditService.log({
+      entityType:      'user',
+      entityId:        userId,
+      businessId:      user.businessId || null,
+      action:          'UPDATED',
+      performedBy:     adminId,
+      beforeState:     { mfaEnabled: user.mfa?.enabled },
+      afterState:      { mfaEnabled: false },
+    });
+
+    logger.info(`Admin ${adminId} reset MFA for user ${userId}`);
+    return { message: 'MFA has been reset for this user.' };
   }
 
   /**
