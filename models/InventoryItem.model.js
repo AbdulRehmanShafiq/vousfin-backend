@@ -96,6 +96,18 @@ const inventoryItemSchema = new mongoose.Schema(
       default: 'weighted_average',
       enum: ['weighted_average', 'fifo'],
     },
+    /** FIFO cost layers (oldest first): each purchase batch's remaining qty + unit cost. */
+    costLayers: {
+      type: [
+        {
+          _id: false,
+          qty: { type: Number, required: true },
+          unitCost: { type: Number, required: true },
+          addedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -136,20 +148,48 @@ inventoryItemSchema.methods.addStock = async function (qty, costPerUnit, session
   const newQty = this.currentStock + qty;
   this.unitCostPrice = newQty > 0 ? totalValue / newQty : costPerUnit;
   this.currentStock = newQty;
+  // FIFO: record a cost layer for this batch (weighted-avg unitCostPrice stays as a
+  // valuation summary and equals the layers' average after each add).
+  if (this.valuationMethod === 'fifo') {
+    if (!Array.isArray(this.costLayers)) this.costLayers = [];
+    this.costLayers.push({ qty, unitCost: costPerUnit, addedAt: new Date() });
+  }
   await this.save({ session });
   return this;
 };
 
 /**
- * Reduce stock and return the COGS amount (qty × unitCostPrice).
+ * Reduce stock and return the COGS amount. Weighted-average uses unitCostPrice;
+ * FIFO consumes oldest cost layers first (and keeps unitCostPrice in step with the
+ * remaining layers so inventory valuation stays consistent).
  */
 inventoryItemSchema.methods.reduceStock = async function (qty, session = null) {
   if (qty <= 0) throw new Error('Quantity must be positive');
   if (qty > this.currentStock) throw new Error(`Insufficient stock: ${this.currentStock} available`);
-  const cogs = qty * this.unitCostPrice;
+
+  let cogsAmount;
+  let unitCostUsed;
+  if (this.valuationMethod === 'fifo') {
+    const { consumeFifo } = require('../utils/inventoryCosting.util');
+    // Migration-safe: if no layers recorded yet, seed one from current stock @ avg cost.
+    const seeded = this.costLayers && this.costLayers.length
+      ? this.costLayers.map((l) => ({ qty: l.qty, unitCost: l.unitCost, addedAt: l.addedAt }))
+      : (this.currentStock > 0 ? [{ qty: this.currentStock, unitCost: this.unitCostPrice }] : []);
+    const res = consumeFifo(seeded, qty);
+    cogsAmount = res.cogsAmount;
+    unitCostUsed = res.unitCostUsed || this.unitCostPrice;
+    this.costLayers = res.remainingLayers;
+    const remQty = this.currentStock - qty;
+    const remVal = res.remainingLayers.reduce((s, l) => s + l.qty * l.unitCost, 0);
+    if (remQty > 0) this.unitCostPrice = Math.round((remVal / remQty) * 100) / 100;
+  } else {
+    cogsAmount = Math.round(qty * this.unitCostPrice * 100) / 100;
+    unitCostUsed = this.unitCostPrice;
+  }
+
   this.currentStock -= qty;
   await this.save({ session });
-  return { cogsAmount: Math.round(cogs * 100) / 100, unitCostUsed: this.unitCostPrice };
+  return { cogsAmount, unitCostUsed };
 };
 
 inventoryItemSchema.statics.getLowStockItems = function (businessId) {
