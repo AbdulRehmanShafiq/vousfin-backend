@@ -22,7 +22,44 @@ class AdminService {
    */
   async getAllCustomers(options = {}) {
     const { page = 1, limit = 25, search = '', status = null } = options;
-    return userRepository.findAllCustomersWithBusiness({ page, limit, search, status });
+    const skip = (page - 1) * limit;
+
+    // Build query conditions
+    const conditions = {};
+    if (status && Object.values(USER_STATUS).includes(status)) {
+      conditions.status = status;
+    }
+    if (search) {
+      conditions.$or = [
+        { fullName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    // Use the base repository's findAll method to get users with pagination
+    const result = await userRepository.findAll(conditions, {
+      page,
+      limit,
+      sort: { createdAt: -1 },
+      populate: 'businessId',
+    });
+
+    // Transform the businessId to only include the desired fields (businessName, businessType, currency, createdAt)
+    const transformedUsers = result.data.map(user => {
+      if (user.businessId) {
+        const business = user.businessId;
+        user.businessId = {
+          _id: business._id,
+          businessName: business.businessName,
+          businessType: business.businessType,
+          currency: business.currency,
+          createdAt: business.createdAt,
+        };
+      }
+      return user;
+    });
+
+    return { ...result, data: transformedUsers };
   }
 
   /**
@@ -69,22 +106,22 @@ class AdminService {
   }
 
   /**
-   * Suspend a customer account.
-   * @param {string} customerId
+   * Suspend a user account.
+   * @param {string} userId
    * @param {string} adminId - ID of admin performing action
    * @param {string} reason - Optional reason for suspension
    * @param {string} ipAddress
    * @returns {Promise<Object>} Updated user
    */
-  async suspendCustomer(customerId, adminId, reason = '', ipAddress) {
+  async suspendCustomer(userId, adminId, reason = '', ipAddress) {
     // Prevent self-suspension
-    if (customerId === adminId) {
+    if (userId === adminId) {
       throw new ApiError(403, 'Admin cannot suspend their own account');
     }
 
-    const user = await userRepository.findById(customerId);
-    if (!user || user.role !== USER_ROLES.CUSTOMER) {
-      throw new ApiError(404, 'Customer not found');
+    const user = await userRepository.findById(userId);
+    if (!user) {
+      throw new ApiError(404, 'User not found');
     }
     if (user.status === USER_STATUS.SUSPENDED) {
       throw new ApiError(400, 'Account is already suspended');
@@ -93,19 +130,19 @@ class AdminService {
       throw new ApiError(400, 'Account is already deleted');
     }
 
-    const updatedUser = await userRepository.updateStatus(customerId, USER_STATUS.SUSPENDED);
+    const updatedUser = await userRepository.updateStatus(userId, USER_STATUS.SUSPENDED);
 
     // Audit log
-    await auditService.logStatusChange('user', customerId, user.businessId, adminId, user.status, USER_STATUS.SUSPENDED, ipAddress);
+    await auditService.logStatusChange('user', userId, user.businessId, adminId, user.status, USER_STATUS.SUSPENDED, ipAddress);
 
     // Send email notification
     try {
       await sendAccountStatusEmail(user.email, user.fullName, 'suspended', reason);
     } catch (emailErr) {
-      logger.error(`Failed to send suspension email to ${user.email}: ${emailErr.message}`);
+      logger.error(`Failed to send suspension email to ${user.email}: ${error.message}`);
     }
 
-    logger.info(`Admin ${adminId} suspended customer ${customerId} from IP ${ipAddress}`);
+    logger.info(`Admin ${adminId} suspended user ${userId} from IP ${ipAddress}`);
     return updatedUser;
   }
 

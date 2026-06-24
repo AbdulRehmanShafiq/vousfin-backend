@@ -83,6 +83,26 @@ class SupportService {
     if (!ticket) throw new ApiError(404, 'Ticket not found');
     return ticket;
   }
+
+  /** Alias for createTicket */
+  async create(actor, { subject, category, priority, message }) {
+    return this.createTicket(actor, { subject, category, priority, message });
+  }
+
+  /** Alias for listMyTickets */
+  async listMine(userId) {
+    return this.listMyTickets(userId);
+  }
+
+  /** Alias for getTicket */
+  async get(id, userId) {
+    return this.getTicket(id, userId);
+  }
+
+  /** Alias for addUserReply */
+  async reply(id, userId, body) {
+    return this.addUserReply(id, userId, body);
+  }
 }
 
 module.exports = new SupportService();
