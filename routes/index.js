@@ -97,6 +97,7 @@ router.use('/jobs',                  require('./v1/jobs.routes'));        // Dep
 router.use('/team',                  require('./v1/team.routes'));         // Phase 6A — team & RBAC
 router.use('/sod',                   require('./v1/sod.routes'));          // Phase 6B — segregation-of-duties matrix
 router.use('/internal-audit',        require('./v1/internalAudit.routes')); // Phase 6C — internal audit workspace
+router.use('/fixed-assets',          require('./v1/fixedAsset.routes'));    // Fixed Asset Register — PPE depreciation + disposal
 router.use('/compliance',            require('./v1/compliance.routes'));   // FR-10.1 — compliance calendar
 router.use('/leases',                require('./v1/lease.routes'));        // FR-10.2 — IFRS-16 leases
 router.use('/impairment',            require('./v1/impairment.routes'));   // FR-10.2 — IAS-36 impairment
