@@ -227,7 +227,9 @@ class BusinessEventEngine {
     else this._handlers.delete(eventName);
   }
 
-  // ─── Publishing ────────────────────────────────────────────────�  /**
+  // --- Publishing ---
+
+  /**
    * Run all handlers for an envelope locally.
    * @private
    */
@@ -270,7 +272,18 @@ class BusinessEventEngine {
       this._executeHandlersLocally(envelope);
     }
     return envelope.eventId;
-  }At: envelope.occurredAt,
+  }
+
+  /**
+   * Internal diagnostic history.
+   * @private
+   */
+  _record(envelope, { errors = [] } = {}) {
+    this._history.push({
+      eventId:    envelope.eventId,
+      eventName:  envelope.eventName,
+      businessId: envelope.businessId,
+      occurredAt: envelope.occurredAt,
       entityType: envelope.entityType || null,
       entityId:   envelope.entityId != null ? String(envelope.entityId) : null,
       handlerErrors: errors.length,
