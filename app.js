@@ -63,6 +63,11 @@ app.get('/health', (req, res) => {
   res.status(200).json({ success: true, message: 'Server is running' });
 });
 
+// Root path handler
+app.get('/', (req, res) => {
+  res.status(200).json({ success: true, message: 'VousFin API Backend is operational.' });
+});
+
 // 404 handler
 app.use((req, res) => {
   res.status(404).json({ success: false, message: `Cannot ${req.method} ${req.originalUrl}` });
