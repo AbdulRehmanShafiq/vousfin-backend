@@ -110,7 +110,24 @@ const remove = async (req, res, next) => {
   } catch (error) { next(error); }
 };
 
+/** POST /api/v1/bank-reconciliation/:id/auto-match */
+const autoMatch = async (req, res, next) => {
+  try {
+    const result = await reconciliationService.autoMatch(req.user.businessId, req.params.id, req.user);
+    ApiResponse.success(res, result, 'Auto-match completed');
+  } catch (error) { next(error); }
+};
+
+/** POST /api/v1/bank-reconciliation/:id/accept-batch  Body: { lineRefs: [] } */
+const acceptBatch = async (req, res, next) => {
+  try {
+    const result = await reconciliationService.acceptBatch(req.user.businessId, req.params.id, req.body.lineRefs, req.user);
+    ApiResponse.success(res, result, 'Batch acceptance completed');
+  } catch (error) { next(error); }
+};
+
 module.exports = {
   parse, importStatement, list, getStatement,
   match, unmatch, clear, createFromLine, finish, remove,
+  autoMatch, acceptBatch,
 };

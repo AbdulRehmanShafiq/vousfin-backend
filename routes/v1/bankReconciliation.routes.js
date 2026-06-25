@@ -20,6 +20,8 @@ router.get('/', controller.list);
 router.get('/:id', validate(idParamSchema, 'params'), controller.getStatement);
 router.delete('/:id', validate(idParamSchema, 'params'), controller.remove);
 router.post('/:id/finish', validate(idParamSchema, 'params'), controller.finish);
+router.post('/:id/auto-match', validate(idParamSchema, 'params'), controller.autoMatch);
+router.post('/:id/accept-batch', validate(idParamSchema, 'params'), controller.acceptBatch);
 
 // Per-line actions
 router.post('/:id/lines/:lineRef/match',   validate(matchSchema), controller.match);

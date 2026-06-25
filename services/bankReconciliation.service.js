@@ -173,6 +173,14 @@ class BankReconciliationService {
         line.matchedAt = new Date();
         used.add(String(best.journalEntryId));
         autoCount++;
+      } else {
+        line.proposedMatches = ranked.slice(0, 3).map(r => ({
+          journalEntryId: r.journalEntryId,
+          description: r.description,
+          date: r.date,
+          amount: r.amount,
+          score: r.score
+        }));
       }
       delete line._bankAccountId;
     }
@@ -412,6 +420,101 @@ class BankReconciliationService {
       });
     } catch (_) { /* best-effort */ }
     return this.getStatement(statementId, businessId);
+  }
+
+  async autoMatch(businessId, statementId, actor) {
+    this._validateId(statementId, 'statementId');
+    const stmt = await bankStatementRepository.findOneByBusinessAndId(businessId, statementId);
+    if (!stmt) throw new ApiError(404, 'Statement not found');
+
+    const used = await bankStatementRepository.matchedJournalEntryIds(businessId, stmt.bankAccountId);
+    let autoMatchedCount = 0;
+
+    for (const line of stmt.lines) {
+      if (line.status !== BANK_LINE_STATUS.UNMATCHED) continue;
+      
+      const best = line.proposedMatches && line.proposedMatches[0];
+      if (best && best.score >= 85) {
+        if (!used.has(String(best.journalEntryId))) {
+          line.status = BANK_LINE_STATUS.MATCHED;
+          line.matchedJournalEntryId = best.journalEntryId;
+          line.matchScore = best.score;
+          line.autoMatched = true;
+          line.matchedAt = new Date();
+          line.matchedBy = actor ? actor.id : null;
+          used.add(String(best.journalEntryId));
+          autoMatchedCount++;
+        }
+      }
+    }
+
+    if (autoMatchedCount > 0) {
+      await stmt.save();
+      try {
+        await auditService.log({
+          businessId, entityType: ENTITY_TYPES.BANK_STATEMENT, entityId: stmt._id,
+          action: AUDIT_ACTIONS.STATE_CHANGED, performedBy: actor ? actor.id : 'system', performedByName: actor ? actor.fullName : 'System',
+          afterState: { autoMatchedRunCount: autoMatchedCount },
+        });
+      } catch (_) { /* best-effort */ }
+    }
+
+    return { autoMatchedCount, statement: stmt };
+  }
+
+  async acceptBatch(businessId, statementId, lineRefs, actor) {
+    this._validateId(statementId, 'statementId');
+    if (!Array.isArray(lineRefs) || !lineRefs.length) throw new ApiError(400, 'lineRefs array is required');
+    
+    const stmt = await bankStatementRepository.findOneByBusinessAndId(businessId, statementId);
+    if (!stmt) throw new ApiError(404, 'Statement not found');
+
+    const used = await bankStatementRepository.matchedJournalEntryIds(businessId, stmt.bankAccountId);
+    let acceptedCount = 0;
+    const errors = [];
+
+    const refsToAccept = new Set(lineRefs);
+
+    for (const line of stmt.lines) {
+      if (!refsToAccept.has(line.lineRef)) continue;
+      if (line.status !== BANK_LINE_STATUS.UNMATCHED) {
+        errors.push({ lineRef: line.lineRef, error: 'Line is not unmatched' });
+        continue;
+      }
+      
+      const best = line.proposedMatches && line.proposedMatches[0];
+      if (!best) {
+        errors.push({ lineRef: line.lineRef, error: 'No proposed match found' });
+        continue;
+      }
+
+      if (used.has(String(best.journalEntryId))) {
+        errors.push({ lineRef: line.lineRef, error: 'Top proposed match already used' });
+        continue;
+      }
+
+      line.status = BANK_LINE_STATUS.MATCHED;
+      line.matchedJournalEntryId = best.journalEntryId;
+      line.matchScore = best.score;
+      line.autoMatched = false;
+      line.matchedAt = new Date();
+      line.matchedBy = actor ? actor.id : null;
+      used.add(String(best.journalEntryId));
+      acceptedCount++;
+    }
+
+    if (acceptedCount > 0) {
+      await stmt.save();
+      try {
+        await auditService.log({
+          businessId, entityType: ENTITY_TYPES.BANK_STATEMENT, entityId: stmt._id,
+          action: AUDIT_ACTIONS.UPDATED, performedBy: actor ? actor.id : 'system', performedByName: actor ? actor.fullName : 'System',
+          afterState: { batchAcceptedCount: acceptedCount },
+        });
+      } catch (_) { /* best-effort */ }
+    }
+
+    return { acceptedCount, errors, statement: stmt };
   }
 
   async list(businessId, { bankAccountId } = {}) {

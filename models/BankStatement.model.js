@@ -40,6 +40,15 @@ const bankLineSchema = new mongoose.Schema(
     matchedAt:   { type: Date, default: null },
     matchedBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     note:        { type: String, default: null, maxlength: 300 },
+    proposedMatches: [
+      {
+        journalEntryId: { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry', required: true },
+        description: { type: String, default: '' },
+        date: { type: Date, required: true },
+        amount: { type: Number, required: true },
+        score: { type: Number, required: true },
+      }
+    ],
   },
   { _id: false }
 );
