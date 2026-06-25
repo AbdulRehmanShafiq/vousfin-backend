@@ -35,15 +35,18 @@ function ensureDB() {
   return dbPromise;
 }
 
-// Attach DB connection middleware BEFORE routing
-app.use(async (req, res, next) => {
-  try {
-    await ensureDB();
-    next();
-  } catch (err) {
-    res.status(503).json({ success: false, message: 'Database connection failed' });
-  }
-});
-
-// Vercel requires exporting the Express app instance directly
-module.exports = app;
+// Vercel requires a synchronous wrapper when handling Express inside a Serverless Function.
+// We must NOT use an `async` function because it would resolve immediately (since `app(req, res)`
+// is not a Promise), causing Vercel to terminate the function prematurely with 
+// FUNCTION_INVOCATION_FAILED before Express finishes its asynchronous response handling.
+module.exports = (req, res) => {
+  ensureDB()
+    .then(() => {
+      app(req, res);
+    })
+    .catch((err) => {
+      res.statusCode = 503;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: false, message: 'Database connection failed' }));
+    });
+};
