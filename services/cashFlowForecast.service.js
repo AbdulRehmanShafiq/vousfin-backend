@@ -44,7 +44,7 @@ class CashFlowForecastService {
   async payableObligations(businessId, { horizonDays = 90 } = {}) {
     this._validateId(businessId);
     const cacheKey = { type: 'payable-obligations', horizonDays };
-    const cached = reportCache.get('ap-forecast', businessId, cacheKey);
+    const cached = await reportCache.get('ap-forecast', businessId, cacheKey);
     if (cached) return cached;
 
     const now    = new Date();
@@ -112,7 +112,7 @@ class CashFlowForecastService {
    */
   async cashRequirements(businessId) {
     this._validateId(businessId);
-    const cached = reportCache.get('ap-forecast', businessId, { type: 'cash-requirements' });
+    const cached = await reportCache.get('ap-forecast', businessId, { type: 'cash-requirements' });
     if (cached) return cached;
 
     const now = new Date();
@@ -213,7 +213,7 @@ class CashFlowForecastService {
   async dashboardForecast(businessId) {
     this._validateId(businessId);
     const cacheKey = { type: 'dashboard-forecast' };
-    const cached = reportCache.get('ap-forecast', businessId, cacheKey);
+    const cached = await reportCache.get('ap-forecast', businessId, cacheKey);
     if (cached) return cached;
 
     const [requirements, obligations, urgent] = await Promise.all([

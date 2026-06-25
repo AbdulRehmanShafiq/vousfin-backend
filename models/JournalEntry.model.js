@@ -784,6 +784,30 @@ async function checkPeriodLock() {
   }
 }
 
+async function checkImmutability() {
+  const update = this.getUpdate ? this.getUpdate() : null;
+  if (!update) return;
+
+  const docToUpdate = await this.model.findOne(this.getQuery());
+  if (!docToUpdate) return;
+
+  const immutableStatuses = [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.PARTIALLY_SETTLED, JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.REVERSED];
+  if (immutableStatuses.includes(docToUpdate.status)) {
+    // Check if any financial fields are being mutated
+    const restrictedFields = ['amount', 'debitAccountId', 'creditAccountId', 'journalLines', 'baseCurrencyAmount', 'exchangeRate', 'taxAmount', 'taxRate'];
+    const mutated = restrictedFields.some(field => 
+      (update[field] !== undefined) || (update.$set && update.$set[field] !== undefined)
+    );
+
+    if (mutated) {
+      throw new ApiError(403, `Cannot mutate financial fields of a ${docToUpdate.status} journal entry. Reversals must be used.`);
+    }
+  }
+}
+
+journalEntrySchema.pre('findOneAndUpdate', checkImmutability);
+journalEntrySchema.pre('updateOne', checkImmutability);
+
 journalEntrySchema.pre('findOneAndUpdate', checkPeriodLock);
 journalEntrySchema.pre('updateOne', checkPeriodLock);
 journalEntrySchema.pre('deleteOne', checkPeriodLock);

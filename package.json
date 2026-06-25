@@ -11,6 +11,7 @@
     "migrate:backfill-payment-records": "node migrations/backfill_payments_from_settlements.js",
     "migrate:mark-projections": "node migrations/mark_journal_projections.js",
     "migrate:backfill-accuracy": "node migrations/backfill_forecast_accuracy.js",
+    "test:integrity": "node scripts/run-integrity-gate.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest tests/unit --forceExit --detectOpenHandles",
     "test:integration": "jest tests/integration --forceExit --detectOpenHandles",
@@ -37,6 +38,7 @@
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.79.1",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
@@ -45,6 +47,7 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.1.0",
+    "ioredis": "^5.11.1",
     "joi": "^18.2.1",
     "jsonwebtoken": "^9.0.3",
     "migrate-mongo": "^14.0.7",

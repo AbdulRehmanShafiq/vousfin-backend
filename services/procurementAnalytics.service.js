@@ -48,7 +48,7 @@ class ProcurementAnalyticsService {
   async vendorSpendAnalysis(businessId, { months = 12, limit = 10 } = {}) {
     this._validateId(businessId);
     const cacheKey = { type: 'vendor-spend', months, limit };
-    const cached = reportCache.get('procurement', businessId, cacheKey);
+    const cached = await reportCache.get('procurement', businessId, cacheKey);
     if (cached) return cached;
 
     const since = this._monthsAgo(months);
@@ -151,7 +151,7 @@ class ProcurementAnalyticsService {
   async cycleTimeAnalysis(businessId, { months = 6 } = {}) {
     this._validateId(businessId);
     const cacheKey = { type: 'cycle-time', months };
-    const cached = reportCache.get('procurement', businessId, cacheKey);
+    const cached = await reportCache.get('procurement', businessId, cacheKey);
     if (cached) return cached;
 
     const since = this._monthsAgo(months);
@@ -276,7 +276,7 @@ class ProcurementAnalyticsService {
    */
   async overdueStats(businessId) {
     this._validateId(businessId);
-    const cached = reportCache.get('procurement', businessId, { type: 'overdue-stats' });
+    const cached = await reportCache.get('procurement', businessId, { type: 'overdue-stats' });
     if (cached) return cached;
 
     const now = new Date();
@@ -346,7 +346,7 @@ class ProcurementAnalyticsService {
   async paymentBehaviorStats(businessId, { months = 6 } = {}) {
     this._validateId(businessId);
     const cacheKey = { type: 'payment-behavior', months };
-    const cached = reportCache.get('procurement', businessId, cacheKey);
+    const cached = await reportCache.get('procurement', businessId, cacheKey);
     if (cached) return cached;
 
     const since = this._monthsAgo(months);
@@ -414,7 +414,7 @@ class ProcurementAnalyticsService {
   async recurringExpenses(businessId, { months = 6 } = {}) {
     this._validateId(businessId);
     const cacheKey = { type: 'recurring-expenses', months };
-    const cached = reportCache.get('procurement', businessId, cacheKey);
+    const cached = await reportCache.get('procurement', businessId, cacheKey);
     if (cached) return cached;
 
     const since = this._monthsAgo(months);
@@ -477,7 +477,7 @@ class ProcurementAnalyticsService {
   async purchasingEfficiency(businessId, { months = 6 } = {}) {
     this._validateId(businessId);
     const cacheKey = { type: 'purchasing-efficiency', months };
-    const cached = reportCache.get('procurement', businessId, cacheKey);
+    const cached = await reportCache.get('procurement', businessId, cacheKey);
     if (cached) return cached;
 
     const since = this._monthsAgo(months);

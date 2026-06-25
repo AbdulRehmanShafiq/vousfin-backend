@@ -39,7 +39,7 @@ class ReportService {
       start: new Date(startDate).toISOString(),
       end:   new Date(endDate).toISOString(),
     };
-    const cached = reportCache.get('income-statement', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('income-statement', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     const { revenue, expenses } = await transactionRepository.getIncomeStatementData(businessId, startDate, endDate);
@@ -114,7 +114,7 @@ class ReportService {
       asOf:    new Date(asOfDate).toISOString(),
       compare: compareDate ? new Date(compareDate).toISOString() : null,
     };
-    const cached = reportCache.get('balance-sheet', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('balance-sheet', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     const [accounts, balanceMap, compareMap] = await Promise.all([
@@ -298,7 +298,7 @@ class ReportService {
       start: new Date(startDate).toISOString(),
       end:   new Date(endDate).toISOString(),
     };
-    const cached = reportCache.get('equity-statement', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('equity-statement', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -466,7 +466,7 @@ class ReportService {
       throw new ApiError(400, 'Missing required parameters: businessId, startDate, endDate');
 
     const cacheParams = { start: new Date(startDate).toISOString(), end: new Date(endDate).toISOString() };
-    const cached = reportCache.get('revenue-notes', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('revenue-notes', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -511,7 +511,7 @@ class ReportService {
       start: new Date(startDate).toISOString(),
       end:   new Date(endDate).toISOString(),
     };
-    const cached = reportCache.get('cash-flow', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('cash-flow', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     const accounts = await accountRepository.findByBusiness(businessId);
@@ -623,7 +623,7 @@ class ReportService {
       asOf: new Date(asOfDate).toISOString(),
       from: fromDate ? new Date(fromDate).toISOString() : 'all-time',
     };
-    const cached = reportCache.get('trial-balance', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('trial-balance', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     // Get accounts and opening balance
@@ -733,7 +733,7 @@ class ReportService {
       end:    new Date(endDate).toISOString(),
       accId:  accountId || 'all',
     };
-    const cached = reportCache.get('general-ledger', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('general-ledger', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     // Get opening balances (day before startDate)
@@ -1093,7 +1093,7 @@ class ReportService {
       start: new Date(startDate).toISOString(),
       end:   new Date(endDate).toISOString(),
     };
-    const cached = reportCache.get('kpi-summary', businessId.toString(), cacheParams);
+    const cached = await reportCache.get('kpi-summary', businessId.toString(), cacheParams);
     if (cached) return cached;
 
     const [incomeStatement, balances, accounts] = await Promise.all([

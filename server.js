@@ -13,6 +13,7 @@ const { schedulePaymentReminders } = require('./jobs/paymentReminder.job');
 const { scheduleTaxSnapshots } = require('./jobs/taxSnapshot.job');
 const { scheduleAutoPrepare } = require('./jobs/taxReturnAutoPrepare.job');
 const { scheduleReportDelivery } = require('./jobs/scheduledReport.job');
+const { scheduleIntegrityScan } = require('./jobs/ledgerIntegrity.job');
 const { initialize: initForecastingData } = require('./services/forecasting/dataLoader');
 const { ensureLSTMRunning, stopLSTM } = require('./utils/lstmService');
 
@@ -43,6 +44,12 @@ const startServer = async () => {
     if (scheduleAnomalyScan) {
       scheduleAnomalyScan();
       logger.info('⏰ Anomaly scan job scheduled');
+    }
+
+    try {
+      scheduleIntegrityScan();
+    } catch (err) {
+      logger.warn(`⚠️ Ledger integrity job failed to schedule (non-fatal): ${err.message}`);
     }
 
     // Step 3a: Schedule daily FX rate sync (live rates from open.er-api.com)

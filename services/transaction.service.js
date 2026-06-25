@@ -1542,24 +1542,32 @@ class TransactionService {
 
     const validBusinessId = new mongoose.Types.ObjectId(String(businessId));
 
-    // 1. Find AR and AP accounts for this business
-    const arAccount = await ChartOfAccount.findOne({
+    // 1. Find ALL AR and AP accounts for this business (covers non-standard names like
+    //    "Trade Receivables", "Accounts Receivable - Trade", etc.).
+    const arAccounts = await ChartOfAccount.find({
       businessId: validBusinessId,
-      accountName: { $regex: /accounts receivable/i },
-    }).lean();
+      accountName: { $regex: /receivable/i },
+    }).select('_id').lean();
 
-    const apAccount = await ChartOfAccount.findOne({
+    // Only match "Accounts Payable" (and variants like "Accounts Payable - Trade").
+    // Deliberately excluded: "Tax Payable", "GST Payable", "WHT Payable", "Wages Payable",
+    // "Loan Payable" — those are not vendor AP accounts and must not get AP lifecycle fields.
+    const apAccounts = await ChartOfAccount.find({
       businessId: validBusinessId,
       accountName: { $regex: /accounts payable/i },
-    }).lean();
+    }).select('_id').lean();
+
+    const arAccountIds = arAccounts.map(a => a._id);
+    const apAccountIds = apAccounts.map(a => a._id);
 
     let arFixed = 0, apFixed = 0;
 
-    // 2. Repair orphaned AR entries
-    if (arAccount) {
+    // 2. Repair orphaned AR entries — any posted entry that debits a receivable account
+    //    but has never had its AR lifecycle fields (paymentStatus, remainingBalance) set.
+    if (arAccountIds.length > 0) {
       const orphanedAR = await JournalEntry.find({
         businessId: validBusinessId,
-        debitAccountId: arAccount._id,
+        debitAccountId: { $in: arAccountIds },
         paymentStatus: null,
         status: { $in: [JOURNAL_STATUS.POSTED] },
         isArchived: { $ne: true },
@@ -1585,11 +1593,12 @@ class TransactionService {
       }
     }
 
-    // 3. Repair orphaned AP entries
-    if (apAccount) {
+    // 3. Repair orphaned AP entries — any posted entry that credits a payable account
+    //    but has never had its AP lifecycle fields set.
+    if (apAccountIds.length > 0) {
       const orphanedAP = await JournalEntry.find({
         businessId: validBusinessId,
-        creditAccountId: apAccount._id,
+        creditAccountId: { $in: apAccountIds },
         paymentStatus: null,
         status: { $in: [JOURNAL_STATUS.POSTED] },
         isArchived: { $ne: true },

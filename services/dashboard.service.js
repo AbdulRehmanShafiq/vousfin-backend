@@ -183,7 +183,7 @@ class DashboardService {
       start: new Date(startDate).toISOString(),
       end:   new Date(endDate).toISOString(),
     };
-    const _dashCached = reportCache.get('dashboard-all', businessId.toString(), _dashParams);
+    const _dashCached = await reportCache.get('dashboard-all', businessId.toString(), _dashParams);
     if (_dashCached) return _dashCached;
 
     const [kpis, revenueVsExpenses, cashFlowTrend] = await Promise.all([

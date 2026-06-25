@@ -1,5 +1,5 @@
 /**
- * reportCache.js — In-memory TTL cache for financial reports.
+ * reportCache.js — Distributed/In-memory TTL cache for financial reports.
  *
  * WHY:
  *   Financial reports (Balance Sheet, Income Statement, Trial Balance, Dashboard)
@@ -19,38 +19,42 @@
  *   - LRU-style eviction to prevent unbounded memory growth
  */
 
+const Redis = require('ioredis');
+const logger = require('../config/logger');
+
 const MAX_ENTRIES   = 500;   // safety ceiling across all businesses
-// ⚠ MULTI-INSTANCE WARNING: This is a per-process in-memory cache.
-// On multi-instance deployments (Render with 2+ workers), cache invalidation from
-// one worker does NOT propagate to other workers. Worst case: a transaction written
-// on worker A is invisible on worker B for up to TTL seconds.
-// MITIGATION: Keep TTL short (30s) to limit the staleness window.
-// PROPER FIX: Replace with Redis (ioredis) or Vercel KV for distributed invalidation.
-const DEFAULT_TTL   = 30 * 1000; // 30 seconds — short enough to limit multi-instance drift
+const DEFAULT_TTL   = 30 * 1000; // 30 seconds
 
 class ReportCache {
   constructor() {
-    /** @type {Map<string, {value: any, expiresAt: number}>} */
     this._store = new Map();
+    this.redis = null;
+    if (process.env.REDIS_URL) {
+      try {
+        this.redis = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
+        this.redis.on('error', (err) => logger.warn(`[Redis Cache] Connection error: ${err.message}`));
+      } catch (err) {
+        logger.warn(`[Redis Cache] Failed to initialize Redis, falling back to memory: ${err.message}`);
+      }
+    }
   }
-
-  // ─── Key builders ──────────────────────────────────────────────────────────
 
   _key(type, businessId, params = {}) {
     return `${type}::${businessId}::${JSON.stringify(params)}`;
   }
 
-  // ─── Public API ────────────────────────────────────────────────────────────
+  async get(type, businessId, params = {}) {
+    const key = this._key(type, businessId, params);
+    
+    if (this.redis) {
+      try {
+        const val = await this.redis.get(key);
+        return val ? JSON.parse(val) : null;
+      } catch (err) {
+        logger.warn(`[Redis Cache] get error: ${err.message}`);
+      }
+    }
 
-  /**
-   * Read a cached value.
-   * @param {string} type       — e.g. 'income-statement'
-   * @param {string} businessId
-   * @param {Object} params     — date range etc.
-   * @returns {any|null}        — null on miss or expired
-   */
-  get(type, businessId, params = {}) {
-    const key   = this._key(type, businessId, params);
     const entry = this._store.get(key);
     if (!entry) return null;
     if (Date.now() > entry.expiresAt) {
@@ -60,31 +64,40 @@ class ReportCache {
     return entry.value;
   }
 
-  /**
-   * Write a value to the cache.
-   * @param {string} type
-   * @param {string} businessId
-   * @param {Object} params
-   * @param {any}    value
-   * @param {number} [ttlMs]   — override default TTL
-   */
-  set(type, businessId, params = {}, value, ttlMs = DEFAULT_TTL) {
-    // Evict oldest entries if ceiling reached
+  async set(type, businessId, params = {}, value, ttlMs = DEFAULT_TTL) {
+    const key = this._key(type, businessId, params);
+    
+    if (this.redis) {
+      try {
+        await this.redis.setex(key, Math.ceil(ttlMs / 1000), JSON.stringify(value));
+        return;
+      } catch (err) {
+        logger.warn(`[Redis Cache] set error: ${err.message}`);
+      }
+    }
+
     if (this._store.size >= MAX_ENTRIES) {
       const first = this._store.keys().next().value;
       this._store.delete(first);
     }
-    const key = this._key(type, businessId, params);
     this._store.set(key, { value, expiresAt: Date.now() + ttlMs });
   }
 
-  /**
-   * Invalidate ALL cached entries for a business.
-   * Call this on every transaction write so reports are never stale.
-   * @param {string} businessId
-   */
-  invalidate(businessId) {
+  async invalidate(businessId) {
     const suffix = `::${businessId}::`;
+    
+    if (this.redis) {
+      try {
+        // Use scan in production, keys is fine for POC
+        const keys = await this.redis.keys(`*${suffix}*`);
+        if (keys.length > 0) {
+          await this.redis.del(keys);
+        }
+      } catch (err) {
+        logger.warn(`[Redis Cache] invalidate error: ${err.message}`);
+      }
+    }
+
     for (const key of this._store.keys()) {
       if (key.includes(suffix)) {
         this._store.delete(key);
@@ -92,12 +105,15 @@ class ReportCache {
     }
   }
 
-  /** Clear the entire cache (e.g., on server restart or admin command). */
-  clear() {
+  async clear() {
+    if (this.redis) {
+      try {
+        await this.redis.flushdb();
+      } catch (err) {}
+    }
     this._store.clear();
   }
 
-  /** Diagnostic: how many entries are currently cached. */
   get size() {
     return this._store.size;
   }

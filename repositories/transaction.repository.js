@@ -382,9 +382,21 @@ class TransactionRepository extends BaseRepository {
    */
   async getOutstandingReceivables(businessId) {
     const validBusinessId = sanitizeAndValidateId(businessId);
+    // Primary clause: correctly classified Credit Sale (set by GAAP detection in createTransaction).
+    // Legacy clause: entries where step-3 auto-inference stored 'Income' as the type
+    // but the GAAP detection later set paymentStatus, meaning the AR detection fired
+    // but the type override was not persisted (a pre-2026-06 code edge case).
+    // Using 'Income' (not a generic NOT-IN) keeps this mutually exclusive from the
+    // AP query (which uses 'Expense') — so there is no double-counting across queries.
     return this.model.find({
       businessId: validBusinessId,
-      transactionType: TRANSACTION_TYPES.CREDIT_SALE,
+      $or: [
+        { transactionType: TRANSACTION_TYPES.CREDIT_SALE },
+        {
+          transactionType: 'Income',
+          paymentStatus: { $in: [PAYMENT_STATUS.UNPAID, PAYMENT_STATUS.PARTIALLY_PAID, PAYMENT_STATUS.OVERDUE] },
+        },
+      ],
       paymentStatus: { $in: [PAYMENT_STATUS.UNPAID, PAYMENT_STATUS.PARTIALLY_PAID, PAYMENT_STATUS.OVERDUE] },
       remainingBalance: { $gt: 0 },
       isArchived: { $ne: true },
@@ -408,9 +420,20 @@ class TransactionRepository extends BaseRepository {
    */
   async getOutstandingPayables(businessId) {
     const validBusinessId = sanitizeAndValidateId(businessId);
+    // Primary clause: correctly classified Credit Purchase (set by GAAP detection).
+    // Legacy clause: entries where step-3 auto-inference stored 'Expense' as the type
+    // but the GAAP detection later set paymentStatus on the AP side — a pre-2026-06
+    // edge case. Using 'Expense' keeps this mutually exclusive from the AR query
+    // (which uses 'Income') — so there is no double-counting across queries.
     return this.model.find({
       businessId: validBusinessId,
-      transactionType: TRANSACTION_TYPES.CREDIT_PURCHASE,
+      $or: [
+        { transactionType: TRANSACTION_TYPES.CREDIT_PURCHASE },
+        {
+          transactionType: 'Expense',
+          paymentStatus: { $in: [PAYMENT_STATUS.UNPAID, PAYMENT_STATUS.PARTIALLY_PAID, PAYMENT_STATUS.OVERDUE] },
+        },
+      ],
       paymentStatus: { $in: [PAYMENT_STATUS.UNPAID, PAYMENT_STATUS.PARTIALLY_PAID, PAYMENT_STATUS.OVERDUE] },
       remainingBalance: { $gt: 0 },
       isArchived: { $ne: true },

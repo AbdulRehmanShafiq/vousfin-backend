@@ -318,17 +318,11 @@ class JournalGeneratorService {
 
     if (!prior) return;
 
-    // Create reversal (swap debit/credit)
-    const rev = await JournalEntry.create({
+    const payload = {
       businessId,
       transactionDate:   asOf,
       description:       `Reversal of unrealised FX revaluation (source: ${sourceTxId})`,
       transactionType:   TRANSACTION_TYPES.FX_REVALUATION,
-      amount:            prior.amount,
-      baseCurrencyAmount: prior.amount,
-      exchangeRate:      1,
-      debitAccountId:    prior.creditAccountId,
-      creditAccountId:   prior.debitAccountId,
       inputMethod:       INPUT_METHODS.FORM,
       status:            JOURNAL_STATUS.POSTED,
       transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
@@ -337,10 +331,14 @@ class JournalGeneratorService {
       createdBy:        userId,
       lastModifiedBy:   userId,
       metadata: { unrealisedFxReversal: true, fxSourceTransactionId: sourceTxId.toString() },
-    });
+      lines: [
+        { accountId: prior.creditAccountId, type: 'debit', amount: prior.amount },
+        { accountId: prior.debitAccountId, type: 'credit', amount: prior.amount }
+      ]
+    };
 
-    await applyRunningBalance(rev.debitAccountId,  prior.amount, 'debit');
-    await applyRunningBalance(rev.creditAccountId, prior.amount, 'credit');
+    // Create reversal via atomic poster
+    const rev = await postCompoundJournal(payload);
 
     // Mark original as reversed
     await JournalEntry.findByIdAndUpdate(prior._id, { status: JOURNAL_STATUS.REVERSED });

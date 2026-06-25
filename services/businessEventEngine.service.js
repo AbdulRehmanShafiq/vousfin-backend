@@ -56,6 +56,7 @@
 
 const crypto = require('crypto');
 const logger = require('../config/logger');
+const Redis = require('ioredis');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Event taxonomy  (systemDependencyMap.md §6)
@@ -145,6 +146,36 @@ class BusinessEventEngine {
 
     /** Counters for observability. */
     this._stats = { emitted: 0, handled: 0, errors: 0 };
+
+    this.pub = null;
+    this.sub = null;
+
+    if (process.env.REDIS_URL) {
+      try {
+        this.pub = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
+        this.sub = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
+        
+        this.sub.subscribe('business_events', (err) => {
+          if (err) logger.error(`[EventEngine] Redis subscribe error: ${err.message}`);
+          else logger.info('[EventEngine] Subscribed to Redis distributed event channel');
+        });
+
+        this.sub.on('message', (channel, message) => {
+          if (channel === 'business_events') {
+            try {
+              const envelope = JSON.parse(message);
+              // Ensure we don't process it locally if it was already processed, wait actually
+              // emit() will just publish and NOT run locally, so we only run here.
+              this._executeHandlersLocally(envelope);
+            } catch (err) {
+              logger.error(`[EventEngine] Redis message parse error: ${err.message}`);
+            }
+          }
+        });
+      } catch (err) {
+        logger.warn(`[EventEngine] Failed to init Redis PubSub, falling back to local events: ${err.message}`);
+      }
+    }
   }
 
   // ─── Subscription ──────────────────────────────────────────────────────────
@@ -196,48 +227,50 @@ class BusinessEventEngine {
     else this._handlers.delete(eventName);
   }
 
-  // ─── Publishing ──────────────────────────────────────────────────────────
-
-  /**
-   * Build a normalized, immutable-ish event envelope.
+  // ─── Publishing ────────────────────────────────────────────────�  /**
+   * Run all handlers for an envelope locally.
    * @private
    */
-  _envelope(eventName, payload = {}) {
-    if (!payload || typeof payload !== 'object') {
-      throw new TypeError('businessEvents: event payload must be an object');
+  _executeHandlersLocally(envelope) {
+    const handlers = this._resolveHandlers(envelope.eventName);
+    if (handlers.length === 0) {
+      this._record(envelope);
+      return;
     }
-    const businessId = payload.businessId != null ? String(payload.businessId) : null;
-    if (!businessId) {
-      // Business isolation is non-negotiable — an event with no tenant is a bug.
-      throw new Error(`businessEvents.${eventName}: payload.businessId is required`);
-    }
-    return {
-      eventId:    crypto.randomUUID(),
-      eventName,
-      occurredAt: new Date(),
-      ...payload,
-      businessId, // normalized to string, always last so it can't be overwritten
-    };
+
+    // Detached: run sequentially, swallow all errors. Never returns to caller.
+    Promise.resolve().then(async () => {
+      const errors = [];
+      for (const entry of handlers) {
+        const res = await this._runHandler(entry, envelope);
+        if (!res.ok) errors.push(res);
+      }
+      this._record(envelope, { errors });
+    }).catch((err) => {
+      logger.error(`[eventEngine] dispatch loop crashed for ${envelope.eventName}: ${err.message}`);
+    });
   }
 
   /**
-   * Collect the ordered handler list for an event (specific handlers first,
-   * then wildcard observers).
-   * @private
+   * Publish an event — FIRE-AND-FORGET.
+   *
+   * @param {string} eventName  EVENTS.*
+   * @param {Object} payload    must include businessId
+   * @returns {string} eventId  (for correlation in logs)
    */
-  _resolveHandlers(eventName) {
-    const specific = this._handlers.get(eventName) || [];
-    const wildcard = this._handlers.get(WILDCARD) || [];
-    return [...specific, ...wildcard];
-  }
+  emit(eventName, payload = {}) {
+    const envelope = this._envelope(eventName, payload);
+    this._stats.emitted++;
 
-  /** Record an event in the bounded ring buffer. @private */
-  _record(envelope, { errors } = { errors: [] }) {
-    this._history.push({
-      eventId:    envelope.eventId,
-      eventName:  envelope.eventName,
-      businessId: envelope.businessId,
-      occurredAt: envelope.occurredAt,
+    if (this.pub) {
+      this.pub.publish('business_events', JSON.stringify(envelope)).catch(err => {
+        logger.error(`[EventEngine] Redis publish error: ${err.message}`);
+      });
+    } else {
+      this._executeHandlersLocally(envelope);
+    }
+    return envelope.eventId;
+  }At: envelope.occurredAt,
       entityType: envelope.entityType || null,
       entityId:   envelope.entityId != null ? String(envelope.entityId) : null,
       handlerErrors: errors.length,

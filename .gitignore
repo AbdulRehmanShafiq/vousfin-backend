@@ -6,3 +6,4 @@ node_modules/
 
 # Ledger balance snapshots (Phase 5 rollback safety — contain business data)
 scripts/balance-snapshot-*.json
+outputs/
