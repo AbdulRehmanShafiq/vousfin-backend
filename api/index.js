@@ -35,14 +35,15 @@ function ensureDB() {
   return dbPromise;
 }
 
-module.exports = async (req, res) => {
+// Attach DB connection middleware BEFORE routing
+app.use(async (req, res, next) => {
   try {
     await ensureDB();
+    next();
   } catch (err) {
-    res.statusCode = 503;
-    res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ success: false, message: 'Database connection failed' }));
-    return;
+    res.status(503).json({ success: false, message: 'Database connection failed' });
   }
-  return app(req, res);
-};
+});
+
+// Vercel requires exporting the Express app instance directly
+module.exports = app;
