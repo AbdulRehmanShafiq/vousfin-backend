@@ -14,6 +14,9 @@ const { scheduleTaxSnapshots } = require('./jobs/taxSnapshot.job');
 const { scheduleAutoPrepare } = require('./jobs/taxReturnAutoPrepare.job');
 const { scheduleReportDelivery } = require('./jobs/scheduledReport.job');
 const { scheduleIntegrityScan } = require('./jobs/ledgerIntegrity.job');
+const { scheduleBankReconciliation } = require('./jobs/bankReconciliation.job');
+const { scheduleDunningEscalation } = require('./jobs/dunningEscalation.job');
+const { startWorker: startBookkeeperWorker, stopWorker: stopBookkeeperWorker } = require('./workers/bookkeeper.worker');
 const { initialize: initForecastingData } = require('./services/forecasting/dataLoader');
 const { ensureLSTMRunning, stopLSTM } = require('./utils/lstmService');
 
@@ -147,15 +150,8 @@ const startServer = async () => {
         }
       });
 
-      // Daily at 08:00 — advance the dunning / collections ladder
-      cron.schedule('0 8 * * *', async () => {
-        try {
-          const r = await dunningService.runEscalation();
-          logger.info(`[cron] Dunning escalation: ${r.escalated}/${r.scanned} invoices escalated`);
-        } catch (err) {
-          logger.error(`[cron] dunning runEscalation error: ${err.message}`);
-        }
-      });
+      // Daily dunning escalation — now uses distributed-lock job (Phase 3)
+      // (replaced inline cron — see jobs/dunningEscalation.job.js)
 
       // Phase 4 — Accrual: post due deferred-revenue / prepaid-expense recognitions
       const recognitionService = require('./services/recognitionSchedule.service');
@@ -223,6 +219,25 @@ const startServer = async () => {
       logger.warn(`⚠️ LSTM auto-start error (non-fatal): ${err.message}`);
     });
 
+    // Phase 3 — Automated Accounting Modules
+    try {
+      scheduleBankReconciliation();
+    } catch (err) {
+      logger.warn(`⚠️ Bank reconciliation job failed to schedule (non-fatal): ${err.message}`);
+    }
+
+    try {
+      scheduleDunningEscalation();
+    } catch (err) {
+      logger.warn(`⚠️ Dunning escalation job failed to schedule (non-fatal): ${err.message}`);
+    }
+
+    try {
+      startBookkeeperWorker();
+    } catch (err) {
+      logger.warn(`⚠️ Bookkeeper worker failed to start (non-fatal): ${err.message}`);
+    }
+
     // Step 4: Start Express server
     const server = app.listen(config.PORT, () => {
       logger.info(`🚀 Server listening on port ${config.PORT}`);
@@ -234,6 +249,7 @@ const startServer = async () => {
     const shutdown = async (signal) => {
       logger.warn(`⚠️ ${signal} received. Shutting down gracefully...`);
       stopLSTM();   // terminate Python LSTM microservice if we spawned it
+      stopBookkeeperWorker(); // terminate BullMQ bookkeeper worker
       server.close(async () => {
         logger.info('HTTP server closed');
         await mongoose.connection.close();
