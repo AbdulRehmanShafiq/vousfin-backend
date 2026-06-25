@@ -1,0 +1,29 @@
+
+
+echo "Running security check on staged files..."
+
+# Ensure we don't commit .env or files with common secret keys
+if git diff --cached --name-only | grep -E "^\.env$"; then
+    echo "[ERROR] You are trying to commit a .env file! This is blocked."
+    exit 1
+fi
+
+# Basic secret regex search on staged files
+# Checks for typical patterns like AWS keys, Stripe keys, generic API_KEY=, JWT_SECRET=, mongodb URIs
+# Exclude the pre-commit hook itself and .env.example
+STAGED_FILES=$(git diff --cached --name-only | grep -v -E "^\.env.example$|^\.husky/pre-commit$")
+
+if [ -n "$STAGED_FILES" ]; then
+    SECRET_PATTERN="(API_KEY=|JWT_SECRET=|mongodb\+srv://|gsk_|AIzaSy)"
+    
+    # Check if any staged file contains secrets
+    for FILE in $STAGED_FILES; do
+        if git diff --cached "$FILE" | grep -E "$SECRET_PATTERN" > /dev/null; then
+            echo "[ERROR] Detected potential hardcoded secrets in $FILE"
+            echo "Please use environment variables instead of hardcoded secrets."
+            exit 1
+        fi
+    done
+fi
+
+echo "Security check passed."

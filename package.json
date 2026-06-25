@@ -14,7 +14,8 @@
     "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest tests/unit --forceExit --detectOpenHandles",
     "test:integration": "jest tests/integration --forceExit --detectOpenHandles",
-    "test:coverage": "jest --coverage --forceExit --detectOpenHandles"
+    "test:coverage": "jest --coverage --forceExit --detectOpenHandles",
+    "prepare": "husky"
   },
   "jest": {
     "testEnvironment": "node",
@@ -62,6 +63,7 @@
   },
   "devDependencies": {
     "@jest/globals": "^30.4.1",
+    "husky": "^9.1.7",
     "jest": "^30.4.2",
     "nodemon": "^3.1.14",
     "supertest": "^7.2.2"
