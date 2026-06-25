@@ -31,7 +31,13 @@ class ReportCache {
     this.redis = null;
     if (process.env.REDIS_URL) {
       try {
-        this.redis = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
+        this.redis = new Redis(process.env.REDIS_URL, { 
+          maxRetriesPerRequest: 1, 
+          enableReadyCheck: false,
+          connectTimeout: 2000,
+          commandTimeout: 2000,
+          retryStrategy: (times) => Math.min(times * 50, 2000)
+        });
         this.redis.on('error', (err) => logger.warn(`[Redis Cache] Connection error: ${err.message}`));
       } catch (err) {
         logger.warn(`[Redis Cache] Failed to initialize Redis, falling back to memory: ${err.message}`);

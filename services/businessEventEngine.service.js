@@ -152,8 +152,15 @@ class BusinessEventEngine {
 
     if (process.env.REDIS_URL) {
       try {
-        this.pub = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
-        this.sub = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: null, enableReadyCheck: false });
+        const redisConfig = {
+          maxRetriesPerRequest: 1,
+          enableReadyCheck: false,
+          connectTimeout: 2000,
+          commandTimeout: 2000,
+          retryStrategy: (times) => Math.min(times * 50, 2000)
+        };
+        this.pub = new Redis(process.env.REDIS_URL, redisConfig);
+        this.sub = new Redis(process.env.REDIS_URL, redisConfig);
         
         this.sub.subscribe('business_events', (err) => {
           if (err) logger.error(`[EventEngine] Redis subscribe error: ${err.message}`);
