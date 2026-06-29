@@ -17,9 +17,6 @@ const AIInteractionLog = require('../models/AIInteractionLog.model');
 const { extractJSON } = require('./nlParser/services/geminiService');
 const logger = require('../config/logger');
 
-const GROQ_MODEL   = process.env.GROQ_MODEL   || 'llama-3.3-70b-versatile';
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const TIMEOUT_MS   = 30000;
 const RAG_REFUSAL = "I don't have enough financial data indexed to answer that question accurately. This may be because the data is still being indexed. Please try again after reindexing, or ask about a different time period.";
 
 // ── System prompt ─────────────────────────────────────────────────────────────
@@ -286,58 +283,15 @@ function formatContext(ctx) {
 // ── Groq API call helper ──────────────────────────────────────────────────────
 
 /**
- * Send a messages array to Groq and return the assistant's text response.
+ * Send a messages array to the model gateway and return the assistant's text.
+ * The gateway (modelRouter) owns provider selection, retries, timeouts and the
+ * Groq → Gemini fallback chain, so this stays a thin text-only wrapper.
  * @param {Array<{role:string,content:string}>} messages - OpenAI-format messages
  * @param {object} opts - Optional overrides: temperature, max_tokens
- * @param {number} retries
  */
-async function callGroq(messages, opts = {}, retries = 2) {
+async function callGroq(messages, opts = {}) {
   const result = await modelRouter.callChat(messages, opts);
   return result.text;
-
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error('GROQ_API_KEY environment variable is not set');
-
-  const body = {
-    model:       GROQ_MODEL,
-    messages,
-    temperature: opts.temperature  ?? 0.5,
-    max_tokens:  opts.max_tokens   ?? 800,
-    stream:      false,
-  };
-
-  let lastError;
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-    try {
-      const res = await fetch(GROQ_API_URL, {
-        method:  'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body:   JSON.stringify(body),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (!res.ok) {
-        const errBody = await res.text().catch(() => '');
-        throw new Error(`Groq API error (${res.status}): ${errBody.slice(0, 300)}`);
-      }
-
-      const data = await res.json();
-      const text = data?.choices?.[0]?.message?.content;
-      if (!text) throw new Error('Groq returned an empty response');
-      return text.trim();
-    } catch (err) {
-      clearTimeout(timer);
-      lastError = err;
-      if (attempt < retries) await new Promise((r) => setTimeout(r, 1500 * attempt));
-    }
-  }
-  throw lastError;
 }
 
 // ── Fallback response builder ───────────────────────────────────────────────

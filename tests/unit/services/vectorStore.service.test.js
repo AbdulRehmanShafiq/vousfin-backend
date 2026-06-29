@@ -36,6 +36,41 @@ describe('vectorStore tenant isolation', () => {
     expect(pipeline[0].$vectorSearch.filter.businessId.toString()).toBe(businessId.toString());
   });
 
+  test('Atlas path post-filter strips a leaked cross-tenant document', async () => {
+    // Defense-in-depth: even if the Atlas $vectorSearch pre-filter were ever
+    // mis-configured (or the index dropped the businessId filter) and the
+    // aggregate returned another tenant's document, the application-layer
+    // post-filter MUST strip it before any summary leaves the boundary.
+    const businessA = new mongoose.Types.ObjectId();
+    const businessB = new mongoose.Types.ObjectId();
+    VectorDocument.aggregate.mockResolvedValue([
+      {
+        _id: 'a',
+        businessId: businessA,
+        recordId: 'a',
+        dataType: 'monthly_pnl',
+        period: '2026-06',
+        summary: 'Own-tenant revenue summary',
+        vectorScore: 0.91,
+      },
+      {
+        _id: 'b',
+        businessId: businessB,
+        recordId: 'b',
+        dataType: 'monthly_pnl',
+        period: '2026-06',
+        summary: 'Leaked other-tenant summary',
+        vectorScore: 0.99,
+      },
+    ]);
+
+    const results = await vectorStore.searchSimilar([1, 0, 0], businessA, 10);
+
+    expect(results).toHaveLength(1);
+    expect(String(results[0].businessId)).toBe(String(businessA));
+    expect(results.map((r) => r.summary)).not.toContain('Leaked other-tenant summary');
+  });
+
   test('local fallback queries and returns only the requested business', async () => {
     const businessA = new mongoose.Types.ObjectId();
     const businessB = new mongoose.Types.ObjectId();
