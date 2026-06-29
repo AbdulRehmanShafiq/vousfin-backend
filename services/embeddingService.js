@@ -1,8 +1,8 @@
 const crypto = require('crypto');
 const logger = require('../config/logger');
 
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
-const DEFAULT_MODEL = process.env.GEMINI_EMBEDDING_MODEL || 'text-embedding-004';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1/models';
+const DEFAULT_MODEL = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001';
 const DIMENSIONS = parseInt(process.env.EMBEDDING_DIMENSIONS, 10) || 768;
 const MAX_RETRIES = parseInt(process.env.EMBEDDING_MAX_RETRIES, 10) || 4;
 const BATCH_SIZE = parseInt(process.env.EMBEDDING_BATCH_SIZE, 10) || 100;
