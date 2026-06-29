@@ -237,6 +237,39 @@ class BusinessEventEngine {
   // --- Publishing ---
 
   /**
+   * Build a normalized event envelope.
+   * Validates that businessId is present (tenant isolation is non-negotiable).
+   * @private
+   */
+  _envelope(eventName, payload = {}) {
+    if (!payload || typeof payload !== 'object') {
+      throw new TypeError('businessEvents: event payload must be an object');
+    }
+    const businessId = payload.businessId != null ? String(payload.businessId) : null;
+    if (!businessId) {
+      throw new Error(`businessEvents.${eventName}: payload.businessId is required`);
+    }
+    return {
+      eventId:    crypto.randomUUID(),
+      eventName,
+      occurredAt: new Date(),
+      ...payload,
+      businessId, // normalized to string, always last so it can't be overwritten
+    };
+  }
+
+  /**
+   * Collect the ordered handler list for an event (specific handlers first,
+   * then wildcard observers).
+   * @private
+   */
+  _resolveHandlers(eventName) {
+    const specific = this._handlers.get(eventName) || [];
+    const wildcard = this._handlers.get(WILDCARD) || [];
+    return [...specific, ...wildcard];
+  }
+
+  /**
    * Run all handlers for an envelope locally.
    * @private
    */
@@ -320,44 +353,6 @@ class BusinessEventEngine {
       if (entry.once) this._remove(envelope.eventName, entry);
       return { ok: false, error: err, name: entry.name };
     }
-  }
-
-  /**
-   * Publish an event — FIRE-AND-FORGET.
-   *
-   * Returns immediately; handlers run on a detached microtask chain so the
-   * caller (e.g. transaction.service after a ledger write) is never blocked and
-   * never sees a handler error.  This is the safe default for production code.
-   *
-   * @param {string} eventName  EVENTS.*
-   * @param {Object} payload    must include businessId
-   * @returns {string} eventId  (for correlation in logs)
-   */
-  emit(eventName, payload = {}) {
-    const envelope = this._envelope(eventName, payload);
-    this._stats.emitted++;
-
-    const handlers = this._resolveHandlers(eventName);
-    if (handlers.length === 0) {
-      this._record(envelope);
-      return envelope.eventId;
-    }
-
-    // Detached: run sequentially, swallow all errors. Never returns to caller.
-    Promise.resolve().then(async () => {
-      const errors = [];
-      for (const entry of handlers) {
-        const res = await this._runHandler(entry, envelope);
-        if (!res.ok) errors.push(res);
-      }
-      this._record(envelope, { errors });
-    }).catch((err) => {
-      // Defensive: the loop above already isolates per-handler errors; this only
-      // fires on an engine-level bug. Log and move on — never throw.
-      logger.error(`[eventEngine] dispatch loop crashed for ${eventName}: ${err.message}`);
-    });
-
-    return envelope.eventId;
   }
 
   /**

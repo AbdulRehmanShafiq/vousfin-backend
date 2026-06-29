@@ -28,7 +28,7 @@ const mongoose = require('mongoose');
 function makeJE(overrides = {}) {
   return {
     _id: new mongoose.Types.ObjectId(),
-    businessId: 'biz001',
+    businessId: '507f1f77bcf86cd799439011',
     transactionType: 'Credit Sale',
     paymentStatus: 'unpaid',
     remainingBalance: 1000,
@@ -70,7 +70,7 @@ describe('getOutstandingReceivables — query structure hardening', () => {
   });
 
   test('includes Credit Sale as primary type', async () => {
-    await repo.getOutstandingReceivables('biz001');
+    await repo.getOutstandingReceivables('507f1f77bcf86cd799439011');
     const orBranches = capturedFilter.$or;
     expect(orBranches).toBeDefined();
     const primary = orBranches.find(b => b.transactionType === 'Credit Sale');
@@ -78,7 +78,7 @@ describe('getOutstandingReceivables — query structure hardening', () => {
   });
 
   test('includes legacy Income type in the $or', async () => {
-    await repo.getOutstandingReceivables('biz001');
+    await repo.getOutstandingReceivables('507f1f77bcf86cd799439011');
     const orBranches = capturedFilter.$or;
     const legacy = orBranches.find(b => b.transactionType === 'Income');
     expect(legacy).toBeTruthy();
@@ -87,24 +87,24 @@ describe('getOutstandingReceivables — query structure hardening', () => {
   });
 
   test('always requires paymentStatus at top level', async () => {
-    await repo.getOutstandingReceivables('biz001');
+    await repo.getOutstandingReceivables('507f1f77bcf86cd799439011');
     expect(capturedFilter.paymentStatus).toEqual(
       expect.objectContaining({ $in: expect.arrayContaining(['unpaid', 'partially_paid', 'overdue']) })
     );
   });
 
   test('always requires remainingBalance > 0', async () => {
-    await repo.getOutstandingReceivables('biz001');
+    await repo.getOutstandingReceivables('507f1f77bcf86cd799439011');
     expect(capturedFilter.remainingBalance).toEqual({ $gt: 0 });
   });
 
   test('excludes archived entries', async () => {
-    await repo.getOutstandingReceivables('biz001');
+    await repo.getOutstandingReceivables('507f1f77bcf86cd799439011');
     expect(capturedFilter.isArchived).toEqual({ $ne: true });
   });
 
   test('does NOT include Credit Purchase in the $or (prevents AP leakage into AR)', async () => {
-    await repo.getOutstandingReceivables('biz001');
+    await repo.getOutstandingReceivables('507f1f77bcf86cd799439011');
     const orBranches = capturedFilter.$or || [];
     const apBranch = orBranches.find(b => b.transactionType === 'Credit Purchase');
     expect(apBranch).toBeUndefined();
@@ -136,7 +136,7 @@ describe('getOutstandingPayables — query structure hardening', () => {
   });
 
   test('includes Credit Purchase as primary type', async () => {
-    await repo.getOutstandingPayables('biz001');
+    await repo.getOutstandingPayables('507f1f77bcf86cd799439011');
     const orBranches = capturedFilter.$or;
     expect(orBranches).toBeDefined();
     const primary = orBranches.find(b => b.transactionType === 'Credit Purchase');
@@ -144,7 +144,7 @@ describe('getOutstandingPayables — query structure hardening', () => {
   });
 
   test('includes legacy Expense type in the $or', async () => {
-    await repo.getOutstandingPayables('biz001');
+    await repo.getOutstandingPayables('507f1f77bcf86cd799439011');
     const orBranches = capturedFilter.$or;
     const legacy = orBranches.find(b => b.transactionType === 'Expense');
     expect(legacy).toBeTruthy();
@@ -152,14 +152,14 @@ describe('getOutstandingPayables — query structure hardening', () => {
   });
 
   test('does NOT include Credit Sale in the $or (prevents AR leakage into AP)', async () => {
-    await repo.getOutstandingPayables('biz001');
+    await repo.getOutstandingPayables('507f1f77bcf86cd799439011');
     const orBranches = capturedFilter.$or || [];
     const arBranch = orBranches.find(b => b.transactionType === 'Credit Sale');
     expect(arBranch).toBeUndefined();
   });
 
   test('does NOT include Income type (avoids pulling AR entries into AP)', async () => {
-    await repo.getOutstandingPayables('biz001');
+    await repo.getOutstandingPayables('507f1f77bcf86cd799439011');
     const orBranches = capturedFilter.$or || [];
     const incomeBranch = orBranches.find(b => b.transactionType === 'Income');
     expect(incomeBranch).toBeUndefined();
@@ -187,51 +187,60 @@ describe('No double-counting: AR and AP legacy type sets are mutually exclusive'
 });
 
 // ── Returned data shape ────────────────────────────────────────────────────────
+// jest.mock() is hoisted before any variable declarations, so fixture data must
+// live inside a helper that is called at runtime (not captured at hoist-time).
+
+function buildARFixtures() {
+  return [
+    makeJE({ transactionType: 'Credit Sale' }),
+    makeJE({ transactionType: 'Income', paymentStatus: 'unpaid', remainingBalance: 500 }),
+    makeJE({ transactionType: 'Credit Sale', customerId: null }),
+    makeJE({ transactionType: 'Credit Sale', isArchived: true }),
+    makeJE({ transactionType: 'Credit Sale', remainingBalance: 0 }),
+    makeJE({ transactionType: 'Credit Purchase' }),
+  ];
+}
+
+jest.mock('../../../models/JournalEntry.model', () => ({
+  find: jest.fn(),
+}));
 
 describe('getOutstandingReceivables — returned data', () => {
-  const BIZ = 'biz001';
+  const BIZ = '507f1f77bcf86cd799439011';
   let repo;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  let JournalEntry;
 
   beforeEach(() => {
     jest.resetModules();
-    const correctlyCredited = makeJE({ transactionType: 'Credit Sale' });
-    const legacyIncome = makeJE({
-      transactionType: 'Income',
-      paymentStatus: 'unpaid',
-      remainingBalance: 500,
-    });
-    const withoutCustomer = makeJE({ transactionType: 'Credit Sale', customerId: null });
-    const archivedEntry = makeJE({ transactionType: 'Credit Sale', isArchived: true });
-    const zeroBal = makeJE({ transactionType: 'Credit Sale', remainingBalance: 0 });
-    const apEntry = makeJE({ transactionType: 'Credit Purchase' });
+    // Re-require after resetModules so the repo picks up fresh mocks
+    JournalEntry = require('../../../models/JournalEntry.model');
+    const fixtures = buildARFixtures();
 
-    // Simulate Mongoose: filter returns the subset that matches
-    jest.mock('../../../models/JournalEntry.model', () => ({
-      find: jest.fn((filter) => {
-        const all = [correctlyCredited, legacyIncome, withoutCustomer, archivedEntry, zeroBal, apEntry];
-        const matched = all.filter(je => {
-          if (je.isArchived === true) return false;
-          if (je.remainingBalance <= 0) return false;
-          const typeOk = filter.$or
-            ? filter.$or.some(branch => {
-              if (branch.transactionType === je.transactionType) return true;
-              if (branch.transactionType && typeof branch.transactionType === 'object') {
-                const nin = branch.transactionType.$nin || [];
-                return !nin.includes(je.transactionType);
-              }
-              return false;
-            })
-            : je.transactionType === filter.transactionType;
-          const psOk = ['unpaid', 'partially_paid', 'overdue'].includes(je.paymentStatus);
-          return typeOk && psOk;
-        });
-        return {
-          populate: jest.fn().mockReturnThis(),
-          sort: jest.fn().mockReturnThis(),
-          lean: jest.fn().mockResolvedValue(matched),
-        };
-      }),
-    }));
+    JournalEntry.find.mockImplementation((filter) => {
+      const matched = fixtures.filter(je => {
+        if (je.isArchived === true) return false;
+        if (je.remainingBalance <= 0) return false;
+        const typeOk = filter.$or
+          ? filter.$or.some(branch => {
+            if (branch.transactionType === je.transactionType) return true;
+            if (branch.transactionType && typeof branch.transactionType === 'object') {
+              const nin = branch.transactionType.$nin || [];
+              return !nin.includes(je.transactionType);
+            }
+            return false;
+          })
+          : je.transactionType === filter.transactionType;
+        const psOk = ['unpaid', 'partially_paid', 'overdue'].includes(je.paymentStatus);
+        return typeOk && psOk;
+      });
+      return {
+        populate: jest.fn().mockReturnThis(),
+        sort: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue(matched),
+      };
+    });
+
     repo = require('../../../repositories/transaction.repository');
   });
 
