@@ -1,6 +1,7 @@
 // controllers/ai.controller.js
 const aiAssistantService = require('../services/aiAssistant.service');
-const aiPlaceholderService = require('../services/aiPlaceholder.service');
+const ragQueryService = require('../services/ragQuery.service');
+const ragIndexer = require('../jobs/ragIndexer.job');
 const anomalyDetectionService = require('../services/anomalyDetection.service');
 const accountantSuggestionsService = require('../services/accountantSuggestions.service');
 const parserService = require('../services/nlParser/services/parserService');
@@ -9,6 +10,21 @@ const { getFinancialInsights } = require('../services/financialIntelligence.serv
 const { METRIC_API_TO_TARGET, formatForecastApiResponse } = require('../utils/forecastResponse.helper');
 const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
+
+function shouldExposeRetrievalStats() {
+  return process.env.NODE_ENV !== 'production' || process.env.AI_RETRIEVAL_STATS_ENABLED === 'true';
+}
+
+function publicAssistantResponse(response = {}) {
+  if (shouldExposeRetrievalStats()) return response;
+  const { retrievalStats, ...publicResponse } = response;
+  return publicResponse;
+}
+
+function sendSse(res, event, data) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
 
 /**
  * Parse natural language transaction description.
@@ -37,10 +53,75 @@ const ragQuery = async (req, res, next) => {
     if (!question || question.trim().length < 3) {
       throw new ApiError(400, 'Question must be at least 3 characters');
     }
-    const response = await aiAssistantService.chat(question, req.user.businessId, chatHistory);
-    ApiResponse.success(res, response, 'AI response generated');
+    const response = await aiAssistantService.chat(question, req.user.businessId, chatHistory, {
+      userId: req.user.id || req.user._id,
+    });
+    ApiResponse.success(res, publicAssistantResponse(response), 'AI response generated');
   } catch (error) {
     next(error);
+  }
+};
+
+/**
+ * Streaming AI assistant chat.
+ * POST /api/v1/ai/rag-query/stream
+ */
+const ragQueryStream = async (req, res, next) => {
+  try {
+    const { question, chatHistory = [] } = req.body;
+    if (!question || question.trim().length < 3) {
+      throw new ApiError(400, 'Question must be at least 3 characters');
+    }
+
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    let metaSent = false;
+    let emittedToken = false;
+    const emitMeta = (payload) => {
+      if (metaSent) return;
+      metaSent = true;
+      sendSse(res, 'meta', publicAssistantResponse(payload));
+    };
+
+    const response = await aiAssistantService.chatStream(
+      question,
+      req.user.businessId,
+      chatHistory,
+      {
+        userId: req.user.id || req.user._id,
+        onMeta: emitMeta,
+        onToken: (delta) => {
+          if (!metaSent) emitMeta({ mode: 'streaming', sources: [], confident: true });
+          emittedToken = true;
+          sendSse(res, 'token', { delta });
+        },
+      }
+    );
+
+    emitMeta({
+      sources: response.sources || [],
+      confident: response.confident !== false,
+      mode: response.mode || 'unknown',
+      retrievalStats: response.retrievalStats,
+      provider: response.provider,
+    });
+
+    if (!emittedToken && response.answer) {
+      sendSse(res, 'token', { delta: response.answer });
+    }
+
+    sendSse(res, 'done', publicAssistantResponse(response));
+    res.end();
+  } catch (error) {
+    if (res.headersSent) {
+      sendSse(res, 'error', { message: 'AI response failed. Please try again.' });
+      return res.end();
+    }
+    return next(error);
   }
 };
 
@@ -159,8 +240,32 @@ const semanticSearch = async (req, res, next) => {
     if (!query || query.trim().length < 2) {
       throw new ApiError(400, 'Search query must be at least 2 characters');
     }
-    const results = await aiPlaceholderService.semanticSearch(query, req.user.businessId);
+    const results = await ragQueryService.semanticSearch(req.user.businessId, query);
     ApiResponse.success(res, results, 'Search completed');
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+/**
+ * Admin-triggered RAG reindex.
+ * POST /api/v1/ai/admin/reindex body: { businessId?: string, all?: boolean }
+ */
+const reindexRag = async (req, res, next) => {
+  try {
+    const { businessId, all = false } = req.body || {};
+    const targetBusinessId = businessId || req.user.businessId;
+    const isAdmin = req.user.role === 'admin';
+
+    if ((all || String(targetBusinessId) !== String(req.user.businessId)) && !isAdmin) {
+      throw new ApiError(403, 'Admin access required for cross-business RAG reindex');
+    }
+
+    const result = all
+      ? await ragIndexer.runFullIndex()
+      : await ragIndexer.indexBusinessById(targetBusinessId);
+    ApiResponse.success(res, result, 'RAG reindex completed');
   } catch (error) {
     next(error);
   }
@@ -255,6 +360,7 @@ const needsAttention = async (req, res, next) => {
 module.exports = {
   parseNaturalLanguage,
   ragQuery,
+  ragQueryStream,
   cashflowRecommendations,
   forecast,
   anomalyScan,
@@ -262,6 +368,7 @@ module.exports = {
   reviewAnomalyAlert,
   getAnomalyStats,
   semanticSearch,
+  reindexRag,
   preSaveCheck,
   financialInsights,
   healthScore,

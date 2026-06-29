@@ -1,0 +1,72 @@
+const mongoose = require('mongoose');
+
+jest.mock('../../../models/VectorDocument.model', () => ({
+  aggregate: jest.fn(),
+  find: jest.fn(),
+  findOne: jest.fn(),
+  findOneAndUpdate: jest.fn(),
+  deleteMany: jest.fn(),
+  deleteOne: jest.fn(),
+  countDocuments: jest.fn(),
+}));
+
+const VectorDocument = require('../../../models/VectorDocument.model');
+const vectorStore = require('../../../services/vectorStore.service');
+
+function mockFindResults(results) {
+  const lean = jest.fn().mockResolvedValue(results);
+  const limit = jest.fn().mockReturnValue({ lean });
+  VectorDocument.find.mockReturnValue({ limit });
+  return { limit, lean };
+}
+
+describe('vectorStore tenant isolation', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env.VECTOR_SEARCH_DISABLE = '';
+  });
+
+  test('Atlas vector search includes mandatory businessId prefilter', async () => {
+    const businessId = new mongoose.Types.ObjectId();
+    VectorDocument.aggregate.mockResolvedValue([]);
+
+    await vectorStore.searchSimilar([1, 0, 0], businessId, 10);
+
+    const pipeline = VectorDocument.aggregate.mock.calls[0][0];
+    expect(pipeline[0].$vectorSearch.filter.businessId.toString()).toBe(businessId.toString());
+  });
+
+  test('local fallback queries and returns only the requested business', async () => {
+    const businessA = new mongoose.Types.ObjectId();
+    const businessB = new mongoose.Types.ObjectId();
+    VectorDocument.aggregate.mockRejectedValue(new Error('$vectorSearch is unavailable'));
+    mockFindResults([
+      {
+        _id: 'a',
+        businessId: businessA,
+        recordId: 'a',
+        dataType: 'monthly_pnl',
+        period: '2026-06',
+        summary: 'Revenue summary for the current period',
+        embedding: [1, 0, 0],
+      },
+      {
+        _id: 'b',
+        businessId: businessB,
+        recordId: 'b',
+        dataType: 'monthly_pnl',
+        period: '2026-06',
+        summary: 'Leaked tenant summary',
+        embedding: [1, 0, 0],
+      },
+    ]);
+
+    const results = await vectorStore.searchSimilar([1, 0, 0], businessA, 10, {
+      queryText: 'revenue',
+    });
+
+    expect(VectorDocument.find).toHaveBeenCalledWith({ businessId: businessA });
+    expect(results).toHaveLength(1);
+    expect(String(results[0].businessId)).toBe(String(businessA));
+  });
+});

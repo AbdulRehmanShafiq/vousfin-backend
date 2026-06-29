@@ -84,6 +84,26 @@ const CACHE_INVALIDATING_EVENTS = [
   EVENTS.FX_RATE_UPDATED,
 ];
 
+const RAG_REINDEX_EVENTS = [
+  EVENTS.TRANSACTION_CREATED,
+  EVENTS.TRANSACTION_REVERSED,
+  EVENTS.TRANSACTION_EDITED,
+  EVENTS.PAYMENT_RECORDED,
+  EVENTS.PAYMENT_APPLIED,
+  EVENTS.BILL_APPROVED,
+  EVENTS.BILL_PAID,
+  EVENTS.BILL_CANCELLED,
+  EVENTS.INVOICE_APPROVED,
+  EVENTS.INVOICE_PAID,
+  EVENTS.INVOICE_CANCELLED,
+  EVENTS.INVOICE_VOIDED,
+  EVENTS.BILL_VOIDED,
+  EVENTS.TAX_CALCULATED,
+  EVENTS.TAX_FILED,
+  EVENTS.PERIOD_CLOSED,
+  EVENTS.ANOMALY_DETECTED,
+];
+
 /**
  * Register all Step-7 subscribers on the singleton event engine.
  * Idempotent — repeated calls (app bootstrap + tests) are no-ops after the first.
@@ -105,6 +125,18 @@ function registerAll() {
   for (const eventName of CACHE_INVALIDATING_EVENTS) {
     businessEvents.on(eventName, invalidateAnalyticsCache, {
       name: `analytics-cache-sync:${eventName}`,
+    });
+  }
+
+  const scheduleRagRefresh = (evt) => {
+    if (!evt || !evt.businessId) return;
+    const ragIndexer = require('../jobs/ragIndexer.job');
+    ragIndexer.scheduleBusinessReindex(evt.businessId, evt.eventName || 'business-event');
+  };
+
+  for (const eventName of RAG_REINDEX_EVENTS) {
+    businessEvents.on(eventName, scheduleRagRefresh, {
+      name: `rag-index-sync:${eventName}`,
     });
   }
 
@@ -160,6 +192,7 @@ function registerAll() {
 
   logger.info(
     `[eventSubscribers] analytics cache-sync on ${CACHE_INVALIDATING_EVENTS.length} event types ` +
+    `+ RAG reindex debounce on ${RAG_REINDEX_EVENTS.length} event types ` +
     `+ AR/AP document reconciliation on payment.recorded + durable event-log writer ` +
     `+ budget-variance breach alerts on transaction.created/reversed`
   );
@@ -180,5 +213,6 @@ module.exports = {
   registerAll,
   isRegistered,
   CACHE_INVALIDATING_EVENTS,
+  RAG_REINDEX_EVENTS,
   _resetForTest,
 };

@@ -11,6 +11,7 @@
     "migrate:backfill-payment-records": "node migrations/backfill_payments_from_settlements.js",
     "migrate:mark-projections": "node migrations/mark_journal_projections.js",
     "migrate:backfill-accuracy": "node migrations/backfill_forecast_accuracy.js",
+    "rag:create-vector-index": "node scripts/create-vector-search-index.js",
     "test:integrity": "node scripts/run-integrity-gate.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest tests/unit --forceExit --detectOpenHandles",

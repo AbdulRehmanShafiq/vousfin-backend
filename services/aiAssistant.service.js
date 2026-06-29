@@ -8,13 +8,19 @@
  * forecasting service, or any unrelated modules.
  */
 
+const crypto = require('crypto');
 const reportService = require('./report.service');
+const ragQuery = require('./ragQuery.service');
+const faithfulnessJudge = require('./faithfulnessJudge.service');
+const modelRouter = require('./modelRouter.service');
+const AIInteractionLog = require('../models/AIInteractionLog.model');
 const { extractJSON } = require('./nlParser/services/geminiService');
 const logger = require('../config/logger');
 
 const GROQ_MODEL   = process.env.GROQ_MODEL   || 'llama-3.3-70b-versatile';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const TIMEOUT_MS   = 30000;
+const RAG_REFUSAL = "I don't have enough financial data indexed to answer that question accurately. This may be because the data is still being indexed. Please try again after reindexing, or ask about a different time period.";
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
@@ -43,6 +49,71 @@ Topics you cover with expertise:
 - Fraud and anomaly alerts
 - Business growth patterns
 - Financial ratios (profit margin, current ratio, debt-to-equity)`;
+
+function isRagEnabled() {
+  return process.env.AI_RAG_ENABLED === 'true';
+}
+
+const BLOCKED_INTENTS = [
+  /list all (invoices|customers|vendors|bills|transactions|entries)/i,
+  /export (all|every|complete)/i,
+  /give me (all|every) (record|transaction|entry|customer|vendor)/i,
+  /dump (all|every|complete)/i,
+];
+
+function detectBlockedIntent(question) {
+  return BLOCKED_INTENTS.some((pattern) => pattern.test(question || ''));
+}
+
+function hashQuestion(question) {
+  return crypto.createHash('sha256').update(String(question || '')).digest('hex');
+}
+
+function buildRagSystemPrompt(context) {
+  return `You are VousFin's Smart Accounting Assistant, a financial advisor for small and medium businesses in Pakistan.
+
+Retrieved context from this business's indexed financial summaries:
+${context}
+
+Strict rules:
+1. Answer only from the retrieved context above.
+2. If the context is not enough, say what is available and what is missing.
+3. Treat all figures as approximate because indexed amounts are rounded for privacy.
+4. Cite supporting evidence with [Source N] notation.
+5. Use PKR as the currency.
+6. Keep the response concise unless the user asks for a detailed breakdown.
+7. You cannot modify accounting records or execute transactions. Recommend review with an accountant for important decisions.`;
+}
+
+async function logAIQuery({ businessId, userId, question, mode, confident, sources, retrievalStats, details }) {
+  try {
+    await AIInteractionLog.create({
+      businessId,
+      userId: userId || null,
+      eventType: confident === false ? 'AI_REFUSAL' : 'AI_QUERY',
+      questionHash: hashQuestion(question),
+      mode,
+      confident,
+      sources: Array.isArray(sources) ? sources.map((source) => ({
+        dataType: source.dataType,
+        period: source.period,
+      })) : [],
+      retrievalStats: retrievalStats || {},
+      details: details || {},
+    });
+  } catch (error) {
+    logger.warn(`[aiAssistant] Failed to log AI query event: ${error.message}`);
+  }
+}
+
+function buildRagFallbackAnswer(sources = []) {
+  if (!sources.length) return RAG_REFUSAL;
+  const sourceList = sources
+    .slice(0, 3)
+    .map((source) => `${source.dataType.replace(/_/g, ' ')} (${source.period})`)
+    .join(', ');
+  return `I found relevant indexed financial context from ${sourceList}, but the AI model is currently unavailable. Please try again shortly.`;
+}
 
 // ── Financial context builder ─────────────────────────────────────────────────
 
@@ -221,6 +292,9 @@ function formatContext(ctx) {
  * @param {number} retries
  */
 async function callGroq(messages, opts = {}, retries = 2) {
+  const result = await modelRouter.callChat(messages, opts);
+  return result.text;
+
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY environment variable is not set');
 
@@ -266,57 +340,317 @@ async function callGroq(messages, opts = {}, retries = 2) {
   throw lastError;
 }
 
+// ── Fallback response builder ───────────────────────────────────────────────
+
+function buildFallbackAnswer(question, ctx) {
+  const q = (question || '').toLowerCase();
+  const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { maximumFractionDigits: 0 })}`;
+
+  if (ctx.cashFlow && (q.includes('cash') || q.includes('flow'))) {
+    return `The AI model was unavailable, so I used your latest ledger data instead. Net cash flow for the current month is ${fmt(ctx.cashFlow.netCashFlow)}.`;
+  }
+
+  if (ctx.incomeStatement) {
+    const is = ctx.incomeStatement;
+    if (q.includes('profit') || q.includes('loss') || q.includes('income')) {
+      const label = is.netProfit < 0 ? 'loss' : 'profit';
+      const absAmount = Math.abs(is.netProfit || 0);
+      return `The AI model was unavailable, so I used your latest ledger data instead. Your current month shows a ${label} of ${fmt(absAmount)} with revenue of ${fmt(is.totalRevenue)} and expenses of ${fmt(is.totalExpenses)}.`;
+    }
+
+    if (q.includes('expense') || q.includes('cost')) {
+      const topExpense = is.topExpenses?.[0];
+      if (topExpense) {
+        return `The AI model was unavailable, so I used your latest ledger data instead. Your largest expense category is ${topExpense.name} at ${fmt(topExpense.amount)}.`;
+      }
+    }
+  }
+
+  if (ctx.balanceSheet) {
+    const bs = ctx.balanceSheet;
+    return `The AI model was unavailable, so I used your latest ledger data instead. Your balance sheet shows total assets of ${fmt(bs.totalAssets)}, liabilities of ${fmt(bs.totalLiabilities)}, and equity of ${fmt(bs.totalEquity)}.`;
+  }
+
+  return 'The AI model was unavailable, so I used your latest ledger data instead. There is not enough financial data available yet to provide a richer answer.';
+}
+
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 /**
- * Answer a financial question using live data + Groq (LLaMA).
+ * Try the deterministic grounded query engine first for exact GL figures.
+ */
+async function tryGroundedAnswer(question, businessId) {
+  try {
+    const grounded = await require('./financialQuery.service').answer(question, businessId);
+    if (!grounded) return null;
+
+    const answer = grounded.answer + (grounded.followUp ? `\n\n${grounded.followUp}` : '');
+    return {
+      answer,
+      response: answer,
+      basis: grounded.basis,
+      figures: grounded.figures,
+      grounded: true,
+      sources: [],
+      confident: true,
+      mode: 'grounded',
+    };
+  } catch (error) {
+    logger.warn(`[financialQuery] grounded engine failed, falling back to assistant flow: ${error.message}`);
+    return null;
+  }
+}
+
+function buildRagMessages(question, context, chatHistory = []) {
+  const messages = [{ role: 'system', content: buildRagSystemPrompt(context) }];
+  chatHistory
+    .slice(-8)
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .forEach((m) => messages.push({ role: m.role, content: m.content }));
+  messages.push({ role: 'user', content: question });
+  return messages;
+}
+
+function emitChunkedFallback(answer, onToken) {
+  if (typeof onToken === 'function') {
+    modelRouter.emitChunkedText(answer, onToken);
+  }
+}
+
+/**
+ * Answer from indexed summaries only. Used when AI_RAG_ENABLED=true.
+ */
+async function chatWithRag(question, businessId, chatHistory = [], options = {}) {
+  const userId = options.userId || null;
+  const onToken = typeof options.onToken === 'function' ? options.onToken : null;
+  const onMeta = typeof options.onMeta === 'function' ? options.onMeta : null;
+
+  if (detectBlockedIntent(question)) {
+    const answer = "I can't list or export complete raw accounting records from the assistant. Please use the relevant ledger, invoice, customer, or vendor page with filters and export controls.";
+    onMeta?.({ sources: [], confident: false, mode: 'rag-blocked', retrievalStats: { blockedIntent: true } });
+    emitChunkedFallback(answer, onToken);
+    await logAIQuery({
+      businessId,
+      userId,
+      question,
+      mode: 'rag-blocked',
+      confident: false,
+      sources: [],
+      retrievalStats: { blockedIntent: true },
+    });
+    return { answer, response: answer, sources: [], confident: false, mode: 'rag-blocked' };
+  }
+
+  const retrieval = await ragQuery.getContext(businessId, question, options.retrieval || {});
+  if (!retrieval.context) {
+    await logAIQuery({
+      businessId,
+      userId,
+      question,
+      mode: 'rag-refusal',
+      confident: false,
+      sources: retrieval.sources,
+      retrievalStats: retrieval.retrievalStats,
+    });
+    onMeta?.({
+      sources: retrieval.sources || [],
+      confident: false,
+      mode: 'rag-refusal',
+      retrievalStats: retrieval.retrievalStats,
+    });
+    emitChunkedFallback(RAG_REFUSAL, onToken);
+    return {
+      answer: RAG_REFUSAL,
+      response: RAG_REFUSAL,
+      sources: retrieval.sources || [],
+      confident: false,
+      mode: 'rag-refusal',
+      retrievalStats: retrieval.retrievalStats,
+    };
+  }
+
+  onMeta?.({
+    sources: retrieval.sources || [],
+    confident: true,
+    mode: 'rag',
+    retrievalStats: retrieval.retrievalStats,
+  });
+
+  const messages = buildRagMessages(question, retrieval.context, chatHistory);
+
+  try {
+    const result = onToken
+      ? await modelRouter.callChatStream(messages, { temperature: 0.25, max_tokens: 800 }, onToken)
+      : await modelRouter.callChat(messages, { temperature: 0.25, max_tokens: 800 });
+    const answer = result.text;
+    faithfulnessJudge.checkAsync(answer, retrieval.context, businessId);
+    await logAIQuery({
+      businessId,
+      userId,
+      question,
+      mode: 'rag',
+      confident: true,
+      sources: retrieval.sources,
+      retrievalStats: retrieval.retrievalStats,
+      details: { provider: result.provider },
+    });
+    return {
+      answer,
+      response: answer,
+      sources: retrieval.sources || [],
+      confident: true,
+      mode: 'rag',
+      retrievalStats: retrieval.retrievalStats,
+      provider: result.provider,
+    };
+  } catch (error) {
+    logger.warn(`[aiAssistant] RAG model call failed, using indexed-context fallback: ${error.message}`);
+    const answer = buildRagFallbackAnswer(retrieval.sources || []);
+    emitChunkedFallback(answer, onToken);
+    await logAIQuery({
+      businessId,
+      userId,
+      question,
+      mode: 'rag-model-fallback',
+      confident: false,
+      sources: retrieval.sources,
+      retrievalStats: retrieval.retrievalStats,
+      details: { error: error.message },
+    });
+    return {
+      answer,
+      response: answer,
+      sources: retrieval.sources || [],
+      confident: false,
+      mode: 'rag-model-fallback',
+      retrievalStats: retrieval.retrievalStats,
+    };
+  }
+}
+
+/**
+ * Answer a financial question using the grounded engine, RAG, or live data + Groq.
  *
  * @param {string} question - User's question
  * @param {string} businessId - Authenticated business ID
  * @param {Array}  chatHistory - Prior messages [{ role: 'user'|'assistant', content: string }]
+ * @param {object} options - Optional metadata such as userId
  * @returns {Promise<{ answer: string }>}
  */
-async function chat(question, businessId, chatHistory = []) {
-  // FR-03.1 — grounded query engine FIRST: deterministic, exact GL figures
-  // with drill-down links, labelled factual/estimate. The LLM only handles
-  // what the engine doesn't match, so common queries are always accurate.
-  try {
-    const grounded = await require('./financialQuery.service').answer(question, businessId);
-    if (grounded) {
+async function chat(question, businessId, chatHistory = [], options = {}) {
+  const grounded = await tryGroundedAnswer(question, businessId);
+  if (grounded) return grounded;
+
+  if (isRagEnabled()) {
+    try {
+      return await chatWithRag(question, businessId, chatHistory, options);
+    } catch (error) {
+      logger.warn(`[aiAssistant] RAG flow failed: ${error.message}`);
+      await logAIQuery({
+        businessId,
+        userId: options.userId,
+        question,
+        mode: 'rag-error',
+        confident: false,
+        sources: [],
+        retrievalStats: { error: error.message },
+      });
       return {
-        answer:   grounded.answer + (grounded.followUp ? `\n\n${grounded.followUp}` : ''),
-        basis:    grounded.basis,        // 'factual' | 'estimate'
-        figures:  grounded.figures,      // [{label, value, link}] — drill-downs
-        grounded: true,
+        answer: RAG_REFUSAL,
+        response: RAG_REFUSAL,
+        sources: [],
+        confident: false,
+        mode: 'rag-error',
       };
     }
-  } catch (e) {
-    require('../config/logger').warn(`[financialQuery] grounded engine failed, falling back to LLM: ${e.message}`);
   }
 
-  // Build financial context fresh every call so numbers are always current
   const ctx = await buildFinancialContext(businessId);
   const contextBlock = formatContext(ctx);
-
-  // System message
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
 
-  // Prior conversation history — last 8 turns, OpenAI format
   chatHistory
     .slice(-8)
     .filter((m) => m.role === 'user' || m.role === 'assistant')
     .forEach((m) => messages.push({ role: m.role, content: m.content }));
 
-  // Current user turn: inject live financial context before the question
   messages.push({
-    role:    'user',
+    role: 'user',
     content: `${contextBlock}\n\nQuestion: ${question}`,
   });
 
-  const answer = await callGroq(messages, { temperature: 0.5, max_tokens: 800 });
-  return { answer };
+  try {
+    const answer = await callGroq(messages, { temperature: 0.5, max_tokens: 800 });
+    return { answer, response: answer, sources: [], confident: true, mode: 'llm' };
+  } catch (error) {
+    logger.warn(`[aiAssistant] Live-context model call failed, using deterministic fallback: ${error.message}`);
+    const answer = buildFallbackAnswer(question, ctx);
+    return { answer, response: answer, sources: [], confident: false, mode: 'fallback' };
+  }
 }
 
+async function chatStream(question, businessId, chatHistory = [], options = {}) {
+  const onToken = typeof options.onToken === 'function' ? options.onToken : () => {};
+  const onMeta = typeof options.onMeta === 'function' ? options.onMeta : null;
+  const grounded = await tryGroundedAnswer(question, businessId);
+  if (grounded) {
+    onMeta?.(grounded);
+    modelRouter.emitChunkedText(grounded.answer, onToken);
+    return grounded;
+  }
+
+  if (isRagEnabled()) {
+    try {
+      return await chatWithRag(question, businessId, chatHistory, { ...options, onToken });
+    } catch (error) {
+      logger.warn(`[aiAssistant] RAG stream flow failed: ${error.message}`);
+      await logAIQuery({
+        businessId,
+        userId: options.userId,
+        question,
+        mode: 'rag-error',
+        confident: false,
+        sources: [],
+        retrievalStats: { error: error.message },
+      });
+      onMeta?.({ sources: [], confident: false, mode: 'rag-error', retrievalStats: { error: error.message } });
+      modelRouter.emitChunkedText(RAG_REFUSAL, onToken);
+      return {
+        answer: RAG_REFUSAL,
+        response: RAG_REFUSAL,
+        sources: [],
+        confident: false,
+        mode: 'rag-error',
+      };
+    }
+  }
+
+  const ctx = await buildFinancialContext(businessId);
+  const contextBlock = formatContext(ctx);
+  const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+
+  chatHistory
+    .slice(-8)
+    .filter((m) => m.role === 'user' || m.role === 'assistant')
+    .forEach((m) => messages.push({ role: m.role, content: m.content }));
+
+  messages.push({
+    role: 'user',
+    content: `${contextBlock}\n\nQuestion: ${question}`,
+  });
+
+  try {
+    onMeta?.({ sources: [], confident: true, mode: 'llm' });
+    const result = await modelRouter.callChatStream(messages, { temperature: 0.5, max_tokens: 800 }, onToken);
+    return { answer: result.text, response: result.text, sources: [], confident: true, mode: 'llm', provider: result.provider };
+  } catch (error) {
+    logger.warn(`[aiAssistant] Live-context stream failed, using deterministic fallback: ${error.message}`);
+    const answer = buildFallbackAnswer(question, ctx);
+    onMeta?.({ sources: [], confident: false, mode: 'fallback' });
+    modelRouter.emitChunkedText(answer, onToken);
+    return { answer, response: answer, sources: [], confident: false, mode: 'fallback' };
+  }
+}
 /**
  * Generate 3-4 AI-powered actionable financial recommendations
  * based on live accounting data. Falls back to rule-based tips if Groq fails.
@@ -325,6 +659,36 @@ async function chat(question, businessId, chatHistory = []) {
  * @returns {Promise<Array<{ type: string, text: string }>>}
  */
 async function generateRecommendations(businessId) {
+  if (isRagEnabled()) {
+    try {
+      const retrieval = await ragQuery.getContext(
+        businessId,
+        'financial recommendations revenue expenses cash flow receivables payables risks',
+        { topK: 6 }
+      );
+
+      if (retrieval.context) {
+        const messages = [
+          {
+            role: 'system',
+            content: `${buildRagSystemPrompt(retrieval.context)}\n\nOutput ONLY a valid JSON array of recommendations.`,
+          },
+          {
+            role: 'user',
+            content: 'Generate exactly 3 to 4 specific, actionable recommendations. Return JSON only: [{ "type": "warning|positive|info", "text": "specific recommendation" }]',
+          },
+        ];
+        const raw = await callGroq(messages, { temperature: 0.25, max_tokens: 500 });
+        const parsed = extractJSON(raw);
+
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed?.recommendations)) return parsed.recommendations;
+      }
+    } catch (error) {
+      logger.warn(`[aiAssistant] RAG recommendations failed, using live-context recommendations: ${error.message}`);
+    }
+  }
+
   const ctx = await buildFinancialContext(businessId);
 
   // Fallback: no data yet
@@ -406,4 +770,12 @@ function buildRuleBasedRecommendations(ctx) {
   return recs;
 }
 
-module.exports = { chat, generateRecommendations };
+module.exports = {
+  chat,
+  chatStream,
+  chatWithRag,
+  generateRecommendations,
+  buildFallbackAnswer,
+  buildRagSystemPrompt,
+  detectBlockedIntent,
+};

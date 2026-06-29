@@ -8,6 +8,7 @@ const connectDB = require('./config/database');
 const config = require('./config');
 const logger = require('./config/logger');
 const { scheduleAnomalyScan } = require('./jobs/anomalyScan.job');
+const { scheduleRagIndexer } = require('./jobs/ragIndexer.job');
 const { scheduleFxRateSync }  = require('./jobs/fxRateSync.job');
 const { schedulePaymentReminders } = require('./jobs/paymentReminder.job');
 const { scheduleTaxSnapshots } = require('./jobs/taxSnapshot.job');
@@ -47,6 +48,12 @@ const startServer = async () => {
     if (scheduleAnomalyScan) {
       scheduleAnomalyScan();
       logger.info('⏰ Anomaly scan job scheduled');
+    }
+    try {
+      scheduleRagIndexer();
+      logger.info('RAG indexer job scheduled');
+    } catch (err) {
+      logger.warn(`RAG indexer failed to schedule (non-fatal): ${err.message}`);
     }
 
     try {

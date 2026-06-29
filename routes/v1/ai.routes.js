@@ -3,6 +3,7 @@ const router = express.Router();
 const aiController = require('../../controllers/ai.controller');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
+const adminMiddleware = require('../../middleware/admin.middleware');
 const validate = require('../../middleware/validate.middleware');
 const Joi = require('joi');
 
@@ -26,6 +27,11 @@ const semanticSearchSchema = Joi.object({
   query: Joi.string().min(2).max(200).required(),
 });
 
+const reindexSchema = Joi.object({
+  businessId: Joi.string().optional(),
+  all: Joi.boolean().optional(),
+});
+
 const reviewAlertSchema = Joi.object({
   action: Joi.string()
     .valid('legitimate', 'fraud', 'ignore', 'legit', 'mark_legit',
@@ -40,10 +46,12 @@ router.use(authMiddleware, requireBusiness);
 
 // NLP / assistant
 router.post('/parse-nl',                validate(parseNLSchema),        aiController.parseNaturalLanguage);
+router.post('/rag-query/stream',        validate(ragQuerySchema),        aiController.ragQueryStream);
 router.post('/rag-query',               validate(ragQuerySchema),        aiController.ragQuery);
 router.post('/cashflow-recommendations',                                 aiController.cashflowRecommendations);
 router.post('/forecast',                validate(forecastSchema),        aiController.forecast);
 router.post('/semantic-search',         validate(semanticSearchSchema),  aiController.semanticSearch);
+router.post('/admin/reindex',           adminMiddleware, validate(reindexSchema), aiController.reindexRag);
 
 // Pre-save accountant suggestions
 router.post('/pre-save-check',                                           aiController.preSaveCheck);
