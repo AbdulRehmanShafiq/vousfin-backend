@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-30T08:26:32.939Z",
+  "generatedAt": "2026-06-30T09:33:09.068Z",
   "entries": [
     {
       "id": "home",
@@ -9,6 +9,7 @@
         "Home"
       ],
       "href": "/dashboard",
+      "desc": "Your business at a glance",
       "synonyms": [
         "your",
         "business",
@@ -27,6 +28,7 @@
         "Sales"
       ],
       "href": "/sales",
+      "desc": "Money coming in",
       "synonyms": [
         "money",
         "coming",
@@ -46,6 +48,7 @@
         "Customers"
       ],
       "href": "/customers",
+      "desc": "Who buys from you and their balances",
       "synonyms": [
         "who",
         "buys",
@@ -70,6 +73,7 @@
         "Invoices"
       ],
       "href": "/sales/invoices",
+      "desc": "Bills you send to customers",
       "synonyms": [
         "bills",
         "you",
@@ -92,6 +96,7 @@
         "New Invoice"
       ],
       "href": "/sales/invoices/new",
+      "desc": "Create and send a new invoice",
       "synonyms": [
         "create",
         "and",
@@ -115,6 +120,7 @@
         "Receivables"
       ],
       "href": "/sales/receivables",
+      "desc": "Money customers still owe you",
       "synonyms": [
         "money",
         "customers",
@@ -141,6 +147,7 @@
         "AR Aging"
       ],
       "href": "/financial-reports/aging",
+      "desc": "How overdue each balance is",
       "synonyms": [
         "how",
         "overdue",
@@ -164,6 +171,7 @@
         "Purchases"
       ],
       "href": "/purchases",
+      "desc": "Money going out",
       "synonyms": [
         "money",
         "going",
@@ -184,6 +192,7 @@
         "Vendors"
       ],
       "href": "/vendors",
+      "desc": "Who you buy from",
       "synonyms": [
         "who",
         "you",
@@ -206,6 +215,7 @@
         "Bills"
       ],
       "href": "/purchases/bills",
+      "desc": "What suppliers charge you",
       "synonyms": [
         "what",
         "suppliers",
@@ -228,6 +238,7 @@
         "New Bill"
       ],
       "href": "/purchases/bills/new",
+      "desc": "Record a new supplier bill",
       "synonyms": [
         "record",
         "a",
@@ -251,6 +262,7 @@
         "Payables"
       ],
       "href": "/purchases/payables",
+      "desc": "Money you still owe suppliers",
       "synonyms": [
         "money",
         "you",
@@ -278,6 +290,7 @@
         "Purchase Orders"
       ],
       "href": "/procurement/purchase-orders",
+      "desc": "Orders you place with suppliers",
       "synonyms": [
         "orders",
         "you",
@@ -301,6 +314,7 @@
         "Goods Receipts"
       ],
       "href": "/procurement/goods-receipts",
+      "desc": "Confirm what actually arrived",
       "synonyms": [
         "confirm",
         "what",
@@ -323,6 +337,7 @@
         "AP Workflow"
       ],
       "href": "/purchases/ap-workflow",
+      "desc": "Approve and schedule bill payments",
       "synonyms": [
         "approve",
         "and",
@@ -345,6 +360,7 @@
         "Banking"
       ],
       "href": "/banking",
+      "desc": "Cash, bank feeds & matching",
       "synonyms": [
         "cash",
         "bank",
@@ -363,6 +379,7 @@
         "Bank Reconciliation"
       ],
       "href": "/reconciliation/bank",
+      "desc": "Match your books against the bank",
       "synonyms": [
         "match",
         "your",
@@ -387,6 +404,7 @@
         "AI Review Queue"
       ],
       "href": "/ai/review-queue",
+      "desc": "AI-suggested entries to confirm",
       "synonyms": [
         "ai",
         "suggested",
@@ -407,6 +425,7 @@
         "Exceptions"
       ],
       "href": "/reconciliation/exceptions",
+      "desc": "Mismatches that need a closer look",
       "synonyms": [
         "mismatches",
         "that",
@@ -428,6 +447,7 @@
         "Transactions"
       ],
       "href": "/transactions",
+      "desc": "Every cash and bank entry",
       "synonyms": [
         "every",
         "cash",
@@ -448,6 +468,7 @@
         "Recurring"
       ],
       "href": "/transactions/templates",
+      "desc": "Saved templates and repeating entries",
       "synonyms": [
         "saved",
         "templates",
@@ -467,6 +488,7 @@
         "Accounting"
       ],
       "href": "/accounting",
+      "desc": "The books",
       "synonyms": [
         "the",
         "books",
@@ -485,6 +507,7 @@
         "Chart of Accounts"
       ],
       "href": "/accounts",
+      "desc": "The account structure of your business",
       "synonyms": [
         "the",
         "account",
@@ -511,6 +534,7 @@
         "Journal Entries"
       ],
       "href": "/transactions",
+      "desc": "Every entry in your books",
       "synonyms": [
         "every",
         "entry",
@@ -533,6 +557,7 @@
         "Approvals"
       ],
       "href": "/approvals",
+      "desc": "Items waiting for sign-off",
       "synonyms": [
         "items",
         "waiting",
@@ -555,6 +580,7 @@
         "Fixed Assets"
       ],
       "href": "/assets",
+      "desc": "Equipment and vehicles with depreciation",
       "synonyms": [
         "equipment",
         "and",
@@ -577,6 +603,7 @@
         "Inventory"
       ],
       "href": "/inventory",
+      "desc": "Stock you hold and its value",
       "synonyms": [
         "stock",
         "you",
@@ -602,6 +629,7 @@
         "Fiscal Years"
       ],
       "href": "/accounting/fiscal-years",
+      "desc": "Open and close accounting periods",
       "synonyms": [
         "open",
         "and",
@@ -624,6 +652,7 @@
         "Activity"
       ],
       "href": "/activity",
+      "desc": "Full audit trail of every change",
       "synonyms": [
         "full",
         "audit",
@@ -647,6 +676,7 @@
         "Internal Audit"
       ],
       "href": "/audit/internal",
+      "desc": "Plan reviews and track findings",
       "synonyms": [
         "plan",
         "reviews",
@@ -668,6 +698,7 @@
         "Reports"
       ],
       "href": "/reports",
+      "desc": "Statements & filings",
       "synonyms": [
         "statements",
         "filings"
@@ -684,6 +715,7 @@
         "Financial Statements"
       ],
       "href": "/financial-reports/income-statement",
+      "desc": "Income statement, balance sheet, cash flow",
       "synonyms": [
         "income",
         "statement",
@@ -710,6 +742,7 @@
         "Equity Statement"
       ],
       "href": "/financial-reports/equity",
+      "desc": "How owner equity changed over the period",
       "synonyms": [
         "how",
         "owner",
@@ -732,6 +765,7 @@
         "Report Builder"
       ],
       "href": "/financial-reports/builder",
+      "desc": "Build custom report layouts with scheduling",
       "synonyms": [
         "build",
         "custom",
@@ -753,6 +787,7 @@
         "Tax Reports"
       ],
       "href": "/financial-reports/tax",
+      "desc": "Tax summaries for filing",
       "synonyms": [
         "tax",
         "summaries",
@@ -771,6 +806,7 @@
         "Payroll"
       ],
       "href": "/payroll",
+      "desc": "Pay your team",
       "synonyms": [
         "pay",
         "your",
@@ -788,6 +824,7 @@
         "Employees"
       ],
       "href": "/payroll/employees",
+      "desc": "The people you pay and their salary setup",
       "synonyms": [
         "the",
         "people",
@@ -811,6 +848,7 @@
         "Run Payroll"
       ],
       "href": "/payroll/run",
+      "desc": "Calculate take-home pay and post it to the books",
       "synonyms": [
         "calculate",
         "take",
@@ -836,6 +874,7 @@
         "Payslips"
       ],
       "href": "/payroll/payslips",
+      "desc": "Download payslips, bank file and tax certificates",
       "synonyms": [
         "download",
         "payslips",
@@ -857,6 +896,7 @@
         "Planning"
       ],
       "href": "/planning",
+      "desc": "Look ahead & dig in",
       "synonyms": [
         "look",
         "ahead",
@@ -877,6 +917,7 @@
         "Forecast"
       ],
       "href": "/ai-analyst/forecast",
+      "desc": "Where your numbers are heading",
       "synonyms": [
         "where",
         "your",
@@ -899,6 +940,7 @@
         "Scenarios"
       ],
       "href": "/ai-analyst/scenarios",
+      "desc": "Test 'what if' situations safely",
       "synonyms": [
         "test",
         "what",
@@ -921,6 +963,7 @@
         "13-Week Cash"
       ],
       "href": "/cash/thirteen-week",
+      "desc": "13-week rolling cash projection",
       "synonyms": [
         "13",
         "week",
@@ -943,6 +986,7 @@
         "Budgets"
       ],
       "href": "/budgets/editor",
+      "desc": "Set your plan for the year",
       "synonyms": [
         "set",
         "your",
@@ -966,6 +1010,7 @@
         "Budget vs Actual"
       ],
       "href": "/budgets/variance",
+      "desc": "See how your real numbers compare to the plan",
       "synonyms": [
         "see",
         "how",
@@ -992,6 +1037,7 @@
         "Job Costing"
       ],
       "href": "/cost/jobs",
+      "desc": "Track job costs against budget",
       "synonyms": [
         "track",
         "job",
@@ -1014,6 +1060,7 @@
         "Profitability"
       ],
       "href": "/cost/profitability",
+      "desc": "Who and what makes you money",
       "synonyms": [
         "who",
         "and",
@@ -1037,6 +1084,7 @@
         "Break-even"
       ],
       "href": "/cost/break-even",
+      "desc": "How much you must sell to cover costs",
       "synonyms": [
         "how",
         "much",
@@ -1062,6 +1110,7 @@
         "Benchmarking"
       ],
       "href": "/analysis/benchmarking",
+      "desc": "How your ratios compare to your industry",
       "synonyms": [
         "how",
         "your",
@@ -1086,6 +1135,7 @@
         "Anomalies"
       ],
       "href": "/ai-analyst/anomalies",
+      "desc": "Unusual activity we flagged for you",
       "synonyms": [
         "unusual",
         "activity",
@@ -1109,6 +1159,7 @@
         "AI Assistant"
       ],
       "href": "/ai/assistant",
+      "desc": "Ask questions about your finances",
       "synonyms": [
         "ask",
         "questions",
@@ -1130,6 +1181,7 @@
         "Tax & Compliance"
       ],
       "href": "/tax-compliance",
+      "desc": "Stay compliant",
       "synonyms": [
         "stay",
         "compliant"
@@ -1146,6 +1198,7 @@
         "Tax Autopilot"
       ],
       "href": "/tax",
+      "desc": "Live tax position, deadlines and trends",
       "synonyms": [
         "live",
         "tax",
@@ -1168,6 +1221,7 @@
         "Compliance Calendar"
       ],
       "href": "/compliance/calendar",
+      "desc": "Your filing deadlines and obligations",
       "synonyms": [
         "your",
         "filing",
@@ -1189,6 +1243,7 @@
         "Leases & Impairment"
       ],
       "href": "/compliance/leases",
+      "desc": "IFRS-16 leases and IAS-36 impairment checks",
       "synonyms": [
         "ifrs",
         "16",
@@ -1213,6 +1268,7 @@
         "AML Screening"
       ],
       "href": "/compliance/aml",
+      "desc": "Counterparty risk flags and STR drafts",
       "synonyms": [
         "counterparty",
         "risk",
@@ -1234,6 +1290,7 @@
         "Settings"
       ],
       "href": "/settings",
+      "desc": "Configure VousFin",
       "synonyms": [
         "configure",
         "vousfin"
@@ -1250,6 +1307,7 @@
         "Business"
       ],
       "href": "/business/settings",
+      "desc": "Company profile and preferences",
       "synonyms": [
         "company",
         "profile",
@@ -1269,6 +1327,7 @@
         "Team"
       ],
       "href": "/settings/team",
+      "desc": "Invite people and set what they can do",
       "synonyms": [
         "invite",
         "people",
@@ -1292,6 +1351,7 @@
         "Roles & Duties"
       ],
       "href": "/settings/duties",
+      "desc": "Roles that one person may not hold together",
       "synonyms": [
         "roles",
         "that",
@@ -1315,6 +1375,7 @@
         "Security"
       ],
       "href": "/settings/security",
+      "desc": "Two-factor authentication and session security",
       "synonyms": [
         "two",
         "factor",
@@ -1336,6 +1397,7 @@
         "Tax Engine"
       ],
       "href": "/settings/tax",
+      "desc": "Tax rates and how tax is applied",
       "synonyms": [
         "tax",
         "rates",
@@ -1358,6 +1420,7 @@
         "Exchange Rates"
       ],
       "href": "/settings/exchange-rates",
+      "desc": "Currency conversion rates",
       "synonyms": [
         "currency",
         "conversion",
@@ -1376,6 +1439,7 @@
         "Cost Centres"
       ],
       "href": "/settings/cost-centers",
+      "desc": "Departments, branches and projects",
       "synonyms": [
         "departments",
         "branches",
@@ -1395,6 +1459,7 @@
         "Appearance"
       ],
       "href": "/settings/appearance",
+      "desc": "Theme and look of the app",
       "synonyms": [
         "theme",
         "and",
