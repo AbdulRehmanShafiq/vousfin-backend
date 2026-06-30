@@ -55,6 +55,7 @@ router.use('/scenarios', require('./v1/scenario.routes')); // FR-03.3 — decisi
 router.use('/cfo-reports', require('./v1/cfoReport.routes')); // FR-03.4 — autonomous monthly CFO report
 router.use('/dashboard', dashboardRoutes);
 router.use('/ai', aiRoutes);
+router.use('/search', require('./v1/search.routes')); // Command Bar Tier 2 — semantic catalog search
 router.use('/admin', adminRoutes);
 router.use('/customers', customerRoutes);
 router.use('/vendors', vendorRoutes);
