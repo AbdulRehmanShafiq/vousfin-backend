@@ -5,6 +5,7 @@ const { searchCatalog } = require('../services/catalogSearch.service');
 const appCatalogIndex = require('../services/appCatalogIndex.service');
 const helpCorpus = require('../services/helpCorpus.service');
 const { answerHowTo } = require('../services/howTo.service');
+const searchAnalytics = require('../services/searchAnalytics.service');
 
 /**
  * GET /api/v1/search/catalog?q=&limit=&disabled=
@@ -61,4 +62,31 @@ async function howToSearch(req, res, next) {
   }
 }
 
-module.exports = { catalogSearch, reindexCatalog, howToSearch };
+/**
+ * POST /api/v1/search/log — record a command-bar event (fire-and-forget).
+ * Never blocks: the analytics write runs without awaiting and the response is
+ * returned immediately. No userId is stored (see searchAnalytics).
+ */
+function logSearch(req, res) {
+  const businessId = req.user?.businessId;
+  const { kind, query, resultClickedId, noResult } = req.body || {};
+  searchAnalytics.logSearch({ businessId, kind, query, resultClickedId, noResult });
+  return ApiResponse.success(res, { logged: true }, 'ok');
+}
+
+/**
+ * GET /api/v1/search/insights?days= — admin-only. Top queries, CTR and the
+ * no-result content-gap backlog for this business.
+ */
+async function searchInsights(req, res, next) {
+  try {
+    const businessId = req.user?.businessId;
+    const days = Math.min(parseInt(req.query.days, 10) || 30, 365);
+    const data = await searchAnalytics.getInsights(businessId, { days });
+    return ApiResponse.success(res, data, 'Search insights');
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { catalogSearch, reindexCatalog, howToSearch, logSearch, searchInsights };

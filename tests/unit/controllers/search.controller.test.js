@@ -4,11 +4,13 @@ jest.mock('../../../services/catalogSearch.service', () => ({ searchCatalog: jes
 jest.mock('../../../services/appCatalogIndex.service', () => ({ reindexAppCatalog: jest.fn() }));
 jest.mock('../../../services/helpCorpus.service', () => ({ reindexHelp: jest.fn() }));
 jest.mock('../../../services/howTo.service', () => ({ answerHowTo: jest.fn() }));
+jest.mock('../../../services/searchAnalytics.service', () => ({ logSearch: jest.fn(), getInsights: jest.fn() }));
 
 const { searchCatalog } = require('../../../services/catalogSearch.service');
 const appCatalogIndex = require('../../../services/appCatalogIndex.service');
 const helpCorpus = require('../../../services/helpCorpus.service');
 const { answerHowTo } = require('../../../services/howTo.service');
+const searchAnalytics = require('../../../services/searchAnalytics.service');
 const controller = require('../../../controllers/search.controller');
 
 function mockRes() {
@@ -62,6 +64,27 @@ describe('search.controller.howToSearch', () => {
     const res = mockRes();
     await controller.howToSearch({ body: { q: '  ' } }, res, jest.fn());
     expect(answerHowTo).not.toHaveBeenCalled();
+  });
+});
+
+describe('search.controller.logSearch', () => {
+  it('records the event scoped to the caller business and responds immediately', () => {
+    const req = { user: { businessId: 'biz1' }, body: { kind: 'catalog', query: 'invoices', noResult: false } };
+    const res = mockRes();
+    controller.logSearch(req, res);
+    expect(searchAnalytics.logSearch).toHaveBeenCalledWith(expect.objectContaining({ businessId: 'biz1', query: 'invoices' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+});
+
+describe('search.controller.searchInsights', () => {
+  it('returns insights for the caller business', async () => {
+    searchAnalytics.getInsights.mockResolvedValue({ totals: { searches: 10, ctr: 70 }, topQueries: [], gaps: [] });
+    const req = { user: { businessId: 'biz1' }, query: { days: '7' } };
+    const res = mockRes();
+    await controller.searchInsights(req, res, jest.fn());
+    expect(searchAnalytics.getInsights).toHaveBeenCalledWith('biz1', { days: 7 });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ totals: expect.any(Object) }) }));
   });
 });
 
