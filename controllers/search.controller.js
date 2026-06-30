@@ -4,6 +4,7 @@ const ApiResponse = require('../utils/ApiResponse');
 const { searchCatalog } = require('../services/catalogSearch.service');
 const appCatalogIndex = require('../services/appCatalogIndex.service');
 const helpCorpus = require('../services/helpCorpus.service');
+const { answerHowTo } = require('../services/howTo.service');
 
 /**
  * GET /api/v1/search/catalog?q=&limit=&disabled=
@@ -41,4 +42,23 @@ async function reindexCatalog(req, res, next) {
   }
 }
 
-module.exports = { catalogSearch, reindexCatalog };
+/**
+ * POST /api/v1/search/howto  { q }
+ * Tier 3 — a grounded "how do I…" answer over the global help corpus, with a
+ * deep link to the relevant page. Refuses rather than hallucinate when the help
+ * corpus does not cover the question.
+ */
+async function howToSearch(req, res, next) {
+  try {
+    const q = (req.body && req.body.q) || req.query.q || '';
+    if (!String(q).trim()) {
+      return ApiResponse.success(res, { grounded: false, answer: '', href: null, sources: [] }, 'How-to');
+    }
+    const result = await answerHowTo(String(q));
+    return ApiResponse.success(res, result, 'How-to answer');
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { catalogSearch, reindexCatalog, howToSearch };

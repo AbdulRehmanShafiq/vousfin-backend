@@ -3,10 +3,12 @@
 jest.mock('../../../services/catalogSearch.service', () => ({ searchCatalog: jest.fn() }));
 jest.mock('../../../services/appCatalogIndex.service', () => ({ reindexAppCatalog: jest.fn() }));
 jest.mock('../../../services/helpCorpus.service', () => ({ reindexHelp: jest.fn() }));
+jest.mock('../../../services/howTo.service', () => ({ answerHowTo: jest.fn() }));
 
 const { searchCatalog } = require('../../../services/catalogSearch.service');
 const appCatalogIndex = require('../../../services/appCatalogIndex.service');
 const helpCorpus = require('../../../services/helpCorpus.service');
+const { answerHowTo } = require('../../../services/howTo.service');
 const controller = require('../../../controllers/search.controller');
 
 function mockRes() {
@@ -41,6 +43,25 @@ describe('search.controller.catalogSearch', () => {
     const next = jest.fn();
     await controller.catalogSearch({ query: { q: 'x' } }, mockRes(), next);
     expect(next).toHaveBeenCalledWith(err);
+  });
+});
+
+describe('search.controller.howToSearch', () => {
+  it('returns a grounded answer from the service', async () => {
+    answerHowTo.mockResolvedValue({ grounded: true, answer: '1. Open Sales.', href: '/sales/invoices', sources: [{ href: '/sales/invoices' }] });
+    const res = mockRes();
+    await controller.howToSearch({ body: { q: 'how do i invoice' } }, res, jest.fn());
+    expect(answerHowTo).toHaveBeenCalledWith('how do i invoice');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({ grounded: true, href: '/sales/invoices' }),
+    }));
+  });
+
+  it('short-circuits an empty query without calling the service', async () => {
+    const res = mockRes();
+    await controller.howToSearch({ body: { q: '  ' } }, res, jest.fn());
+    expect(answerHowTo).not.toHaveBeenCalled();
   });
 });
 
