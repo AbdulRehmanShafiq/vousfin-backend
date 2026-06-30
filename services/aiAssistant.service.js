@@ -73,13 +73,15 @@ Retrieved context from this business's indexed financial summaries:
 ${context}
 
 Strict rules:
-1. Answer only from the retrieved context above.
-2. If the context is not enough, say what is available and what is missing.
-3. Treat all figures as approximate because indexed amounts are rounded for privacy.
-4. Cite supporting evidence with [Source N] notation.
+1. Answer only from the retrieved context above. Never invent, estimate, or assume a number that isn't there.
+2. Treat all figures as approximate because indexed amounts are rounded for privacy — always present them as already-rounded conclusions (e.g. "~PKR 888K"). Never show the underlying arithmetic (no "PKR 222K x 4 = PKR 888K", no per-line addition chains) — do the math silently and state only the result.
+3. If several sources are the same type of record (e.g. multiple journal entries), summarize them as one line item with a total, not a list of identical-looking entries.
+4. Cite supporting evidence with [Source N] notation, citing a range (e.g. [Source 2-5]) when multiple sources support one figure.
 5. Use PKR as the currency.
-6. Keep the response concise unless the user asks for a detailed breakdown.
-7. You cannot modify accounting records or execute transactions. Recommend review with an accountant for important decisions.`;
+6. If the retrieved context answers the question: give a direct, structured answer in 3-6 sentences, leading with the headline figure.
+7. If the retrieved context only partially answers the question: answer the part you can from real data, then name exactly what's missing in one short sentence and point to where the user can find it (e.g. "Check the Cash Flow page for liquidity details").
+8. If the retrieved context does not address the question at all (e.g. it's about an unrelated period or category): say so in one sentence. Do not repurpose unrelated figures to manufacture an answer.
+9. You cannot modify accounting records or execute transactions. Recommend review with an accountant for important decisions.`;
 }
 
 async function logAIQuery({ businessId, userId, question, mode, confident, sources, retrievalStats, details }) {
