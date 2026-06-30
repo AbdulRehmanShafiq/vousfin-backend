@@ -67,10 +67,11 @@ function serializeHelpDoc(doc) {
 }
 
 function parseHelpDoc(md) {
-  const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(md);
-  if (!m) return { body: md.trim() };
+  // Tolerate CRLF — git autocrlf rewrites the committed .md files on checkout.
+  const m = /^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/.exec(md);
+  if (!m) return { body: String(md).trim() };
   const front = {};
-  for (const line of m[1].split('\n')) {
+  for (const line of m[1].split(/\r?\n/)) {
     const idx = line.indexOf(':');
     if (idx > 0) front[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
   }

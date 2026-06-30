@@ -51,6 +51,14 @@ describe('serializeHelpDoc / parseHelpDoc roundtrip', () => {
     expect(parsed).toMatchObject({ id: doc.id, title: doc.title, href: doc.href, module: doc.module, type: doc.type });
     expect(parsed.body.trim()).toBe(doc.body.trim());
   });
+
+  it('parses CRLF files (git autocrlf rewrites the committed .md on checkout)', () => {
+    const [doc] = svc.buildHelpDocs(ENTRIES);
+    const crlf = svc.serializeHelpDoc(doc).replace(/\n/g, '\r\n');
+    const parsed = svc.parseHelpDoc(crlf);
+    expect(parsed.id).toBe(doc.id);
+    expect(parsed.title).toBe(doc.title);
+  });
 });
 
 describe('buildHelpVectorDocs', () => {
