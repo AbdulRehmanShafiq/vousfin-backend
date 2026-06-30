@@ -2,9 +2,15 @@
 
 jest.mock('../../../services/catalogSearch.service', () => ({ searchCatalog: jest.fn() }));
 jest.mock('../../../services/appCatalogIndex.service', () => ({ reindexAppCatalog: jest.fn() }));
+jest.mock('../../../services/helpCorpus.service', () => ({ reindexHelp: jest.fn() }));
+jest.mock('../../../services/howTo.service', () => ({ answerHowTo: jest.fn() }));
+jest.mock('../../../services/searchAnalytics.service', () => ({ logSearch: jest.fn(), getInsights: jest.fn() }));
 
 const { searchCatalog } = require('../../../services/catalogSearch.service');
 const appCatalogIndex = require('../../../services/appCatalogIndex.service');
+const helpCorpus = require('../../../services/helpCorpus.service');
+const { answerHowTo } = require('../../../services/howTo.service');
+const searchAnalytics = require('../../../services/searchAnalytics.service');
 const controller = require('../../../controllers/search.controller');
 
 function mockRes() {
@@ -42,15 +48,60 @@ describe('search.controller.catalogSearch', () => {
   });
 });
 
+describe('search.controller.howToSearch', () => {
+  it('returns a grounded answer from the service', async () => {
+    answerHowTo.mockResolvedValue({ grounded: true, answer: '1. Open Sales.', href: '/sales/invoices', sources: [{ href: '/sales/invoices' }] });
+    const res = mockRes();
+    await controller.howToSearch({ body: { q: 'how do i invoice' } }, res, jest.fn());
+    expect(answerHowTo).toHaveBeenCalledWith('how do i invoice');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+      success: true,
+      data: expect.objectContaining({ grounded: true, href: '/sales/invoices' }),
+    }));
+  });
+
+  it('short-circuits an empty query without calling the service', async () => {
+    const res = mockRes();
+    await controller.howToSearch({ body: { q: '  ' } }, res, jest.fn());
+    expect(answerHowTo).not.toHaveBeenCalled();
+  });
+});
+
+describe('search.controller.logSearch', () => {
+  it('records the event scoped to the caller business and responds immediately', () => {
+    const req = { user: { businessId: 'biz1' }, body: { kind: 'catalog', query: 'invoices', noResult: false } };
+    const res = mockRes();
+    controller.logSearch(req, res);
+    expect(searchAnalytics.logSearch).toHaveBeenCalledWith(expect.objectContaining({ businessId: 'biz1', query: 'invoices' }));
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+  });
+});
+
+describe('search.controller.searchInsights', () => {
+  it('returns insights for the caller business', async () => {
+    searchAnalytics.getInsights.mockResolvedValue({ totals: { searches: 10, ctr: 70 }, topQueries: [], gaps: [] });
+    const req = { user: { businessId: 'biz1' }, query: { days: '7' } };
+    const res = mockRes();
+    await controller.searchInsights(req, res, jest.fn());
+    expect(searchAnalytics.getInsights).toHaveBeenCalledWith('biz1', { days: 7 });
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ totals: expect.any(Object) }) }));
+  });
+});
+
 describe('search.controller.reindexCatalog', () => {
-  it('runs the reindex and returns its stats', async () => {
+  it('runs both the catalog and help reindex and returns combined stats', async () => {
     appCatalogIndex.reindexAppCatalog.mockResolvedValue({ total: 65, indexed: 65, skipped: 0 });
+    helpCorpus.reindexHelp.mockResolvedValue({ total: 55, indexed: 55, skipped: 0 });
     const res = mockRes();
     await controller.reindexCatalog({}, res, jest.fn());
     expect(appCatalogIndex.reindexAppCatalog).toHaveBeenCalledTimes(1);
+    expect(helpCorpus.reindexHelp).toHaveBeenCalledTimes(1);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
-      data: expect.objectContaining({ total: 65 }),
+      data: expect.objectContaining({
+        catalog: expect.objectContaining({ total: 65 }),
+        help: expect.objectContaining({ total: 55 }),
+      }),
     }));
   });
 });
