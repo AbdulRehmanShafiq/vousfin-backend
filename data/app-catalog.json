@@ -1,0 +1,1411 @@
+{
+  "generatedAt": "2026-06-30T08:26:32.939Z",
+  "entries": [
+    {
+      "id": "home",
+      "type": "module",
+      "title": "Home",
+      "path": [
+        "Home"
+      ],
+      "href": "/dashboard",
+      "synonyms": [
+        "your",
+        "business",
+        "at",
+        "a",
+        "glance"
+      ],
+      "moduleKey": "home",
+      "enablementKey": null
+    },
+    {
+      "id": "sales",
+      "type": "module",
+      "title": "Sales",
+      "path": [
+        "Sales"
+      ],
+      "href": "/sales",
+      "synonyms": [
+        "money",
+        "coming",
+        "in",
+        "accounts",
+        "receivable"
+      ],
+      "moduleKey": "sales",
+      "enablementKey": null
+    },
+    {
+      "id": "sales.customers",
+      "type": "page",
+      "title": "Customers",
+      "path": [
+        "Sales",
+        "Customers"
+      ],
+      "href": "/customers",
+      "synonyms": [
+        "who",
+        "buys",
+        "from",
+        "you",
+        "and",
+        "their",
+        "balances",
+        "accounts",
+        "receivable",
+        "sales"
+      ],
+      "moduleKey": "sales",
+      "enablementKey": null
+    },
+    {
+      "id": "sales.invoices",
+      "type": "page",
+      "title": "Invoices",
+      "path": [
+        "Sales",
+        "Invoices"
+      ],
+      "href": "/sales/invoices",
+      "synonyms": [
+        "bills",
+        "you",
+        "send",
+        "to",
+        "customers",
+        "accounts",
+        "receivable",
+        "sales"
+      ],
+      "moduleKey": "sales",
+      "enablementKey": null
+    },
+    {
+      "id": "sales.new-invoice",
+      "type": "action",
+      "title": "New Invoice",
+      "path": [
+        "Sales",
+        "New Invoice"
+      ],
+      "href": "/sales/invoices/new",
+      "synonyms": [
+        "create",
+        "and",
+        "send",
+        "a",
+        "new",
+        "invoice",
+        "accounts",
+        "receivable",
+        "sales"
+      ],
+      "moduleKey": "sales",
+      "enablementKey": null
+    },
+    {
+      "id": "sales.receivables",
+      "type": "page",
+      "title": "Receivables",
+      "path": [
+        "Sales",
+        "Receivables"
+      ],
+      "href": "/sales/receivables",
+      "synonyms": [
+        "money",
+        "customers",
+        "still",
+        "owe",
+        "you",
+        "accounts",
+        "receivable",
+        "sales",
+        "who owes me",
+        "money owed to me",
+        "debtors",
+        "outstanding customers"
+      ],
+      "moduleKey": "sales",
+      "enablementKey": null
+    },
+    {
+      "id": "sales.ar-aging",
+      "type": "page",
+      "title": "AR Aging",
+      "path": [
+        "Sales",
+        "AR Aging"
+      ],
+      "href": "/financial-reports/aging",
+      "synonyms": [
+        "how",
+        "overdue",
+        "each",
+        "balance",
+        "is",
+        "accounts",
+        "receivable",
+        "sales",
+        "overdue customers",
+        "how late are payments"
+      ],
+      "moduleKey": "sales",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases",
+      "type": "module",
+      "title": "Purchases",
+      "path": [
+        "Purchases"
+      ],
+      "href": "/purchases",
+      "synonyms": [
+        "money",
+        "going",
+        "out",
+        "accounts",
+        "payable",
+        "procurement"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases.vendors",
+      "type": "page",
+      "title": "Vendors",
+      "path": [
+        "Purchases",
+        "Vendors"
+      ],
+      "href": "/vendors",
+      "synonyms": [
+        "who",
+        "you",
+        "buy",
+        "from",
+        "accounts",
+        "payable",
+        "procurement",
+        "purchases"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases.bills",
+      "type": "page",
+      "title": "Bills",
+      "path": [
+        "Purchases",
+        "Bills"
+      ],
+      "href": "/purchases/bills",
+      "synonyms": [
+        "what",
+        "suppliers",
+        "charge",
+        "you",
+        "accounts",
+        "payable",
+        "procurement",
+        "purchases"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases.new-bill",
+      "type": "action",
+      "title": "New Bill",
+      "path": [
+        "Purchases",
+        "New Bill"
+      ],
+      "href": "/purchases/bills/new",
+      "synonyms": [
+        "record",
+        "a",
+        "new",
+        "supplier",
+        "bill",
+        "accounts",
+        "payable",
+        "procurement",
+        "purchases"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases.payables",
+      "type": "page",
+      "title": "Payables",
+      "path": [
+        "Purchases",
+        "Payables"
+      ],
+      "href": "/purchases/payables",
+      "synonyms": [
+        "money",
+        "you",
+        "still",
+        "owe",
+        "suppliers",
+        "accounts",
+        "payable",
+        "procurement",
+        "purchases",
+        "what i owe",
+        "money i owe",
+        "creditors",
+        "unpaid bills"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases.purchase-orders",
+      "type": "page",
+      "title": "Purchase Orders",
+      "path": [
+        "Purchases",
+        "Purchase Orders"
+      ],
+      "href": "/procurement/purchase-orders",
+      "synonyms": [
+        "orders",
+        "you",
+        "place",
+        "with",
+        "suppliers",
+        "accounts",
+        "payable",
+        "procurement",
+        "purchases"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases.goods-receipts",
+      "type": "page",
+      "title": "Goods Receipts",
+      "path": [
+        "Purchases",
+        "Goods Receipts"
+      ],
+      "href": "/procurement/goods-receipts",
+      "synonyms": [
+        "confirm",
+        "what",
+        "actually",
+        "arrived",
+        "accounts",
+        "payable",
+        "procurement",
+        "purchases"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "purchases.ap-workflow",
+      "type": "page",
+      "title": "AP Workflow",
+      "path": [
+        "Purchases",
+        "AP Workflow"
+      ],
+      "href": "/purchases/ap-workflow",
+      "synonyms": [
+        "approve",
+        "and",
+        "schedule",
+        "bill",
+        "payments",
+        "accounts",
+        "payable",
+        "procurement",
+        "purchases"
+      ],
+      "moduleKey": "purchases",
+      "enablementKey": null
+    },
+    {
+      "id": "banking",
+      "type": "module",
+      "title": "Banking",
+      "path": [
+        "Banking"
+      ],
+      "href": "/banking",
+      "synonyms": [
+        "cash",
+        "bank",
+        "feeds",
+        "matching"
+      ],
+      "moduleKey": "banking",
+      "enablementKey": null
+    },
+    {
+      "id": "banking.bank-reconciliation",
+      "type": "page",
+      "title": "Bank Reconciliation",
+      "path": [
+        "Banking",
+        "Bank Reconciliation"
+      ],
+      "href": "/reconciliation/bank",
+      "synonyms": [
+        "match",
+        "your",
+        "books",
+        "against",
+        "the",
+        "bank",
+        "banking",
+        "reconcile",
+        "match the bank",
+        "bank matching"
+      ],
+      "moduleKey": "banking",
+      "enablementKey": null
+    },
+    {
+      "id": "banking.ai-review-queue",
+      "type": "page",
+      "title": "AI Review Queue",
+      "path": [
+        "Banking",
+        "AI Review Queue"
+      ],
+      "href": "/ai/review-queue",
+      "synonyms": [
+        "ai",
+        "suggested",
+        "entries",
+        "to",
+        "confirm",
+        "banking"
+      ],
+      "moduleKey": "banking",
+      "enablementKey": null
+    },
+    {
+      "id": "banking.exceptions",
+      "type": "page",
+      "title": "Exceptions",
+      "path": [
+        "Banking",
+        "Exceptions"
+      ],
+      "href": "/reconciliation/exceptions",
+      "synonyms": [
+        "mismatches",
+        "that",
+        "need",
+        "a",
+        "closer",
+        "look",
+        "banking"
+      ],
+      "moduleKey": "banking",
+      "enablementKey": null
+    },
+    {
+      "id": "banking.transactions",
+      "type": "page",
+      "title": "Transactions",
+      "path": [
+        "Banking",
+        "Transactions"
+      ],
+      "href": "/transactions",
+      "synonyms": [
+        "every",
+        "cash",
+        "and",
+        "bank",
+        "entry",
+        "banking"
+      ],
+      "moduleKey": "banking",
+      "enablementKey": null
+    },
+    {
+      "id": "banking.recurring",
+      "type": "page",
+      "title": "Recurring",
+      "path": [
+        "Banking",
+        "Recurring"
+      ],
+      "href": "/transactions/templates",
+      "synonyms": [
+        "saved",
+        "templates",
+        "and",
+        "repeating",
+        "entries",
+        "banking"
+      ],
+      "moduleKey": "banking",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting",
+      "type": "module",
+      "title": "Accounting",
+      "path": [
+        "Accounting"
+      ],
+      "href": "/accounting",
+      "synonyms": [
+        "the",
+        "books",
+        "general",
+        "ledger"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.chart-of-accounts",
+      "type": "page",
+      "title": "Chart of Accounts",
+      "path": [
+        "Accounting",
+        "Chart of Accounts"
+      ],
+      "href": "/accounts",
+      "synonyms": [
+        "the",
+        "account",
+        "structure",
+        "of",
+        "your",
+        "business",
+        "general",
+        "ledger",
+        "accounting",
+        "accounts list",
+        "ledger accounts",
+        "coa"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.journal-entries",
+      "type": "page",
+      "title": "Journal Entries",
+      "path": [
+        "Accounting",
+        "Journal Entries"
+      ],
+      "href": "/transactions",
+      "synonyms": [
+        "every",
+        "entry",
+        "in",
+        "your",
+        "books",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.approvals",
+      "type": "page",
+      "title": "Approvals",
+      "path": [
+        "Accounting",
+        "Approvals"
+      ],
+      "href": "/approvals",
+      "synonyms": [
+        "items",
+        "waiting",
+        "for",
+        "sign",
+        "off",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.fixed-assets",
+      "type": "page",
+      "title": "Fixed Assets",
+      "path": [
+        "Accounting",
+        "Fixed Assets"
+      ],
+      "href": "/assets",
+      "synonyms": [
+        "equipment",
+        "and",
+        "vehicles",
+        "with",
+        "depreciation",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.inventory",
+      "type": "page",
+      "title": "Inventory",
+      "path": [
+        "Accounting",
+        "Inventory"
+      ],
+      "href": "/inventory",
+      "synonyms": [
+        "stock",
+        "you",
+        "hold",
+        "and",
+        "its",
+        "value",
+        "general",
+        "ledger",
+        "accounting",
+        "stock",
+        "stock on hand"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.fiscal-years",
+      "type": "page",
+      "title": "Fiscal Years",
+      "path": [
+        "Accounting",
+        "Fiscal Years"
+      ],
+      "href": "/accounting/fiscal-years",
+      "synonyms": [
+        "open",
+        "and",
+        "close",
+        "accounting",
+        "periods",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.activity",
+      "type": "page",
+      "title": "Activity",
+      "path": [
+        "Accounting",
+        "Activity"
+      ],
+      "href": "/activity",
+      "synonyms": [
+        "full",
+        "audit",
+        "trail",
+        "of",
+        "every",
+        "change",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.internal-audit",
+      "type": "page",
+      "title": "Internal Audit",
+      "path": [
+        "Accounting",
+        "Internal Audit"
+      ],
+      "href": "/audit/internal",
+      "synonyms": [
+        "plan",
+        "reviews",
+        "and",
+        "track",
+        "findings",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "reports",
+      "type": "module",
+      "title": "Reports",
+      "path": [
+        "Reports"
+      ],
+      "href": "/reports",
+      "synonyms": [
+        "statements",
+        "filings"
+      ],
+      "moduleKey": "reports",
+      "enablementKey": null
+    },
+    {
+      "id": "reports.financial-statements",
+      "type": "page",
+      "title": "Financial Statements",
+      "path": [
+        "Reports",
+        "Financial Statements"
+      ],
+      "href": "/financial-reports/income-statement",
+      "synonyms": [
+        "income",
+        "statement",
+        "balance",
+        "sheet",
+        "cash",
+        "flow",
+        "reports",
+        "profit and loss",
+        "p&l",
+        "pnl",
+        "balance sheet",
+        "cash flow"
+      ],
+      "moduleKey": "reports",
+      "enablementKey": null
+    },
+    {
+      "id": "reports.equity-statement",
+      "type": "page",
+      "title": "Equity Statement",
+      "path": [
+        "Reports",
+        "Equity Statement"
+      ],
+      "href": "/financial-reports/equity",
+      "synonyms": [
+        "how",
+        "owner",
+        "equity",
+        "changed",
+        "over",
+        "the",
+        "period",
+        "reports"
+      ],
+      "moduleKey": "reports",
+      "enablementKey": null
+    },
+    {
+      "id": "reports.report-builder",
+      "type": "page",
+      "title": "Report Builder",
+      "path": [
+        "Reports",
+        "Report Builder"
+      ],
+      "href": "/financial-reports/builder",
+      "synonyms": [
+        "build",
+        "custom",
+        "report",
+        "layouts",
+        "with",
+        "scheduling",
+        "reports"
+      ],
+      "moduleKey": "reports",
+      "enablementKey": null
+    },
+    {
+      "id": "reports.tax-reports",
+      "type": "page",
+      "title": "Tax Reports",
+      "path": [
+        "Reports",
+        "Tax Reports"
+      ],
+      "href": "/financial-reports/tax",
+      "synonyms": [
+        "tax",
+        "summaries",
+        "for",
+        "filing",
+        "reports"
+      ],
+      "moduleKey": "reports",
+      "enablementKey": null
+    },
+    {
+      "id": "payroll",
+      "type": "module",
+      "title": "Payroll",
+      "path": [
+        "Payroll"
+      ],
+      "href": "/payroll",
+      "synonyms": [
+        "pay",
+        "your",
+        "team"
+      ],
+      "moduleKey": "payroll",
+      "enablementKey": "payroll"
+    },
+    {
+      "id": "payroll.employees",
+      "type": "page",
+      "title": "Employees",
+      "path": [
+        "Payroll",
+        "Employees"
+      ],
+      "href": "/payroll/employees",
+      "synonyms": [
+        "the",
+        "people",
+        "you",
+        "pay",
+        "and",
+        "their",
+        "salary",
+        "setup",
+        "payroll"
+      ],
+      "moduleKey": "payroll",
+      "enablementKey": "payroll"
+    },
+    {
+      "id": "payroll.run-payroll",
+      "type": "action",
+      "title": "Run Payroll",
+      "path": [
+        "Payroll",
+        "Run Payroll"
+      ],
+      "href": "/payroll/run",
+      "synonyms": [
+        "calculate",
+        "take",
+        "home",
+        "pay",
+        "and",
+        "post",
+        "it",
+        "to",
+        "the",
+        "books",
+        "payroll"
+      ],
+      "moduleKey": "payroll",
+      "enablementKey": "payroll"
+    },
+    {
+      "id": "payroll.payslips",
+      "type": "page",
+      "title": "Payslips",
+      "path": [
+        "Payroll",
+        "Payslips"
+      ],
+      "href": "/payroll/payslips",
+      "synonyms": [
+        "download",
+        "payslips",
+        "bank",
+        "file",
+        "and",
+        "tax",
+        "certificates",
+        "payroll"
+      ],
+      "moduleKey": "payroll",
+      "enablementKey": "payroll"
+    },
+    {
+      "id": "planning",
+      "type": "module",
+      "title": "Planning",
+      "path": [
+        "Planning"
+      ],
+      "href": "/planning",
+      "synonyms": [
+        "look",
+        "ahead",
+        "dig",
+        "in",
+        "management",
+        "accounting"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.forecast",
+      "type": "page",
+      "title": "Forecast",
+      "path": [
+        "Planning",
+        "Forecast"
+      ],
+      "href": "/ai-analyst/forecast",
+      "synonyms": [
+        "where",
+        "your",
+        "numbers",
+        "are",
+        "heading",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.scenarios",
+      "type": "page",
+      "title": "Scenarios",
+      "path": [
+        "Planning",
+        "Scenarios"
+      ],
+      "href": "/ai-analyst/scenarios",
+      "synonyms": [
+        "test",
+        "what",
+        "if",
+        "situations",
+        "safely",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.13-week-cash",
+      "type": "page",
+      "title": "13-Week Cash",
+      "path": [
+        "Planning",
+        "13-Week Cash"
+      ],
+      "href": "/cash/thirteen-week",
+      "synonyms": [
+        "13",
+        "week",
+        "rolling",
+        "cash",
+        "projection",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.budgets",
+      "type": "page",
+      "title": "Budgets",
+      "path": [
+        "Planning",
+        "Budgets"
+      ],
+      "href": "/budgets/editor",
+      "synonyms": [
+        "set",
+        "your",
+        "plan",
+        "for",
+        "the",
+        "year",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.budget-vs-actual",
+      "type": "page",
+      "title": "Budget vs Actual",
+      "path": [
+        "Planning",
+        "Budget vs Actual"
+      ],
+      "href": "/budgets/variance",
+      "synonyms": [
+        "see",
+        "how",
+        "your",
+        "real",
+        "numbers",
+        "compare",
+        "to",
+        "the",
+        "plan",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.job-costing",
+      "type": "page",
+      "title": "Job Costing",
+      "path": [
+        "Planning",
+        "Job Costing"
+      ],
+      "href": "/cost/jobs",
+      "synonyms": [
+        "track",
+        "job",
+        "costs",
+        "against",
+        "budget",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.profitability",
+      "type": "page",
+      "title": "Profitability",
+      "path": [
+        "Planning",
+        "Profitability"
+      ],
+      "href": "/cost/profitability",
+      "synonyms": [
+        "who",
+        "and",
+        "what",
+        "makes",
+        "you",
+        "money",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.break-even",
+      "type": "page",
+      "title": "Break-even",
+      "path": [
+        "Planning",
+        "Break-even"
+      ],
+      "href": "/cost/break-even",
+      "synonyms": [
+        "how",
+        "much",
+        "you",
+        "must",
+        "sell",
+        "to",
+        "cover",
+        "costs",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.benchmarking",
+      "type": "page",
+      "title": "Benchmarking",
+      "path": [
+        "Planning",
+        "Benchmarking"
+      ],
+      "href": "/analysis/benchmarking",
+      "synonyms": [
+        "how",
+        "your",
+        "ratios",
+        "compare",
+        "to",
+        "your",
+        "industry",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.anomalies",
+      "type": "page",
+      "title": "Anomalies",
+      "path": [
+        "Planning",
+        "Anomalies"
+      ],
+      "href": "/ai-analyst/anomalies",
+      "synonyms": [
+        "unusual",
+        "activity",
+        "we",
+        "flagged",
+        "for",
+        "you",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.ai-assistant",
+      "type": "page",
+      "title": "AI Assistant",
+      "path": [
+        "Planning",
+        "AI Assistant"
+      ],
+      "href": "/ai/assistant",
+      "synonyms": [
+        "ask",
+        "questions",
+        "about",
+        "your",
+        "finances",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "compliance",
+      "type": "module",
+      "title": "Tax & Compliance",
+      "path": [
+        "Tax & Compliance"
+      ],
+      "href": "/tax-compliance",
+      "synonyms": [
+        "stay",
+        "compliant"
+      ],
+      "moduleKey": "compliance",
+      "enablementKey": "compliance"
+    },
+    {
+      "id": "compliance.tax-autopilot",
+      "type": "page",
+      "title": "Tax Autopilot",
+      "path": [
+        "Tax & Compliance",
+        "Tax Autopilot"
+      ],
+      "href": "/tax",
+      "synonyms": [
+        "live",
+        "tax",
+        "position",
+        "deadlines",
+        "and",
+        "trends",
+        "tax",
+        "compliance"
+      ],
+      "moduleKey": "compliance",
+      "enablementKey": "compliance"
+    },
+    {
+      "id": "compliance.compliance-calendar",
+      "type": "page",
+      "title": "Compliance Calendar",
+      "path": [
+        "Tax & Compliance",
+        "Compliance Calendar"
+      ],
+      "href": "/compliance/calendar",
+      "synonyms": [
+        "your",
+        "filing",
+        "deadlines",
+        "and",
+        "obligations",
+        "tax",
+        "compliance"
+      ],
+      "moduleKey": "compliance",
+      "enablementKey": "compliance"
+    },
+    {
+      "id": "compliance.leases-and-impairment",
+      "type": "page",
+      "title": "Leases & Impairment",
+      "path": [
+        "Tax & Compliance",
+        "Leases & Impairment"
+      ],
+      "href": "/compliance/leases",
+      "synonyms": [
+        "ifrs",
+        "16",
+        "leases",
+        "and",
+        "ias",
+        "36",
+        "impairment",
+        "checks",
+        "tax",
+        "compliance"
+      ],
+      "moduleKey": "compliance",
+      "enablementKey": "compliance"
+    },
+    {
+      "id": "compliance.aml-screening",
+      "type": "page",
+      "title": "AML Screening",
+      "path": [
+        "Tax & Compliance",
+        "AML Screening"
+      ],
+      "href": "/compliance/aml",
+      "synonyms": [
+        "counterparty",
+        "risk",
+        "flags",
+        "and",
+        "str",
+        "drafts",
+        "tax",
+        "compliance"
+      ],
+      "moduleKey": "compliance",
+      "enablementKey": "compliance"
+    },
+    {
+      "id": "settings",
+      "type": "module",
+      "title": "Settings",
+      "path": [
+        "Settings"
+      ],
+      "href": "/settings",
+      "synonyms": [
+        "configure",
+        "vousfin"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.business",
+      "type": "page",
+      "title": "Business",
+      "path": [
+        "Settings",
+        "Business"
+      ],
+      "href": "/business/settings",
+      "synonyms": [
+        "company",
+        "profile",
+        "and",
+        "preferences",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.team",
+      "type": "page",
+      "title": "Team",
+      "path": [
+        "Settings",
+        "Team"
+      ],
+      "href": "/settings/team",
+      "synonyms": [
+        "invite",
+        "people",
+        "and",
+        "set",
+        "what",
+        "they",
+        "can",
+        "do",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.roles-and-duties",
+      "type": "page",
+      "title": "Roles & Duties",
+      "path": [
+        "Settings",
+        "Roles & Duties"
+      ],
+      "href": "/settings/duties",
+      "synonyms": [
+        "roles",
+        "that",
+        "one",
+        "person",
+        "may",
+        "not",
+        "hold",
+        "together",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.security",
+      "type": "page",
+      "title": "Security",
+      "path": [
+        "Settings",
+        "Security"
+      ],
+      "href": "/settings/security",
+      "synonyms": [
+        "two",
+        "factor",
+        "authentication",
+        "and",
+        "session",
+        "security",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.tax-engine",
+      "type": "page",
+      "title": "Tax Engine",
+      "path": [
+        "Settings",
+        "Tax Engine"
+      ],
+      "href": "/settings/tax",
+      "synonyms": [
+        "tax",
+        "rates",
+        "and",
+        "how",
+        "tax",
+        "is",
+        "applied",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.exchange-rates",
+      "type": "page",
+      "title": "Exchange Rates",
+      "path": [
+        "Settings",
+        "Exchange Rates"
+      ],
+      "href": "/settings/exchange-rates",
+      "synonyms": [
+        "currency",
+        "conversion",
+        "rates",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.cost-centres",
+      "type": "page",
+      "title": "Cost Centres",
+      "path": [
+        "Settings",
+        "Cost Centres"
+      ],
+      "href": "/settings/cost-centers",
+      "synonyms": [
+        "departments",
+        "branches",
+        "and",
+        "projects",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    },
+    {
+      "id": "settings.appearance",
+      "type": "page",
+      "title": "Appearance",
+      "path": [
+        "Settings",
+        "Appearance"
+      ],
+      "href": "/settings/appearance",
+      "synonyms": [
+        "theme",
+        "and",
+        "look",
+        "of",
+        "the",
+        "app",
+        "settings"
+      ],
+      "moduleKey": "settings",
+      "enablementKey": null
+    }
+  ]
+}

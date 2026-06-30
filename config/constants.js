@@ -2,6 +2,13 @@
 // Centralized application constants – change only here
 
 module.exports = {
+  // Reserved sentinel businessId for GLOBAL-scope vectors (the app module/help
+  // catalog, identical for every tenant). Real businesses get random ObjectIds,
+  // so this fixed low value never collides; storing catalog vectors under it
+  // means the existing businessId vector-search filter isolates them from every
+  // tenant's financial search automatically. See VectorDocument.scope.
+  GLOBAL_CATALOG_BUSINESS_ID: '000000000000000000000001',
+
   // ===============================
   // User & Role Constants
   // ===============================
