@@ -14,6 +14,16 @@ const vectorDocumentSchema = new mongoose.Schema(
       trim: true,
       index: true,
     },
+    // 'tenant' = per-business financial vectors (default — existing behavior).
+    // 'global' = app-catalog/help vectors shared by every business (stored under
+    // the reserved GLOBAL_CATALOG_BUSINESS_ID sentinel so the businessId filter
+    // keeps them strictly isolated from tenant search and vice-versa).
+    scope: {
+      type: String,
+      enum: ['tenant', 'global'],
+      default: 'tenant',
+      index: true,
+    },
     recordId: {
       type: String,
       required: true,
