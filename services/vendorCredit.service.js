@@ -153,6 +153,18 @@ class VendorCreditService {
     if (!['draft', 'awaiting_approval', 'approved', 'scheduled', 'overdue'].includes(bill.state)) {
       throw new ApiError(409, `Cannot apply credit to bill in state "${bill.state}"`);
     }
+    // The credit-side check above guarantees amount <= the credit's remaining, but
+    // not that the BILL owes that much. Applying more than the bill's outstanding
+    // would push paidAmount above the bill total and over-reduce Accounts Payable
+    // (a refund owed by the vendor must be handled as a refund, not by over-paying
+    // an unrelated bill). Cap each application at what the bill still owes.
+    const billOutstanding = r2(bill.remainingBalance != null
+      ? bill.remainingBalance
+      : (bill.totalAmount || 0) - (bill.paidAmount || 0));
+    if (r2(amount) > billOutstanding + 0.01) {
+      throw new ApiError(400,
+        `Applied amount ${r2(amount)} exceeds the bill's remaining balance ${billOutstanding}. Apply the credit across multiple bills or record a vendor refund for the surplus.`);
+    }
 
     // All-or-nothing (audit A9): recording the application on the vendor credit,
     // reducing the bill's balance, and posting the DR-AP/CR-credit journal (with the

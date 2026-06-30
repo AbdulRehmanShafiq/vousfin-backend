@@ -193,6 +193,21 @@ describe('vcService.applyToBill()', () => {
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 
+  test('rejects applying more than the BILL owes (cannot over-pay / drive AP negative)', async () => {
+    // Credit has 5000 available; the bill only owes 2000. The credit-side check
+    // (amount <= remainingAmount) passes, but applying 5000 would push the bill's
+    // paidAmount above its total and over-reduce Accounts Payable. Must reject.
+    const smallBill = Bill.__makeBill({ totalAmount: 2000, remainingBalance: 2000, state: 'approved', businessId: BIZ });
+    Bill.__billStore.set(String(smallBill._id), smallBill);
+    Bill.findOne.mockResolvedValue(smallBill);
+    const vc = await makeCredit(5000);
+    await expect(
+      vcService.applyToBill(vc._id, smallBill._id, 5000, USER)
+    ).rejects.toMatchObject({ statusCode: 400 });
+    // Bill untouched — no partial write before the guard.
+    expect(smallBill.paidAmount).toBe(0);
+  });
+
   test('throws 409 when credit is already fully applied', async () => {
     const vc = await makeCredit(500);
     await vcService.applyToBill(vc._id, Bill.__mockBill._id, 500, USER);

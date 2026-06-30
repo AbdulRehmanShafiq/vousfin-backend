@@ -222,6 +222,32 @@ describe('CreditNote — approve + apply', () => {
     expect(updatedInv.creditNoteIds.length).toBe(1);
   });
 
+  test('apply re-checks the creditable limit — two notes cannot over-credit one invoice', async () => {
+    // Both notes are created while totalCredited is still 0, so each passes the
+    // create-time guard (600 <= 1000). totalCredited is only bumped at apply, so
+    // without an apply-time re-check the second apply would over-credit the
+    // invoice (total 1200 credited against a 1000 invoice) and drive the
+    // customer receivable negative. The second apply MUST be rejected.
+    const inv = seedInvoice({ totalAmount: 1000, remainingBalance: 1000, customerId: new mongoose.Types.ObjectId() });
+    const mk = async (num) => {
+      const cn = await creditNoteService.create({
+        businessId: inv.businessId, invoiceId: inv._id,
+        creditNoteNumber: num, issueDate: new Date(), totalAmount: 600,
+      }, user, '127.0.0.1');
+      await creditNoteService.approve(cn._id, user);
+      return cn;
+    };
+    const cn1 = await mk('CN-A');
+    const cn2 = await mk('CN-B');
+
+    await creditNoteService.apply(cn1._id, user); // 600 of 1000 — ok
+    await expect(creditNoteService.apply(cn2._id, user))
+      .rejects.toMatchObject({ statusCode: 400 });
+
+    const updatedInv = global.__mockInvoiceStoreForCN.get(String(inv._id));
+    expect(updatedInv.totalCredited).toBe(600); // not 1200
+  });
+
   test('apply posts the GL entry inside the transaction session (audit A9)', async () => {
     const inv = seedInvoice({ totalAmount: 5000, remainingBalance: 5000, customerId: new mongoose.Types.ObjectId() });
     const cn = await creditNoteService.create({

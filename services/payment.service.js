@@ -246,6 +246,11 @@ class PaymentService {
     let direction = null;
     let partyId = null;
     let allocatedTotal = 0;
+    // Accumulate allocations per target JE so several allocations to the SAME
+    // document in one payment are validated against its balance as a SUM, not
+    // each in isolation (each spec re-reads the same pre-settlement balance, so
+    // an individual check can't see the others and would over-settle the parent).
+    const perJeAllocated = new Map();
 
     for (const spec of specs) {
       const allocAmount = r2(spec.amount);
@@ -277,9 +282,12 @@ class PaymentService {
       const isAP = je.transactionType === TRANSACTION_TYPES.CREDIT_PURCHASE;
       if (!isAR && !isAP) throw new ApiError(400, 'Allocations must target a credit sale (invoice) or credit purchase (bill)');
       if (je.remainingBalance == null) throw new ApiError(400, 'Target entry does not track an outstanding balance');
-      if (allocAmount > r2(je.remainingBalance) + 0.001) {
-        throw new ApiError(400, `Allocation (${allocAmount}) exceeds the outstanding balance (${r2(je.remainingBalance)}) of ${je.invoiceNumber || 'the document'}`);
+      const jeKey = String(je._id);
+      const cumulativeForJe = r2((perJeAllocated.get(jeKey) || 0) + allocAmount);
+      if (cumulativeForJe > r2(je.remainingBalance) + 0.001) {
+        throw new ApiError(400, `Allocation${perJeAllocated.has(jeKey) ? 's' : ''} (${cumulativeForJe}) exceed${perJeAllocated.has(jeKey) ? '' : 's'} the outstanding balance (${r2(je.remainingBalance)}) of ${je.invoiceNumber || 'the document'}`);
       }
+      perJeAllocated.set(jeKey, cumulativeForJe);
 
       const thisDirection = isAR ? 'inbound' : 'outbound';
       // An unlinked AR/AP entry (no customer/vendor — e.g. a manual credit-sale

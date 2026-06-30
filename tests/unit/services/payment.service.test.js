@@ -173,6 +173,21 @@ describe('recordPayment — validation (no writes on reject)', () => {
     expect(txService.recordPartialPayment).not.toHaveBeenCalled();
   });
 
+  it('rejects two allocations to the SAME entry whose sum exceeds its balance', async () => {
+    // Each 60 is individually ≤ the 100 balance, but together (120) they would
+    // over-settle the single parent to a negative remaining. The per-allocation
+    // check reads the same pre-settlement balance twice and must not be fooled.
+    JES.je1 = makeJE({ _id: 'je1', remainingBalance: 100 });
+    await expect(paymentService.recordPayment(BIZ, {
+      amount: 120, cashAccountId: CASH,
+      allocations: [
+        { parentTransactionId: 'je1', amount: 60 },
+        { parentTransactionId: 'je1', amount: 60 },
+      ],
+    }, 'u1', '127.0.0.1')).rejects.toMatchObject({ statusCode: 400 });
+    expect(txService.recordPartialPayment).not.toHaveBeenCalled();
+  });
+
   it('rejects mixing two different parties in one payment', async () => {
     JES.je1 = makeJE({ _id: 'je1', customerId: CUST });
     JES.je2 = makeJE({ _id: 'je2', customerId: '507f1f77bcf86cd7994390ff' });

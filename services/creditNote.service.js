@@ -162,6 +162,22 @@ class CreditNoteService {
     const invoice = await Invoice.findById(cn.invoiceId);
     if (!invoice) throw new ApiError(404, 'Originating invoice not found');
 
+    // Re-validate the creditable limit at APPLY time using the CURRENT
+    // totalCredited. The create-time guard reads totalCredited, but that field is
+    // only incremented here at apply — so several notes drafted/approved against
+    // one invoice each pass create (all seeing totalCredited=0) and, without this
+    // re-check, would over-credit the invoice and drive the customer receivable
+    // negative when applied in sequence. (Parallel to the payment over-allocation
+    // guard.) Debit notes increase what's owed, so they are not capped here.
+    if (cn.noteType === 'credit_note') {
+      const alreadyCredited = invoice.totalCredited || 0;
+      const maxCreditable = (invoice.totalAmount || 0) - alreadyCredited;
+      if (cn.totalAmount > maxCreditable + 0.01) {
+        throw new ApiError(400,
+          `Cannot apply credit note ${cn.creditNoteNumber}: amount (${cn.totalAmount}) exceeds the invoice's remaining creditable balance (${Math.max(0, maxCreditable)}).`);
+      }
+    }
+
     // All-or-nothing (audit A9): the invoice update, the GL posting, the AR
     // adjustment and marking the note APPLIED must commit together. Previously the
     // GL post sat in a try/catch that swallowed failures, so an invoice could be
