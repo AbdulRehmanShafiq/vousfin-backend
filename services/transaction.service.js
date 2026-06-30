@@ -20,6 +20,34 @@ const { withTransaction } = require('../utils/withTransaction'); // all-or-nothi
 
 const _r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
+// 1e12 — matches the Joi cap. Beyond this, IEEE-754 doubles lose integer
+// precision for currency, so any larger value is a data-entry/overflow error.
+const MAX_TXN_AMOUNT = 999_999_999_999;
+
+/**
+ * Coerce an amount from ANY caller (Joi-validated UI form or a raw internal
+ * caller) into a finite, positive Number, or throw a clear 400. createTransaction
+ * is the single funnel for every input path, so this is the one place that can
+ * guarantee a non-finite / over-precise / over-large / string amount never
+ * reaches the ledger and breaks the "every entry balances exactly" invariant.
+ *
+ * Headline amounts are cent-rounded (a single value — always safe). Journal-LINE
+ * amounts are coerced but NOT re-rounded: rounding each line independently could
+ * unbalance a compound entry (tax/FX/payroll) that the caller balanced at
+ * sub-cent precision, so we only guarantee they are real finite numbers.
+ *
+ * @param {*} value          the raw amount
+ * @param {string} label     field label for the error message
+ * @param {boolean} round    cent-round the result (true for headline amounts)
+ */
+function toFiniteAmount(value, label, round = false) {
+  const n = typeof value === 'number' ? value : Number(String(value ?? '').trim());
+  if (!Number.isFinite(n)) throw new ApiError(400, `${label} must be a valid number`);
+  if (n <= 0) throw new ApiError(400, `${label} must be greater than zero`);
+  if (n > MAX_TXN_AMOUNT) throw new ApiError(400, `${label} exceeds the maximum allowed value`);
+  return round ? Math.round(n * 100) / 100 : n;
+}
+
 /**
  * Pure settlement arithmetic (audit A6). Rounds to 2dp and snaps sub-cent residue
  * to a full payoff so a fractional payment can't leave an AR/AP line PARTIALLY_PAID
@@ -75,6 +103,45 @@ class TransactionService {
       const firstCredit = data.journalLines.find((l) => l.type === 'credit');
       if (!data.debitAccountId  && firstDebit)  data.debitAccountId  = firstDebit.accountId;
       if (!data.creditAccountId && firstCredit) data.creditAccountId = firstCredit.accountId;
+    }
+
+    // 0b. Input hardening — normalize & strictly validate numeric / date inputs
+    //     up front, before any other guard. createTransaction is the single
+    //     funnel for every input path (form, NL-confirm, installment, batch,
+    //     recurring, system); Joi only guards the UI form, so non-finite,
+    //     over-precise, over-large or string amounts from other callers must be
+    //     caught here before they can reach and silently corrupt the ledger.
+    if (data.journalLines?.length > 0) {
+      let lineDebitTotal = 0;
+      for (const line of data.journalLines) {
+        // Normalize the line side to canonical lowercase so the balance check,
+        // the ledger posting and report aggregation (all of which key on exact
+        // 'debit'/'credit') agree. A wrong-case or unknown side would otherwise be
+        // silently dropped — risking a no-op or mis-balanced entry.
+        line.type = String(line.type ?? '').trim().toLowerCase();
+        if (line.type !== 'debit' && line.type !== 'credit') {
+          throw new ApiError(400, `Journal line type must be "debit" or "credit" (got "${line.type || 'empty'}")`);
+        }
+        if (!line.accountId) {
+          throw new ApiError(400, 'Every journal line must reference an account');
+        }
+        line.amount = toFiniteAmount(line.amount, 'Journal line amount'); // coerce, don't re-round (keep balance)
+        if (line.type === 'debit') lineDebitTotal += line.amount;
+      }
+      // The canonical amount of a compound entry IS its debit total — derive it
+      // when the caller omitted the headline amount (e.g. NL/installment paths).
+      if (data.amount === undefined || data.amount === null || data.amount === '') {
+        data.amount = Math.round(lineDebitTotal * 100) / 100;
+      }
+    }
+    if (data.amount !== undefined && data.amount !== null && data.amount !== '') {
+      data.amount = toFiniteAmount(data.amount, 'Amount', true); // headline → cent-rounded
+    }
+    if (data.transactionDate !== undefined && data.transactionDate !== null) {
+      const parsedDate = new Date(data.transactionDate);
+      if (Number.isNaN(parsedDate.getTime())) {
+        throw new ApiError(400, 'Transaction date is not a valid date');
+      }
     }
 
     // 1. Core Validation
