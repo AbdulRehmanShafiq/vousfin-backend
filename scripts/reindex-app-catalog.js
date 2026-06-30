@@ -36,7 +36,43 @@ async function main() {
   const help = await reindexHelp();
   console.log(`  help:    total=${help.total} indexed=${help.indexed} skipped=${help.skipped}`);
 
+  await verifyRetrieval();
+
   await mongoose.disconnect();
+}
+
+// Self-check: a few known queries must resolve to the expected entry. This
+// catches an embedding-space mismatch (e.g. some docs embedded by Gemini and
+// others by the local fallback when the quota was exhausted mid-run) which the
+// counts above cannot detect.
+async function verifyRetrieval() {
+  const embeddingService = require('../services/embeddingService');
+  const vectorStore = require('../services/vectorStore.service');
+  const { GLOBAL_CATALOG_BUSINESS_ID } = require('../config/constants');
+
+  const canaries = [
+    { q: 'who owes me money', dataType: 'app_catalog', expectPrefix: 'sales.receivables' },
+    { q: 'how do i create an invoice', dataType: 'app_help', expectPrefix: 'help.sales' },
+    { q: 'how do i run payroll', dataType: 'app_help', expectPrefix: 'help.payroll' },
+  ];
+
+  console.log('\nVerifying retrieval…');
+  let failures = 0;
+  for (const c of canaries) {
+    const vec = await embeddingService.embedQuery(c.q);
+    const hits = await vectorStore.searchSimilar(vec, GLOBAL_CATALOG_BUSINESS_ID, 2, { dataTypes: [c.dataType], queryText: c.q });
+    const top = hits[0];
+    const ok = top && String(top.recordId).startsWith(c.expectPrefix) && Number(top.vectorScore) >= 0.6;
+    console.log(`  ${ok ? 'PASS' : 'WARN'}  "${c.q}" -> ${top ? `${top.recordId} (${Number(top.vectorScore).toFixed(2)})` : 'NONE'}`);
+    if (!ok) failures += 1;
+  }
+  if (failures) {
+    console.warn(`\n⚠  ${failures} canary(ies) failed — embeddings may be inconsistent (e.g. a Gemini quota fallback`);
+    console.warn('   left some docs as local-hash vectors). Re-run "node scripts/reindex-app-catalog.js --purge"');
+    console.warn('   once real Gemini embedding quota is available.');
+  } else {
+    console.log('  All canaries passed — retrieval is healthy.');
+  }
 }
 
 main().catch(async (err) => {
