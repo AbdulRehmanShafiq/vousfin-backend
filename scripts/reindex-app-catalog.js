@@ -14,9 +14,13 @@ async function main() {
   console.log('Connected.\n');
 
   const { reindexAppCatalog } = require('../services/appCatalogIndex.service');
+  const { reindexHelp } = require('../services/helpCorpus.service');
   console.log('Indexing the global app catalog...');
-  const stats = await reindexAppCatalog();
-  console.log(`\nDone. total=${stats.total} indexed=${stats.indexed} skipped=${stats.skipped}`);
+  const cat = await reindexAppCatalog();
+  console.log(`  catalog: total=${cat.total} indexed=${cat.indexed} skipped=${cat.skipped}`);
+  console.log('Indexing the global help corpus...');
+  const help = await reindexHelp();
+  console.log(`  help:    total=${help.total} indexed=${help.indexed} skipped=${help.skipped}`);
 
   await mongoose.disconnect();
 }

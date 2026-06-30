@@ -3,6 +3,7 @@
 const ApiResponse = require('../utils/ApiResponse');
 const { searchCatalog } = require('../services/catalogSearch.service');
 const appCatalogIndex = require('../services/appCatalogIndex.service');
+const helpCorpus = require('../services/helpCorpus.service');
 
 /**
  * GET /api/v1/search/catalog?q=&limit=&disabled=
@@ -32,8 +33,9 @@ async function catalogSearch(req, res, next) {
  */
 async function reindexCatalog(req, res, next) {
   try {
-    const stats = await appCatalogIndex.reindexAppCatalog();
-    return ApiResponse.success(res, stats, 'App catalog reindexed');
+    const catalog = await appCatalogIndex.reindexAppCatalog();
+    const help = await helpCorpus.reindexHelp();
+    return ApiResponse.success(res, { catalog, help }, 'App catalog + help reindexed');
   } catch (err) {
     return next(err);
   }

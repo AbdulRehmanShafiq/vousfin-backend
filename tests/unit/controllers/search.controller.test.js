@@ -2,9 +2,11 @@
 
 jest.mock('../../../services/catalogSearch.service', () => ({ searchCatalog: jest.fn() }));
 jest.mock('../../../services/appCatalogIndex.service', () => ({ reindexAppCatalog: jest.fn() }));
+jest.mock('../../../services/helpCorpus.service', () => ({ reindexHelp: jest.fn() }));
 
 const { searchCatalog } = require('../../../services/catalogSearch.service');
 const appCatalogIndex = require('../../../services/appCatalogIndex.service');
+const helpCorpus = require('../../../services/helpCorpus.service');
 const controller = require('../../../controllers/search.controller');
 
 function mockRes() {
@@ -43,14 +45,19 @@ describe('search.controller.catalogSearch', () => {
 });
 
 describe('search.controller.reindexCatalog', () => {
-  it('runs the reindex and returns its stats', async () => {
+  it('runs both the catalog and help reindex and returns combined stats', async () => {
     appCatalogIndex.reindexAppCatalog.mockResolvedValue({ total: 65, indexed: 65, skipped: 0 });
+    helpCorpus.reindexHelp.mockResolvedValue({ total: 55, indexed: 55, skipped: 0 });
     const res = mockRes();
     await controller.reindexCatalog({}, res, jest.fn());
     expect(appCatalogIndex.reindexAppCatalog).toHaveBeenCalledTimes(1);
+    expect(helpCorpus.reindexHelp).toHaveBeenCalledTimes(1);
     expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
       success: true,
-      data: expect.objectContaining({ total: 65 }),
+      data: expect.objectContaining({
+        catalog: expect.objectContaining({ total: 65 }),
+        help: expect.objectContaining({ total: 55 }),
+      }),
     }));
   });
 });
