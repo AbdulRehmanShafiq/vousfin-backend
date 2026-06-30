@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const logger = require('../config/logger');
 
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1/models';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 const DEFAULT_MODEL = process.env.GEMINI_EMBEDDING_MODEL || 'gemini-embedding-001';
 const DIMENSIONS = parseInt(process.env.EMBEDDING_DIMENSIONS, 10) || 768;
 const MAX_RETRIES = parseInt(process.env.EMBEDDING_MAX_RETRIES, 10) || 4;
@@ -69,12 +69,23 @@ async function fetchWithTimeout(url, options, timeoutMs = TIMEOUT_MS) {
   }
 }
 
+// gemini-embedding-001 returns 3072-dim vectors by default. We pin
+// outputDimensionality to DIMENSIONS (768) to match the Atlas index and the
+// local fallback. Truncated Matryoshka (MRL) embeddings are NOT pre-normalized
+// by the API, so we L2-normalize here to keep cosine similarity meaningful and
+// consistent with how full-size vectors arrive already normalized.
+function normalizeToDimensions(values, dimensions = DIMENSIONS) {
+  const sliced = values.length > dimensions ? values.slice(0, dimensions) : values;
+  const norm = Math.sqrt(sliced.reduce((sum, value) => sum + value * value, 0)) || 1;
+  return sliced.map((value) => value / norm);
+}
+
 function extractEmbeddingValues(payload) {
   const values = payload?.embedding?.values || payload?.embeddings?.[0]?.values;
   if (!Array.isArray(values) || values.length === 0) {
     throw new Error('Embedding API returned no embedding values');
   }
-  return values;
+  return normalizeToDimensions(values);
 }
 
 async function postGeminiEmbedding(body, endpoint) {
@@ -124,6 +135,7 @@ async function embedQuery(text) {
     const payload = await postGeminiEmbedding({
       content: { parts: [{ text }] },
       taskType: 'RETRIEVAL_QUERY',
+      outputDimensionality: DIMENSIONS,
     }, 'embedContent');
     return extractEmbeddingValues(payload);
   } catch (error) {
@@ -155,6 +167,7 @@ async function embedDocuments(texts) {
           model: `models/${DEFAULT_MODEL}`,
           content: { parts: [{ text }] },
           taskType: 'RETRIEVAL_DOCUMENT',
+          outputDimensionality: DIMENSIONS,
         })),
       }, 'batchEmbedContents');
 
@@ -162,7 +175,7 @@ async function embedDocuments(texts) {
       if (!Array.isArray(batchEmbeddings) || batchEmbeddings.length !== batch.length) {
         throw new Error('Embedding API returned an unexpected batch shape');
       }
-      embeddings.push(...batchEmbeddings.map((embedding) => embedding.values));
+      embeddings.push(...batchEmbeddings.map((embedding) => normalizeToDimensions(embedding.values)));
     } catch (error) {
       if (process.env.AI_EMBEDDING_STRICT === 'true') throw error;
       logger.warn(`[embeddingService] API document embedding failed; using local fallback: ${error.message}`);

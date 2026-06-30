@@ -17,7 +17,7 @@ const AIInteractionLog = require('../models/AIInteractionLog.model');
 const { extractJSON } = require('./nlParser/services/geminiService');
 const logger = require('../config/logger');
 
-const RAG_REFUSAL = "I don't have enough financial data indexed to answer that question accurately. This may be because the data is still being indexed. Please try again after reindexing, or ask about a different time period.";
+const RAG_REFUSAL = "I couldn't find financial records relevant to that question. I can answer about your revenue, expenses, profit, cash flow, and tax position for periods that have recorded activity. Try naming a specific month (for example, \"expenses in February 2026\"), or open the matching report page for the full breakdown.";
 
 // ── System prompt ─────────────────────────────────────────────────────────────
 
