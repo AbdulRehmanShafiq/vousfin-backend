@@ -103,6 +103,7 @@ async function upsertEmbedding(payload) {
     embedding,
     summaryHash,
     metadata = {},
+    scope = 'tenant',
   } = payload;
 
   if (!businessId || !dataType || !recordId || !period || !summary || !summaryHash) {
@@ -129,6 +130,7 @@ async function upsertEmbedding(payload) {
       embedding,
       summaryHash,
       metadata,
+      scope,
       updatedAt: new Date(),
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
