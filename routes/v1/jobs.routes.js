@@ -25,6 +25,7 @@ const JOBS = {
   'forecast-materialize':   () => require('../../jobs/forecastMaterialize.job').runMaterializeSweep(),
   'forecast-retrain':       () => require('../../jobs/forecastRetrain.job').runRetrainSweep(),
   'compliance-reminders':   () => require('../../jobs/complianceReminder.job').runComplianceReminderJob(),
+  'fixed-asset-depreciation': () => require('../../jobs/fixedAssetDepreciation.job').runOnce(),
   'thirteen-week-cash':     async () => {
     const Business = require('../../models/Business.model');
     const svc = require('../../services/thirteenWeekCashFlow.service');

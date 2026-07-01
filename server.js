@@ -209,7 +209,19 @@ const startServer = async () => {
         }
       });
 
-      logger.info('⏰ AR/AP automation jobs scheduled (recurring bills + invoices + transactions + reminders + dunning + accrual recognition + trend monitor)');
+      // ── Fixed-asset depreciation — daily 04:00, posts any due annual period ──
+      // Idempotent (per-year key) so a daily run only posts when a full year has
+      // elapsed; the daily cadence just means depreciation lands promptly.
+      const fixedAssetDepreciationJob = require('./jobs/fixedAssetDepreciation.job');
+      cron.schedule('0 4 * * *', async () => {
+        try {
+          await fixedAssetDepreciationJob.runOnce();
+        } catch (err) {
+          logger.error(`[cron] fixedAssetDepreciation error: ${err.message}`);
+        }
+      });
+
+      logger.info('⏰ AR/AP automation jobs scheduled (recurring bills + invoices + transactions + reminders + dunning + accrual recognition + trend monitor + fixed-asset depreciation)');
     } catch (err) {
       logger.warn(`⚠️ AR/AP automation jobs failed to schedule (non-fatal): ${err.message}`);
     }

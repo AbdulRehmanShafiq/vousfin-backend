@@ -128,6 +128,50 @@ class FixedAssetService {
     return { posted: true, journalEntryId: je._id, asset };
   }
 
+  // ── Scheduled / batch depreciation ──────────────────────────────────
+  /**
+   * Is the asset's NEXT annual depreciation period actually due as of `asOf`?
+   * Guards the scheduled runner from posting a year before a full year has
+   * elapsed. Pure (no DB). An asset with N years posted is due for year N+1 once
+   * at least N+1 full years have elapsed since acquisition, while active and not
+   * past its useful life.
+   */
+  isDepreciationDue(asset, asOf = new Date()) {
+    if (!asset || asset.status !== 'active') return false;
+    const posted = Number(asset.depreciationPostedYears) || 0;
+    const life = Math.max(1, Math.floor(Number(asset.usefulLifeYears) || 1));
+    if (posted >= life) return false;
+    const acq = asset.acquisitionDate ? new Date(asset.acquisitionDate) : null;
+    if (!acq || isNaN(acq.getTime())) return false;
+    const elapsedYears = Math.floor((asOf - acq) / (365.25 * 24 * 3600 * 1000));
+    return elapsedYears >= posted + 1;
+  }
+
+  /**
+   * Post depreciation for every asset whose next annual period is due. Idempotent
+   * (postDepreciation carries a per-year idempotency key) and fault-isolated: one
+   * asset's failure never aborts the sweep. Optionally scoped to one business.
+   * @returns {Promise<{scanned,due,posted,skipped,errors:Array}>}
+   */
+  async runDueDepreciation(asOf = new Date(), { businessId } = {}) {
+    const query = { status: 'active' };
+    if (businessId) query.businessId = businessId;
+    const assets = await FixedAsset.find(query).lean();
+
+    const result = { scanned: assets.length, due: 0, posted: 0, skipped: 0, errors: [] };
+    for (const asset of assets) {
+      if (!this.isDepreciationDue(asset, asOf)) { result.skipped++; continue; }
+      result.due++;
+      try {
+        const r = await this.postDepreciation(asset._id, asset.businessId);
+        if (r.posted) result.posted++; else result.skipped++;
+      } catch (err) {
+        result.errors.push({ assetId: String(asset._id), businessId: String(asset.businessId), error: err.message });
+      }
+    }
+    return result;
+  }
+
   // ── Disposal ────────────────────────────────────────────────────────
   async disposeAsset(assetId, businessId, { disposalDate, proceeds = 0 } = {}) {
     const asset = await this.getAsset(assetId, businessId);
