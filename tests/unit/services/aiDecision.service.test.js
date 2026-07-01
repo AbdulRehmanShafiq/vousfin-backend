@@ -1,6 +1,6 @@
 'use strict';
 jest.mock('../../../repositories/aiDecision.repository', () => ({
-  create: jest.fn(), setOutcome: jest.fn(), findByBusiness: jest.fn(), findByIdForBusiness: jest.fn(),
+  create: jest.fn(), setOutcome: jest.fn(), findByBusiness: jest.fn(), findByIdForBusiness: jest.fn(), outcomeBreakdown: jest.fn(),
 }));
 jest.mock('../../../config/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 
@@ -38,5 +38,10 @@ describe('aiDecision.service', () => {
   it('recordOutcome is a no-op when decisionId is falsy', async () => {
     await service.recordOutcome(null, BIZ, 'accepted');
     expect(repo.setOutcome).not.toHaveBeenCalled();
+  });
+
+  it('applyUserOutcome PROPAGATES errors (unlike the swallowing recordOutcome)', async () => {
+    repo.setOutcome.mockRejectedValue(new Error('AIDecision outcome already set'));
+    await expect(service.applyUserOutcome('d1', BIZ, 'corrected')).rejects.toThrow(/already set/i);
   });
 });

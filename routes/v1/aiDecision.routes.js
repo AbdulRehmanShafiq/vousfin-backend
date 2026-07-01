@@ -10,7 +10,10 @@ const { PERMISSIONS } = require('../../config/constants');
 
 router.use(authMiddleware, requireBusiness, attachMembership, requirePermission(PERMISSIONS.AI_REVIEW));
 
-router.get('/',    ctrl.list);
-router.get('/:id', ctrl.getById);
+router.get('/',            ctrl.list);
+router.get('/stats',       ctrl.stats);          // Phase 1 — calibration (before /:id)
+router.get('/:id',         ctrl.getById);
+router.get('/:id/explain', ctrl.explain);        // Phase 2 — grounded "why"
+router.post('/:id/outcome', ctrl.setOutcome);    // Phase 2 — accept/correct/reverse
 
 module.exports = router;

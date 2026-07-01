@@ -32,6 +32,16 @@ class AIDecisionService {
 
   list(businessId, filters = {}) { return repo.findByBusiness(businessId, filters); }
   getById(id, businessId) { return repo.findByIdForBusiness(id, businessId); }
+
+  /**
+   * Explicit, user-initiated outcome set (correct/reverse from the review UI).
+   * Unlike recordOutcome(), this PROPAGATES errors so the endpoint can return
+   * proper 404/409 semantics. Returns the updated doc, or null if not found;
+   * throws 'AIDecision outcome already set' if the outcome was already resolved.
+   */
+  applyUserOutcome(id, businessId, outcome, correctedTo = null) {
+    return repo.setOutcome(id, businessId, outcome, correctedTo);
+  }
 }
 
 module.exports = new AIDecisionService();
