@@ -11,7 +11,10 @@
 const crypto = require('crypto');
 const logger = require('../config/logger');
 
-const CHUNK = 10; // bounded concurrency — protects Mongo/Atlas under large imports
+// Bounded concurrency for the first pass. Tunable via env: on a small shared
+// Atlas tier, fewer parallel multi-doc transactions means fewer write-conflicts
+// on the same account balances (which the recovery pass would otherwise mop up).
+const CHUNK = Math.max(1, Number(process.env.BATCH_POST_CONCURRENCY) || 8);
 
 class BatchPostingService {
   /**
@@ -73,6 +76,36 @@ class BatchPostingService {
           });
         }
       }
+    }
+
+    // ── Recovery pass ────────────────────────────────────────────────────────
+    // Most bulk-import failures are TRANSIENT write-conflicts: several rows in a
+    // chunk update the same account balance at once, so MongoDB aborts the losers.
+    // Retry each failed row SEQUENTIALLY (no contention) so those rows aren't
+    // silently lost. Each retry carries a stable idempotency key, so the rare
+    // "commit outcome unknown" case can never double-post. Permanent errors
+    // (bad account, validation) simply fail again with the same reason.
+    if (results.failed.length) {
+      const beforeRecovery = results.failed.length;
+      const stillFailed = [];
+      for (const f of results.failed) {
+        const raw = items[f.index];
+        if (!raw) { stillFailed.push(f); continue; }
+        const item = { ...raw, businessId, inputMethod: raw.inputMethod || source };
+        delete item.originalRow;
+        item.idempotencyKey = raw.idempotencyKey
+          || crypto.createHash('sha256').update(`${businessId}:${batchId}:${f.index}`).digest('hex');
+        try {
+          const res = await approvalService.submitOrPost(item, actor, ipAddress, { source });
+          if (res.pendingApproval) results.pending++;
+          else { results.posted++; if (res.transaction?._id) results.postedIds.push(res.transaction._id); }
+        } catch (err) {
+          stillFailed.push({ ...f, error: err?.message || f.error });
+        }
+      }
+      results.failed = stillFailed;
+      const recovered = beforeRecovery - results.failed.length;
+      if (recovered > 0) logger.info(`[batch] ${batchId}: recovered ${recovered}/${beforeRecovery} failed row(s) on sequential retry`);
     }
 
     logger.info(`[batch] ${batchId}: ${results.posted} posted, ${results.pending} pending-approval, ${results.skipped} skipped, ${results.failed.length} failed (of ${results.total})`);
