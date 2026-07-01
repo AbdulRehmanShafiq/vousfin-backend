@@ -8,8 +8,13 @@
 'use strict';
 const accountRepository = require('../repositories/account.repository');
 const transactionRepository = require('../repositories/transaction.repository');
-const { JOURNAL_STATUS } = require('../config/constants');
+const { JOURNAL_STATUS, TRANSACTION_TYPES } = require('../config/constants');
+const { sanitizeAndValidateId } = require('../utils/sanitize.helper');
 const { ApiError } = require('../utils/ApiError');
+
+// AR / AP control account codes (seeded defaults; see config/constants DEFAULT_ACCOUNTS).
+const AR_CONTROL_CODE = '1110';
+const AP_CONTROL_CODE = '2110';
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
@@ -111,4 +116,75 @@ async function recomputeBusinessBalances(businessId, { apply = false } = {}) {
   return { businessId, applied: apply, balanced: drift.balanced, changeCount: changes.length, totalAbsDrift: drift.totalAbsDrift, changes };
 }
 
-module.exports = { computeDrift, accountDerivedBalance, recomputeBusinessBalances };
+// Statuses that still carry an outstanding AR/AP balance in the ledger.
+const OPEN_AR_AP_STATUSES = [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.PARTIALLY_SETTLED];
+
+/** Σ of one numeric field over a collection, filtered — returns 0 when empty. */
+async function _sumField(Model, match, field) {
+  const rows = await Model.aggregate([
+    { $match: match },
+    { $group: { _id: null, sum: { $sum: `$${field}` } } },
+  ]);
+  return r2(rows?.[0]?.sum || 0);
+}
+
+/**
+ * VE-5 / VE-6 — reconcile the AR/AP party sub-ledger against the ledger, and
+ * report control-account attribution.
+ *
+ * The HARD invariant is the sub-ledger reconcile: the cached party-balance sum
+ * (Σ Customer.currentReceivableBalance) MUST equal the customer-linked open AR
+ * remaining balance in the ledger (and the vendor equivalent for AP). A non-zero
+ * `subledgerDrift` means a party balance diverged from ledger truth.
+ *
+ * The control account (1110 AR / 2110 AP) is directly postable (its control flag
+ * is metadata, not a posting block — see docs/plans/01 §4.4), so it may hold
+ * additional AR/AP posted directly without a party. That remainder is reported as
+ * `unattributed` (control-derived − party-linked ledger) for visibility; it is NOT
+ * a failure.
+ *
+ * @param {string} businessId
+ * @returns {Promise<{ ar:Object, ap:Object, reconciled:boolean }>}
+ */
+async function computeArApSubledgerDrift(businessId) {
+  const bizId = sanitizeAndValidateId(businessId);
+  const Customer = require('../models/Customer.model');
+  const Vendor = require('../models/Vendor.model');
+  const JournalEntry = require('../models/JournalEntry.model');
+
+  const { accounts } = await computeDrift(businessId);
+  const arControl = accounts.find((a) => a.code === AR_CONTROL_CODE);
+  const apControl = accounts.find((a) => a.code === AP_CONTROL_CODE);
+
+  const [customerBalSum, vendorBalSum, arLinkedLedger, apLinkedLedger] = await Promise.all([
+    _sumField(Customer, { businessId: bizId }, 'currentReceivableBalance'),
+    _sumField(Vendor, { businessId: bizId }, 'currentPayableBalance'),
+    _sumField(JournalEntry, {
+      businessId: bizId, transactionType: TRANSACTION_TYPES.CREDIT_SALE,
+      customerId: { $ne: null }, status: { $in: OPEN_AR_AP_STATUSES },
+    }, 'remainingBalance'),
+    _sumField(JournalEntry, {
+      businessId: bizId, transactionType: TRANSACTION_TYPES.CREDIT_PURCHASE,
+      vendorId: { $ne: null }, status: { $in: OPEN_AR_AP_STATUSES },
+    }, 'remainingBalance'),
+  ]);
+
+  const build = (control, subledgerSum, partyLinkedLedger) => {
+    const controlDerived = r2(control?.derived || 0);
+    const subledgerDrift = r2(subledgerSum - partyLinkedLedger);
+    return {
+      controlDerived,
+      subledgerSum: r2(subledgerSum),
+      partyLinkedLedger: r2(partyLinkedLedger),
+      subledgerDrift,
+      unattributed: r2(controlDerived - partyLinkedLedger),
+      reconciled: subledgerDrift === 0,
+    };
+  };
+
+  const ar = build(arControl, customerBalSum, arLinkedLedger);
+  const ap = build(apControl, vendorBalSum, apLinkedLedger);
+  return { ar, ap, reconciled: ar.reconciled && ap.reconciled };
+}
+
+module.exports = { computeDrift, accountDerivedBalance, recomputeBusinessBalances, computeArApSubledgerDrift };

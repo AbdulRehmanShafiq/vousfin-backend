@@ -2,7 +2,7 @@ require('dotenv').config({ path: '.env.local' });
 const dns = require('dns');
 dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
 const mongoose = require('mongoose');
-const { computeDrift } = require('../services/ledgerIntegrity.service');
+const { computeDrift, computeArApSubledgerDrift } = require('../services/ledgerIntegrity.service');
 const Business = require('../models/Business.model');
 const connectDB = require('../config/database');
 const logger = require('../config/logger');
@@ -45,6 +45,18 @@ async function runGate() {
           failed = true;
         } else {
           logger.info(`[PASS] Business ${b.name} (${b._id}) is balanced with 0 drift.`);
+        }
+
+        // VE-5/VE-6 — AR/AP party sub-ledger reconcile. subledgerDrift is a hard
+        // failure; `unattributed` (direct-to-control postings) is informational.
+        const sub = await computeArApSubledgerDrift(String(b._id));
+        if (!sub.reconciled) {
+          logger.error(`[FAILED] Business ${b.name} (${b._id}) AR/AP sub-ledger drift!`);
+          logger.error(`  AR: customer balances ${sub.ar.subledgerSum} vs ledger ${sub.ar.partyLinkedLedger} (drift ${sub.ar.subledgerDrift})`);
+          logger.error(`  AP: vendor balances ${sub.ap.subledgerSum} vs ledger ${sub.ap.partyLinkedLedger} (drift ${sub.ap.subledgerDrift})`);
+          failed = true;
+        } else {
+          logger.info(`[PASS] Sub-ledger reconciled (AR unattributed ${sub.ar.unattributed}, AP unattributed ${sub.ap.unattributed}).`);
         }
       } catch (err) {
         logger.error(`Error scanning business ${b.name} (${b._id}): ${err.message}`);

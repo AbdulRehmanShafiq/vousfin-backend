@@ -37,6 +37,14 @@ const path = require('path');
         console.log(`     ${a.code} ${a.name}: cached ${a.cached} vs derived ${a.derived} → drift ${a.drift}`);
       }
     }
+    // VE-5/VE-6 sub-ledger reconcile (party balances vs party-linked ledger).
+    try {
+      const s = await integrity.computeArApSubledgerDrift(String(b._id));
+      if (!s.reconciled) anyUnbalanced = true;
+      console.log(`   ${s.reconciled ? 'ok ' : '!! '}sub-ledger: AR drift ${s.ar.subledgerDrift} (unattributed ${s.ar.unattributed}), AP drift ${s.ap.subledgerDrift} (unattributed ${s.ap.unattributed})`);
+    } catch (e) {
+      console.log(`   -- sub-ledger check skipped: ${e.message}`);
+    }
   }
   console.log(`\nSummary: ${businesses.length} business(es), worst drift ${worst}, any unbalanced: ${anyUnbalanced}`);
   await mongoose.disconnect();
