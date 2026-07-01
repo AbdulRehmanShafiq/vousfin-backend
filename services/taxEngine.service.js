@@ -355,6 +355,9 @@ async function ensureTaxAccounts(businessId, countryCode = 'PK') {
       normalBalance:  acc.normalBalance,
       isDefault:      acc.isDefault,
       runningBalance: 0,
+      // Only the tax engine computes and posts these — flagged for reporting/
+      // reconciliation tooling (not currently enforced as a posting block).
+      isControlAccount: true,
     });
     created++;
     logger.info(`[TaxEngine] Created tax account ${acc.accountCode} (${acc.accountName}) for business ${businessId}`);

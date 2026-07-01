@@ -50,6 +50,20 @@ describe('taxEngine.ensureTaxAccounts()', () => {
     );
   });
 
+  it('flags newly-created tax accounts as isControlAccount:true (only the tax engine posts to them)', async () => {
+    ChartOfAccount.findOne.mockResolvedValue(null);
+    ChartOfAccount.create.mockResolvedValue({});
+
+    await taxEngine.ensureTaxAccounts('biz1', 'PK');
+
+    expect(ChartOfAccount.create).toHaveBeenCalledWith(
+      expect.objectContaining({ accountCode: '1170', isControlAccount: true })
+    );
+    expect(ChartOfAccount.create).toHaveBeenCalledWith(
+      expect.objectContaining({ accountCode: '2121', isControlAccount: true })
+    );
+  });
+
   it('skips accounts that already exist (idempotent)', async () => {
     ChartOfAccount.findOne.mockResolvedValue({ _id: 'existing' });
 

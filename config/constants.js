@@ -312,6 +312,21 @@ module.exports = {
     // to preserve zero impact on businesses that never enable tax.
   ],
 
+  /**
+   * Control accounts — summarize a subsystem (AR/AP documents, the tax engine)
+   * and must never receive a direct manual/AI posting. Codes here are seeded via
+   * DEFAULT_ACCOUNTS; the dynamic tax-engine range (1170-1177, 2121-2130, see
+   * countryTaxProfiles.js) is covered separately by isTaxEngineControlCode() below.
+   */
+  CONTROL_ACCOUNT_CODES: ['1110', '2110', '2120', '2125', '2145', '2198'],
+
+  /** True for any accountCode in the tax engine's dynamic receivable/payable ranges. */
+  isTaxEngineControlCode(accountCode) {
+    const n = Number(accountCode);
+    if (!Number.isFinite(n)) return false;
+    return (n >= 1170 && n <= 1177) || (n >= 2121 && n <= 2130);
+  },
+
   // ===============================
   // Transaction & Journal Entry Constants
   // ===============================

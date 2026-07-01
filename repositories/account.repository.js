@@ -1,7 +1,7 @@
 // repositories/account.repository.js
 const BaseRepository = require('./base.repository');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
-const { ACCOUNT_TYPES, DEFAULT_ACCOUNTS } = require('../config/constants');
+const { ACCOUNT_TYPES, DEFAULT_ACCOUNTS, CONTROL_ACCOUNT_CODES } = require('../config/constants');
 const { sanitizeAndValidateId } = require('../utils/sanitize.helper');
 const logger = require('../config/logger');
 
@@ -174,32 +174,50 @@ class AccountRepository extends BaseRepository {
       (acc) => acc.accountCode && !existingCodes.has(acc.accountCode)
     );
 
-    if (missing.length === 0) return { inserted: 0 };
+    let inserted = 0;
+    if (missing.length > 0) {
+      const toInsert = missing.map((acc) => ({
+        ...acc,
+        businessId: validBusinessId,
+        runningBalance: 0,
+      }));
 
-    const toInsert = missing.map((acc) => ({
-      ...acc,
-      businessId: validBusinessId,
-      runningBalance: 0,
-    }));
-
-    try {
-      const result = await this.model.insertMany(toInsert, { ordered: false });
-      logger.info(
-        `Synced ${result.length} missing default accounts for business ${validBusinessId}`
-      );
-      return { inserted: result.length };
-    } catch (error) {
-      // E11000 duplicate key — another request beat us to it; safe to ignore
-      if (error.code === 11000 || error.name === 'BulkWriteError') {
-        const inserted = error.result?.nInserted ?? 0;
+      try {
+        const result = await this.model.insertMany(toInsert, { ordered: false });
+        inserted = result.length;
         logger.info(
-          `Sync partial (race): ${inserted} accounts inserted for business ${validBusinessId}`
+          `Synced ${inserted} missing default accounts for business ${validBusinessId}`
         );
-        return { inserted };
+      } catch (error) {
+        // E11000 duplicate key — another request beat us to it; safe to ignore
+        if (error.code === 11000 || error.name === 'BulkWriteError') {
+          inserted = error.result?.nInserted ?? 0;
+          logger.info(
+            `Sync partial (race): ${inserted} accounts inserted for business ${validBusinessId}`
+          );
+        } else {
+          logger.error('syncMissingDefaults failed:', error);
+          throw error;
+        }
       }
-      logger.error('syncMissingDefaults failed:', error);
-      throw error;
     }
+
+    // Backfill isControlAccount:true onto AR/AP/tax-payable accounts created
+    // before this flag existed. Additive/idempotent — only touches accounts not
+    // already flagged, never touches balances or other fields.
+    await this.model.updateMany(
+      {
+        businessId: validBusinessId,
+        isControlAccount: { $ne: true },
+        $or: [
+          { accountCode: { $in: CONTROL_ACCOUNT_CODES } },
+          { accountCode: { $regex: /^(117[0-7]|21(2[1-9]|30))$/ } }, // tax-engine dynamic range
+        ],
+      },
+      { $set: { isControlAccount: true } }
+    );
+
+    return { inserted };
   }
 
   /**

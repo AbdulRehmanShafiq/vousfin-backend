@@ -27,11 +27,12 @@ const inventoryService = require('../../../services/inventory.service');
 const { ApiError } = require('../../../utils/ApiError');
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
-const makeAccount = (id, normalBalance = 'Debit') => ({
+const makeAccount = (id, normalBalance = 'Debit', overrides = {}) => ({
   _id: id,
   normalBalance,
   accountName: 'Test Account',
   runningBalance: 0,
+  ...overrides,
 });
 
 const makeTx = (overrides = {}) => ({
@@ -131,6 +132,49 @@ describe('TransactionService.createTransaction()', () => {
     await transactionService.createTransaction(VALID_DATA, 'user1', '127.0.0.1');
     // _updateAccountBalance is called twice (debit + credit), each calls updateRunningBalance
     expect(accountRepository.updateRunningBalance).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── isControlAccount is metadata-only — NOT a posting block ────────────────────
+// AR (1110), AP (2110), and tax-payable accounts are flagged `isControlAccount`
+// for reporting/future reconciliation tooling, but VousFin has no per-customer
+// AR/AP sub-accounts — Credit Sale, Payment Received, Credit Purchase, Payment
+// Made, GST Payment, and WHT Payment are everyday transaction types that MUST
+// post directly to these exact accounts (confirmed against the frontend's
+// accountFilterRules.js, which routes them there deliberately). A blanket
+// "block direct posting to control accounts" restriction was considered and
+// rejected — it would have broken these core, everyday flows.
+describe('TransactionService.createTransaction() — control accounts remain directly postable', () => {
+  test('Credit Sale still posts directly to a control-flagged AR account', async () => {
+    accountRepository.findOneByBusinessAndId.mockImplementation((_bizId, accId) =>
+      Promise.resolve(
+        accId === 'acc001'
+          ? makeAccount(accId, 'Debit', { isControlAccount: true, accountName: 'Accounts Receivable' })
+          : makeAccount(accId, 'Credit', { accountType: 'Revenue' })
+      )
+    );
+    const tx = await transactionService.createTransaction(
+      { ...VALID_DATA, transactionType: 'Credit Sale' }, 'user1', '127.0.0.1'
+    );
+    expect(tx).toHaveProperty('_id');
+  });
+
+  test('a compound journalLines entry touching a control-flagged account still posts (no block)', async () => {
+    accountRepository.findAllByBusinessAndIds.mockResolvedValue([
+      { _id: 'acc001' },
+      { _id: 'acc003', isControlAccount: true },
+    ]);
+    const tx = await transactionService.createTransaction(
+      {
+        ...VALID_DATA,
+        journalLines: [
+          { accountId: 'acc001', type: 'debit', amount: 500 },
+          { accountId: 'acc003', type: 'credit', amount: 500 },
+        ],
+      },
+      'user1', '127.0.0.1'
+    );
+    expect(tx).toHaveProperty('_id');
   });
 });
 

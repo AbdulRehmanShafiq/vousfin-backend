@@ -56,6 +56,17 @@ const chartOfAccountSchema = new mongoose.Schema(
       ref: 'ChartOfAccount',
       default: null,
     },
+    /**
+     * Control accounts (AR, AP, tax payable/receivable) summarize a subsystem
+     * (invoices/bills, tax engine) and must never receive a direct manual/AI
+     * posting — only the owning subsystem may post to them (it sets
+     * `allowControlPosting` explicitly). See services/transaction.service.js.
+     */
+    isControlAccount: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     normalBalance: {
       type: String,
       enum: Object.values(NORMAL_BALANCE),
