@@ -13,6 +13,8 @@ const reconciler = require('../services/reconciler.service');
 const collector = require('../services/collector.service');
 const paymentsAgent = require('../services/paymentsAgent.service');
 const closeAgent = require('../services/closeAgent.service');
+const stpScorecard = require('../services/stpScorecard.service');
+const closeReadiness = require('../services/closeReadiness.service');
 const orchestrator = require('../services/orchestrator.service');
 const nlControl = require('../services/nlControl.service');
 const policy = require('../services/autonomyPolicy.service');
@@ -63,6 +65,20 @@ class AutonomyController {
   // GET /autonomy/close/status — the month-end checklist (the plan view)
   async getCloseStatus(req, res, next) {
     try { res.json({ success: true, data: await closeAgent.getCloseStatus(req.user.businessId) }); }
+    catch (err) { next(err); }
+  }
+
+  // GET /autonomy/stp-scorecard — Phase 3: automation-depth rates (?days=90)
+  async getStpScorecard(req, res, next) {
+    try {
+      const days = Math.min(365, Math.max(7, Number(req.query.days) || 90));
+      res.json({ success: true, data: await stpScorecard.getScorecard(req.user.businessId, { days }) });
+    } catch (err) { next(err); }
+  }
+
+  // GET /autonomy/close/readiness — Phase 3: weighted close-readiness checklist
+  async getCloseReadiness(req, res, next) {
+    try { res.json({ success: true, data: await closeReadiness.getReadiness(req.user.businessId) }); }
     catch (err) { next(err); }
   }
 

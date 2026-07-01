@@ -18,6 +18,8 @@ router.get('/inbox',                  ctrl.getInbox);        // ?capability=
 router.post('/scan',                  ctrl.scan);            // agents look for work → inbox
 router.post('/payments/hold',         ctrl.setPaymentHold);  // { vendorId, hold } — per-vendor payment hold
 router.get('/close/status',           ctrl.getCloseStatus);  // month-end checklist (the plan view)
+router.get('/close/readiness',        ctrl.getCloseReadiness); // Phase 3 — weighted close-readiness score
+router.get('/stp-scorecard',          ctrl.getStpScorecard);   // Phase 3 — automation-depth rates (?days=)
 router.get('/plans',                  ctrl.getPlans);        // routines on offer + latest run
 router.post('/plans/:key/run',        ctrl.runPlan);         // run a routine (weekly_cash | monthly_close)
 router.post('/control',               ctrl.control);         // { text } — plain-language control line
