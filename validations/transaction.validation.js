@@ -198,6 +198,9 @@ const createInstallmentSchema = createTransactionSchema.keys({
  */
 const naturalLanguageSchema = Joi.object({
   text: Joi.string().min(5).max(500).required().trim(),
+  // Clarification round counter — the frontend bumps this each time it re-parses
+  // after the user answers a follow-up question. Capped so parsing always ends.
+  attempt: Joi.number().integer().min(0).max(5).optional(),
 });
 
 /**

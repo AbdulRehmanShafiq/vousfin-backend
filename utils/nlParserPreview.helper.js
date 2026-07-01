@@ -120,6 +120,8 @@ function mapParserToPreview(parsed, rawText) {
     confidence,
     requiresReview,
     reviewReasons,
+    clarification = null,
+    needsClarification = false,
     success,
   } = parsed;
 
@@ -147,6 +149,9 @@ function mapParserToPreview(parsed, rawText) {
     confidence:      confidence?.overall ?? null,
     requiresReview,
     reviewReasons,
+    // Optional single follow-up question when a critical field is unclear.
+    clarification,
+    needsClarification,
 
     // Phase 2: Installment / financing metadata — must NOT be dropped
     isInstallment:           parsedData.isInstallment             || false,

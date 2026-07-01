@@ -243,7 +243,7 @@ const recordInstallmentPayment = async (req, res, next) => {
  */
 const processNaturalLanguage = async (req, res, next) => {
   try {
-    const { text } = req.body;
+    const { text, attempt } = req.body;
     if (!text || text.trim().length < 5) {
       throw new ApiError(400, 'Please provide a longer transaction description');
     }
@@ -258,7 +258,9 @@ const processNaturalLanguage = async (req, res, next) => {
       logger.warn('NL parse: could not load business accounts (non-fatal):', acctErr.message);
     }
 
-    const parsed = await parserService.parseTransaction(text, businessAccounts);
+    const parsed = await parserService.parseTransaction(text, businessAccounts, {
+      attempt: Number(attempt) || 0,
+    });
     const preview = mapParserToPreview(parsed, text);
 
     if (req.user.businessId && (preview.debitAccount || preview.creditAccount)) {

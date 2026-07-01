@@ -10,6 +10,7 @@ const { normalizeExtraction } = require('./normalizationService');
 const { generateJournalEntries } = require('./journalGeneratorService');
 const { validateResult } = require('./validationService');
 const { calculateConfidence, evaluateReviewNeed } = require('../utils/confidenceCalculator');
+const { buildClarification } = require('../utils/clarificationBuilder');
 
 /**
  * Parse a natural language transaction description into a structured
@@ -69,6 +70,12 @@ async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts
 
   const { requiresReview, reviewReasons } = evaluateReviewNeed(confidence, normalized);
 
+  // If a critical field is still missing/ambiguous, prepare ONE plain-English
+  // follow-up question. The frontend collects the answer and re-parses (with a
+  // higher `attempt`) so the form is filled with greater confidence. Stateless +
+  // round-capped, so it always terminates.
+  const clarification = buildClarification(confidence, normalized, { attempt: opts.attempt || 0 });
+
   // Add validation warnings to review reasons
   if (warnings.length > 0) {
     reviewReasons.push(...warnings);
@@ -124,6 +131,8 @@ async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts
     confidence,
     requiresReview: requiresReview || !isValid || errors.length > 0,
     reviewReasons: [...new Set(reviewReasons)], // deduplicate
+    clarification,                    // null, or { field, question, options? }
+    needsClarification: !!clarification,
   };
 }
 
