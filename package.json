@@ -13,6 +13,7 @@
     "migrate:backfill-accuracy": "node migrations/backfill_forecast_accuracy.js",
     "rag:create-vector-index": "node scripts/create-vector-search-index.js",
     "test:integrity": "node scripts/run-integrity-gate.js",
+    "eval": "node scripts/eval/runEval.js",
     "test": "jest --forceExit --detectOpenHandles",
     "test:unit": "jest tests/unit --forceExit --detectOpenHandles",
     "test:integration": "jest tests/integration --forceExit --detectOpenHandles",

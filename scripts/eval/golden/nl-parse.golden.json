@@ -1,0 +1,12 @@
+[
+  { "nlType": "salary",             "expectedType": "Salary" },
+  { "nlType": "depreciation",       "expectedType": "Depreciation" },
+  { "nlType": "gst_inclusive_sale", "expectedType": "GST Collection" },
+  { "nlType": "cash_sale",          "expectedType": "Cash Sale" },
+  { "nlType": "credit_purchase",    "expectedType": "Credit Purchase" },
+  { "nlType": "loan_received",      "expectedType": "Loan Disbursement" },
+  { "nlType": "owner_investment",   "expectedType": "Owner Investment" },
+  { "nlType": "refund",             "expectedType": "Refund" },
+  { "nlType": "prepaid_expense",    "expectedType": "Prepaid Expense" },
+  { "nlType": "inventory_purchase", "expectedType": "Inventory Purchase" }
+]
