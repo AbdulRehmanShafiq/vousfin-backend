@@ -43,6 +43,7 @@ const approvalRoutes = require('./v1/approval.routes'); // #6 — approval workf
 const bankReconciliationRoutes = require('./v1/bankReconciliation.routes'); // #7 — bank-statement reconciliation
 const alertRoutes = require('./v1/alert.routes'); // FR-02.1/02.3 — financial alerts + trend monitor
 const healthIndicatorRoutes = require('./v1/healthIndicators.routes'); // FR-03.2 — 40+ health indicators
+const aiDecisionRoutes = require('./v1/aiDecision.routes'); // Intelligence Roadmap Phase 0 — AI Decision Ledger
 
 // Mount v1 routes under /api/v1
 router.use('/auth', authRoutes);
@@ -109,6 +110,7 @@ router.use('/cash-flow/thirteen-week', require('./v1/thirteenWeekCashFlow.routes
 router.use('/feedback',       require('./v1/feedback.routes'));       // User feedback submissions
 router.use('/support',        require('./v1/support.routes'));        // Support tickets
 router.use('/announcements',  require('./v1/announcement.routes'));   // Platform announcements (active)
+router.use('/ai-decisions',   aiDecisionRoutes);                       // Intelligence Roadmap Phase 0 — AI Decision Ledger
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
