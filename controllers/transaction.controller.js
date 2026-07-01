@@ -11,6 +11,7 @@ const { TRANSACTION_SOURCES } = require('../config/constants');
 const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
 const { parseExcelTransactions } = require('../utils/excelParser.utils');
+const aiDecisionService = require('../services/aiDecision.service');
 const logger = require('../config/logger');
 
 /**
@@ -321,6 +322,21 @@ const processNaturalLanguage = async (req, res, next) => {
       }
     }
 
+    // ── AI Decision Ledger (Phase 0): record the parse lineage ──────────────
+    const aiDecision = await aiDecisionService.record(req.user.businessId, 'parse', {
+      inputsSummary: text.slice(0, 2000),
+      candidates: [preview.debitAccount, preview.creditAccount].filter(Boolean),
+      decision: {
+        transactionType: preview.transactionType,
+        debitAccount: preview.debitAccount, creditAccount: preview.creditAccount,
+        amount: preview.amount,
+      },
+      confidence: parsed.confidence?.overall ?? null,
+      model: 'gemini-nl-parser',
+      promptVersion: 'nl-v1',
+    });
+    if (aiDecision?._id) preview.aiDecisionId = String(aiDecision._id);
+
     // ── Opt-in zero-click auto-post (Phase 3) ──────────────────────────────────
     // Installments have their own multi-step config (down payment, frequency,
     // interest) — out of scope for auto-post; always fall through to preview.
@@ -349,6 +365,7 @@ const processNaturalLanguage = async (req, res, next) => {
           // amount still parks for approval even at 100% AI confidence, so the
           // response must not claim an auto-post happened.
           if (!result.pendingApproval) {
+            await aiDecisionService.recordOutcome(preview.aiDecisionId, req.user.businessId, 'accepted', null);
             const pct = Math.round(parsed.confidence.overall * 100);
             return ApiResponse.created(
               res,
@@ -468,6 +485,7 @@ const confirmNaturalLanguage = async (req, res, next) => {
         `Submitted for approval — amount exceeds the ${result.threshold} approval limit`
       );
     }
+    await aiDecisionService.recordOutcome(req.body._aiDecisionId, req.user.businessId, 'accepted', null);
     ApiResponse.created(res, result.transaction, 'Transaction recorded from natural language');
   } catch (error) {
     next(error);

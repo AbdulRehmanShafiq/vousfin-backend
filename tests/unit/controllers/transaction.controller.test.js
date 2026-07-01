@@ -22,6 +22,10 @@ jest.mock('../../../services/approval.service', () => ({
 jest.mock('../../../config/logger', () => ({
   info: jest.fn(), warn: jest.fn(), error: jest.fn(),
 }));
+jest.mock('../../../services/aiDecision.service', () => ({
+  record: jest.fn().mockResolvedValue({ _id: 'dec1' }),
+  recordOutcome: jest.fn().mockResolvedValue(undefined),
+}));
 
 const transactionController = require('../../../controllers/transaction.controller');
 const transactionService    = require('../../../services/transaction.service');
@@ -30,6 +34,7 @@ const businessRepository    = require('../../../repositories/business.repository
 const approvalService       = require('../../../services/approval.service');
 const accountRepository     = require('../../../repositories/account.repository');
 const batchPostingService   = require('../../../services/batchPosting.service');
+const aiDecisionService     = require('../../../services/aiDecision.service');
 const { ApiError }          = require('../../../utils/ApiError');
 
 const mockRes = () => {
@@ -204,6 +209,30 @@ describe('transactionController.processNaturalLanguage()', () => {
       // response must not claim the transaction auto-posted.
       expect(res.status).toHaveBeenCalledWith(200);
     });
+  });
+});
+
+// ── AI Decision Ledger (Intelligence Roadmap Phase 0) ───────────────────────────
+describe('processNaturalLanguage — AI decision lineage', () => {
+  test('records a parse decision and returns its id on the preview', async () => {
+    require('../../../repositories/account.repository').findByBusiness.mockResolvedValue([]);
+    parserService.parseTransaction.mockResolvedValue({
+      success: true,
+      parsedData: { amount: 1000, date: '2025-01-15', transactionType: 'Expense', description: 'Electric bill', intent: 'x' },
+      journalEntries: [
+        { account: 'Utilities Expense', entryType: 'debit', amount: 1000 },
+        { account: 'Cash', entryType: 'credit', amount: 1000 },
+      ],
+      confidence: { overall: 0.9 },
+      requiresReview: false, reviewReasons: [],
+      accountResolution: { debit: { matchType: 'exact', confidence: 1 }, credit: { matchType: 'exact', confidence: 1 } },
+    });
+    const req = reqWithUser({ text: 'Paid electricity bill of 1000' });
+    const res = mockRes();
+    await transactionController.processNaturalLanguage(req, res, mockNext);
+    expect(aiDecisionService.record).toHaveBeenCalledWith('biz001', 'parse', expect.objectContaining({ inputsSummary: expect.any(String), confidence: 0.9 }));
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.aiDecisionId).toBe('dec1');
   });
 });
 
