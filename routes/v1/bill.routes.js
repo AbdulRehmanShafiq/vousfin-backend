@@ -9,7 +9,7 @@ const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
 const validate = require('../../middleware/validate.middleware'); // M4
 const { createBillSchema, updateBillSchema } = require('../../validations/bill.validation'); // M4
-const { attachMembership, requirePermission, domainWriteGuard } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { attachMembership, requirePermission, requirePermissionWhen, domainWriteGuard } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
 const { PERMISSIONS } = require('../../config/constants');
 
 router.use(authMiddleware, requireBusiness, attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, approve: PERMISSIONS.TRANSACTION_APPROVE, reverse: PERMISSIONS.TRANSACTION_REVERSE }));
@@ -28,7 +28,12 @@ router.put('/:id', validate(updateBillSchema), billController.updateDraft);
 
 // Approval workflow
 router.post('/:id/submit',  billController.submitForApproval);
-router.post('/:id/approve', requirePermission(PERMISSIONS.TRANSACTION_APPROVE), billController.approve);
+// Approving a clean bill needs transaction:approve. Forcing a BLOCKED 3-way
+// match through (override:true) additionally needs match:override (SoD).
+router.post('/:id/approve',
+  requirePermission(PERMISSIONS.TRANSACTION_APPROVE),
+  requirePermissionWhen((req) => req.body?.override === true, PERMISSIONS.MATCH_OVERRIDE),
+  billController.approve);
 router.post('/:id/reject',  billController.reject);
 
 // Lifecycle

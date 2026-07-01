@@ -1,6 +1,6 @@
 jest.mock('../../../services/membership.service');
 const membershipService = require('../../../services/membership.service');
-const { attachMembership, requirePermission, writeGuard, domainWriteGuard } = require('../../../middleware/rbac.middleware');
+const { attachMembership, requirePermission, requirePermissionWhen, writeGuard, domainWriteGuard } = require('../../../middleware/rbac.middleware');
 
 const mkRes = () => ({});
 beforeEach(() => jest.clearAllMocks());
@@ -47,6 +47,33 @@ test('writeGuard lets GET through but requires the permission on writes', () => 
   expect(getNext).toHaveBeenCalledWith(); // GET passes
   const postNext = jest.fn(); g({ ...viewer, method: 'POST' }, mkRes(), postNext);
   expect(postNext.mock.calls[0][0].statusCode).toBe(403); // viewer blocked from writing
+});
+
+test('requirePermissionWhen enforces the permission only when the predicate is true', () => {
+  const g = requirePermissionWhen((req) => req.body?.override === true, 'match:override');
+  // predicate false → passes through regardless of permissions
+  const clean = jest.fn();
+  g({ body: {}, membership: { permissions: ['transaction:approve'] } }, mkRes(), clean);
+  expect(clean).toHaveBeenCalledWith();
+  // predicate true + missing permission → 403
+  const denied = jest.fn();
+  g({ body: { override: true }, membership: { permissions: ['transaction:approve'] } }, mkRes(), denied);
+  expect(denied.mock.calls[0][0].statusCode).toBe(403);
+  // predicate true + has permission → passes
+  const ok = jest.fn();
+  g({ body: { override: true }, membership: { permissions: ['match:override'] } }, mkRes(), ok);
+  expect(ok).toHaveBeenCalledWith();
+  // owner wildcard passes
+  const owner = jest.fn();
+  g({ body: { override: true }, membership: { permissions: ['*'] } }, mkRes(), owner);
+  expect(owner).toHaveBeenCalledWith();
+});
+
+test('an approver (no match:override) cannot force a blocked 3-way-match bill through', () => {
+  const g = requirePermissionWhen((req) => req.body?.override === true, 'match:override');
+  const denied = jest.fn();
+  g({ body: { override: true, note: 'approve anyway' }, membership: { permissions: ['transaction:approve', 'report:view'] } }, mkRes(), denied);
+  expect(denied.mock.calls[0][0].statusCode).toBe(403);
 });
 
 test('domainWriteGuard routes the permission by what the write does', () => {

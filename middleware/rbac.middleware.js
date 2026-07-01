@@ -31,6 +31,15 @@ const requirePermission = (perm) => (req, res, next) => {
   next();
 };
 
+/**
+ * Guard: require `perm` ONLY when `predicate(req)` is true; otherwise pass through.
+ * Use for higher-risk sub-actions gated by a request flag (e.g. a 3-way-match
+ * override that must need `match:override`, while a normal approval needs only
+ * `transaction:approve`). Use AFTER attachMembership.
+ */
+const requirePermissionWhen = (predicate, perm) => (req, res, next) =>
+  predicate(req) ? requirePermission(perm)(req, res, next) : next();
+
 /** Guard: require any of the given roles. */
 const requireRole = (...roles) => (req, res, next) => {
   const have = req.membership?.roles || [];
@@ -60,4 +69,4 @@ const domainWriteGuard = ({ create, approve, reverse }) => (req, res, next) => {
   return requirePermission(create)(req, res, next);
 };
 
-module.exports = { attachMembership, requirePermission, requireRole, writeGuard, domainWriteGuard };
+module.exports = { attachMembership, requirePermission, requirePermissionWhen, requireRole, writeGuard, domainWriteGuard };

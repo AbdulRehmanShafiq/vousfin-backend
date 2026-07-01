@@ -749,6 +749,11 @@ module.exports = {
     TRANSACTION_CREATE:  'transaction:create',
     TRANSACTION_APPROVE: 'transaction:approve',
     TRANSACTION_REVERSE: 'transaction:reverse',
+    // Higher-risk than a normal approval: forcing a bill past a BLOCKED 3-way
+    // match (goods/PO mismatch or suspected duplicate). Gated separately so a
+    // plain approver cannot override a match discrepancy — only roles granted
+    // match:override (owner by default) may. See bill.routes / bill.service.
+    MATCH_OVERRIDE:      'match:override',
     REPORT_VIEW:         'report:view',
     REPORT_MANAGE:       'report:manage',
     AUDIT_MANAGE:        'audit:manage',
