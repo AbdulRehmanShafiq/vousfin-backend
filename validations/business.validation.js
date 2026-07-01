@@ -84,6 +84,9 @@ const updateBusinessSchema = Joi.object({
   fiscalYearStartMonth: Joi.number().integer().min(1).max(12).optional(),
   logoUrl: logoSchema.optional(),
   ...contactFields,
+  aiSettings: Joi.object({
+    autoPostEnabled: Joi.boolean(),
+  }).optional(),
 }).min(1); // at least one field must be present
 
 /**

@@ -6,6 +6,9 @@ jest.mock('../../../repositories/business.repository', () => ({
   findById: jest.fn().mockResolvedValue({ aiSettings: { autoPostEnabled: false } }),
 }));
 jest.mock('../../../utils/excelParser.utils');
+jest.mock('../../../services/batchPosting.service', () => ({
+  postBatch: jest.fn().mockResolvedValue({ posted: 0, pending: 0, failed: [], batchId: 'batch1' }),
+}));
 // createFormTransaction routes through the approval gate; its evaluate() reads
 // the real Business model. Stub it to "approval disabled → post directly" so the
 // controller delegates straight to the (mocked) transaction service.
@@ -25,6 +28,8 @@ const transactionService    = require('../../../services/transaction.service');
 const parserService         = require('../../../services/nlParser/services/parserService');
 const businessRepository    = require('../../../repositories/business.repository');
 const approvalService       = require('../../../services/approval.service');
+const accountRepository     = require('../../../repositories/account.repository');
+const batchPostingService   = require('../../../services/batchPosting.service');
 const { ApiError }          = require('../../../utils/ApiError');
 
 const mockRes = () => {
@@ -199,6 +204,77 @@ describe('transactionController.processNaturalLanguage()', () => {
       // response must not claim the transaction auto-posted.
       expect(res.status).toHaveBeenCalledWith(200);
     });
+  });
+});
+
+// ── confirmExcelImport — per-row confidence enforcement (Phase 4) ──────────────
+describe('transactionController.confirmExcelImport()', () => {
+  const ACCOUNTS = [
+    { _id: 'acc-rent', accountName: 'Rent' },
+    { _id: 'acc-cash', accountName: 'Cash' },
+  ];
+  const row = (originalRow, confidenceLabel, overrides = {}) => ({
+    originalRow, confidenceLabel,
+    transactionDate: '2026-06-01', description: 'Test row', amount: 100,
+    debitAccountName: 'Rent', creditAccountName: 'Cash',
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    accountRepository.findByBusiness.mockResolvedValue(ACCOUNTS);
+    batchPostingService.postBatch.mockResolvedValue({ posted: 0, pending: 0, failed: [], batchId: 'batch1' });
+  });
+
+  test('High-confidence rows import normally (unchanged behavior)', async () => {
+    const req = reqWithUser({ rows: [row(2, 'High')] });
+    const res = mockRes();
+    await transactionController.confirmExcelImport(req, res, mockNext);
+    expect(batchPostingService.postBatch).toHaveBeenCalledWith(
+      'biz001',
+      expect.arrayContaining([expect.objectContaining({ debitAccountId: 'acc-rent', creditAccountId: 'acc-cash' })]),
+      req.user, req.ip, expect.any(Object)
+    );
+  });
+
+  test('Medium-confidence rows still import but are tagged needsSpotCheck and counted as flagged', async () => {
+    batchPostingService.postBatch.mockResolvedValue({ posted: 1, pending: 0, failed: [], batchId: 'batch1' });
+    const req = reqWithUser({ rows: [row(3, 'Medium')] });
+    const res = mockRes();
+    await transactionController.confirmExcelImport(req, res, mockNext);
+
+    expect(batchPostingService.postBatch).toHaveBeenCalledWith(
+      'biz001',
+      expect.arrayContaining([expect.objectContaining({ metadata: expect.objectContaining({ needsSpotCheck: true }) })]),
+      req.user, req.ip, expect.any(Object)
+    );
+    const jsonArg = res.json.mock.calls[0][0];
+    expect(jsonArg.data.flagged).toBe(1);
+  });
+
+  test('Low-confidence rows are NOT imported — held back with a clear reason', async () => {
+    const req = reqWithUser({ rows: [row(4, 'Low')] });
+    const res = mockRes();
+    await transactionController.confirmExcelImport(req, res, mockNext);
+
+    // Never even attempted to post the low-confidence row.
+    expect(batchPostingService.postBatch).toHaveBeenCalledWith('biz001', [], req.user, req.ip, expect.any(Object));
+    const jsonArg = res.json.mock.calls[0][0];
+    expect(jsonArg.data.failed).toEqual(
+      expect.arrayContaining([expect.objectContaining({ row: 4, error: expect.stringMatching(/confidence/i) })])
+    );
+  });
+
+  test('a mix of High/Medium/Low rows partitions correctly in one request', async () => {
+    batchPostingService.postBatch.mockResolvedValue({ posted: 2, pending: 0, failed: [], batchId: 'batch1' });
+    const req = reqWithUser({ rows: [row(1, 'High'), row(2, 'Medium'), row(3, 'Low')] });
+    const res = mockRes();
+    await transactionController.confirmExcelImport(req, res, mockNext);
+
+    const postedRows = batchPostingService.postBatch.mock.calls[0][1];
+    expect(postedRows).toHaveLength(2); // High + Medium only
+    const jsonArg = res.json.mock.calls[0][0];
+    expect(jsonArg.data.flagged).toBe(1);
+    expect(jsonArg.data.failed).toHaveLength(1);
   });
 });
 

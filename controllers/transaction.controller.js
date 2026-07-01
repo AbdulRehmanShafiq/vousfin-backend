@@ -700,8 +700,21 @@ const confirmExcelImport = async (req, res, next) => {
 
     const transactionsToCreate = [];
     const accountErrors = [];
+    let flagged = 0;
 
     for (const row of rows) {
+      // Phase 4 — per-row confidence enforcement, mirroring the NL 98/95/<95
+      // tiers: High (>=~98%-equivalent) imports as-is; Medium (95-98%-equivalent)
+      // still imports but is flagged for a spot-check; Low (<95%-equivalent) is
+      // held back entirely — never silently posted on a weak guess.
+      if (row.confidenceLabel === 'Low') {
+        accountErrors.push({
+          row: row.originalRow,
+          error: 'Confidence too low for auto-import — please review and correct this row before importing.',
+        });
+        continue;
+      }
+
       // Re-resolve by name (authoritative); fall back to the ID from preview if name is missing
       let debitAccountId  = row.debitAccountId;
       let creditAccountId = row.creditAccountId;
@@ -728,6 +741,8 @@ const confirmExcelImport = async (req, res, next) => {
         continue;
       }
 
+      if (row.confidenceLabel === 'Medium') flagged++;
+
       transactionsToCreate.push({
         transactionDate:      row.transactionDate,
         description:          row.description,
@@ -743,6 +758,9 @@ const confirmExcelImport = async (req, res, next) => {
         businessId,
         inputMethod:          'excel',
         originalRow:          row.originalRow,
+        // Medium-confidence rows still import (not blocked) but are marked so
+        // the user knows to spot-check them — not treated identically to High.
+        ...(row.confidenceLabel === 'Medium' ? { metadata: { needsSpotCheck: true } } : {}),
       });
     }
 
@@ -763,10 +781,11 @@ const confirmExcelImport = async (req, res, next) => {
       successful: batch.posted,
       pending:    batch.pending,
       failed:     [...batch.failed, ...accountErrors],
+      flagged,   // imported but medium-confidence — worth a spot-check
       batchId:    batch.batchId,
     };
 
-    logger.info(`Excel import complete: ${results.successful} posted, ${results.pending} pending approval, ${results.failed.length} failed`);
+    logger.info(`Excel import complete: ${results.successful} posted, ${results.pending} pending approval, ${results.flagged} flagged, ${results.failed.length} failed`);
     const msg = results.pending > 0
       ? `${results.successful} imported, ${results.pending} sent for approval`
       : `${results.successful} transactions imported successfully`;
