@@ -111,6 +111,7 @@ router.use('/feedback',       require('./v1/feedback.routes'));       // User fe
 router.use('/support',        require('./v1/support.routes'));        // Support tickets
 router.use('/announcements',  require('./v1/announcement.routes'));   // Platform announcements (active)
 router.use('/ai-decisions',   aiDecisionRoutes);                       // Intelligence Roadmap Phase 0 — AI Decision Ledger
+router.use('/advisor',        require('./v1/advisor.routes'));         // Intelligence Roadmap Phase 4 — Proactive AI CFO feed
 
 // Health check endpoint (versioned)
 router.get('/health', (req, res) => {
