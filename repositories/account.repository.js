@@ -3,6 +3,7 @@ const BaseRepository = require('./base.repository');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
 const { ACCOUNT_TYPES, DEFAULT_ACCOUNTS, CONTROL_ACCOUNT_CODES } = require('../config/constants');
 const { sanitizeAndValidateId } = require('../utils/sanitize.helper');
+const { matchAccountByName } = require('../utils/accountMatcher');
 const logger = require('../config/logger');
 
 class AccountRepository extends BaseRepository {
@@ -26,45 +27,31 @@ class AccountRepository extends BaseRepository {
   }
 
   /**
-   * Find an account by business and account name (case‑insensitive).
+   * Find an account by business and account name (case‑insensitive, fuzzy fallback).
    * Used during Excel/NL import to resolve account names to IDs.
+   * Backward-compatible bare-account signature — existing callers unaffected.
    * @param {string} businessId
    * @param {string} accountName
    * @returns {Promise<Object|null>}
    */
   async findByBusinessAndName(businessId, accountName) {
+    const { account } = await this.resolveWithConfidence(businessId, accountName);
+    return account;
+  }
+
+  /**
+   * Same lookup as findByBusinessAndName, but returns the match confidence and
+   * matchType alongside the account — for callers that need to know HOW sure
+   * the resolution is (NL parser account-mapping confidence, Excel per-row
+   * scoring), not just the bare result.
+   * @param {string} businessId
+   * @param {string} accountName
+   * @returns {Promise<{ account: Object|null, confidence: number, matchType: string }>}
+   */
+  async resolveWithConfidence(businessId, accountName) {
     const validBusinessId = sanitizeAndValidateId(businessId);
-    if (!accountName) return null;
-    const cleanName = accountName.trim();
-
-    // 1. Exact case-insensitive match
-    const exact = await this.findOne({
-      businessId: validBusinessId,
-      accountName: { $regex: new RegExp(`^${cleanName}$`, 'i') },
-    });
-    if (exact) return exact;
-
-    // 2. Partial / contains match — pick the closest by name length
-    const partials = await this.model.find({
-      businessId: validBusinessId,
-      accountName: { $regex: new RegExp(cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') },
-    }).lean();
-    if (partials.length) return partials[0];
-
-    // 3. Word-overlap fuzzy match — find the account with the most shared words
-    const words = cleanName.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-    if (words.length) {
-      const all = await this.model.find({ businessId: validBusinessId }).lean();
-      let best = null, bestScore = 0;
-      for (const acc of all) {
-        const accWords = acc.accountName.toLowerCase().split(/\s+/);
-        const score = words.filter(w => accWords.some(aw => aw.includes(w) || w.includes(aw))).length;
-        if (score > bestScore) { bestScore = score; best = acc; }
-      }
-      if (bestScore > 0) return best;
-    }
-
-    return null;
+    const all = await this.model.find({ businessId: validBusinessId }).lean();
+    return matchAccountByName(all, accountName);
   }
 
   /**

@@ -11,6 +11,7 @@ const { generateJournalEntries } = require('./journalGeneratorService');
 const { validateResult } = require('./validationService');
 const { calculateConfidence, evaluateReviewNeed } = require('../utils/confidenceCalculator');
 const { buildClarification } = require('../utils/clarificationBuilder');
+const { matchAccountByName } = require('../../../utils/accountMatcher');
 
 /**
  * Parse a natural language transaction description into a structured
@@ -56,8 +57,25 @@ async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts
   // ── Step 5: Validation — pass live accounts so custom names resolve correctly ──
   const { validation, errors, warnings, isValid } = validateResult(normalized, journalEntries, businessAccounts);
 
+  // ── Step 5.5: Real account-mapping confidence ─────────────────────────────
+  // Resolve the journal's debit/credit account NAMES against the already-loaded
+  // live CoA (in-memory — no extra DB round-trip). This replaces Gemini's own
+  // self-reported accountMapping score (uncalibrated, decoupled from what
+  // account name actually gets used) with a real, deterministic confidence —
+  // the foundation the tiered auto-post policy is built on. Falls back to the
+  // synthetic score when no live accounts were supplied (e.g. no CoA yet).
+  const debitEntry  = journalEntries.find((e) => e.entryType === 'debit');
+  const creditEntry = journalEntries.find((e) => e.entryType === 'credit');
+  const debitMatch  = matchAccountByName(businessAccounts, debitEntry?.account);
+  const creditMatch = matchAccountByName(businessAccounts, creditEntry?.account);
+  const accountResolution = { debit: debitMatch, credit: creditMatch };
+
+  const accountMapping = businessAccounts.length > 0
+    ? Math.min(debitMatch.confidence, creditMatch.confidence)
+    : rawConfidence.accountMapping;
+
   // ── Step 6: Confidence & Review ──
-  const confidence = calculateConfidence(rawConfidence);
+  const confidence = calculateConfidence({ ...rawConfidence, accountMapping });
 
   // Adjust account mapping confidence based on validation
   if (!isValid) {
@@ -133,6 +151,7 @@ async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts
     reviewReasons: [...new Set(reviewReasons)], // deduplicate
     clarification,                    // null, or { field, question, options? }
     needsClarification: !!clarification,
+    accountResolution,                 // { debit: {account,confidence,matchType}, credit: {...} }
   };
 }
 
