@@ -12,6 +12,7 @@ const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
 const { parseExcelTransactions } = require('../utils/excelParser.utils');
 const aiDecisionService = require('../services/aiDecision.service');
+const learnedResolution = require('../services/learnedResolution.service');
 const logger = require('../config/logger');
 
 /**
@@ -265,6 +266,20 @@ const processNaturalLanguage = async (req, res, next) => {
     });
     const preview = mapParserToPreview(parsed, text);
 
+    // ── Closed Learning Loop (Phase 1): a learned mapping beats a fuzzy guess ──
+    // If this tenant has previously confirmed accounts for a description like
+    // this one, prefer those account NAMES over the LLM's suggestion. The user
+    // still sees and can change them in the preview — this never overrides an
+    // explicit choice, it only improves the suggestion.
+    if (req.user.businessId) {
+      const learned = await learnedResolution.recallAccounts(req.user.businessId, preview.description || text);
+      if (learned) {
+        preview.debitAccount = learned.debitAccountName;
+        preview.creditAccount = learned.creditAccountName;
+        preview.learnedMapping = true;
+      }
+    }
+
     if (req.user.businessId && (preview.debitAccount || preview.creditAccount)) {
       // Build an in-memory resolver from the accounts we already loaded (no extra DB round-trips).
       const resolve = businessAccounts.length ? buildAccountResolver(businessAccounts) : null;
@@ -366,6 +381,9 @@ const processNaturalLanguage = async (req, res, next) => {
           // response must not claim an auto-post happened.
           if (!result.pendingApproval) {
             await aiDecisionService.recordOutcome(preview.aiDecisionId, req.user.businessId, 'accepted', null);
+            await learnedResolution.learnAccountsFromConfirmation(req.user.businessId, preview.description || text, {
+              debitAccountName: preview.debitAccount, creditAccountName: preview.creditAccount,
+            });
             const pct = Math.round(parsed.confidence.overall * 100);
             return ApiResponse.created(
               res,
@@ -486,6 +504,12 @@ const confirmNaturalLanguage = async (req, res, next) => {
       );
     }
     await aiDecisionService.recordOutcome(req.body._aiDecisionId, req.user.businessId, 'accepted', null);
+    // Learn the FINAL (user-confirmed) description → accounts mapping — this is
+    // where a correction becomes a labeled signal for next time (Phase 1).
+    await learnedResolution.learnAccountsFromConfirmation(req.user.businessId, description, {
+      debitAccountName: req.body.debitAccount || req.body.debitAccountName,
+      creditAccountName: req.body.creditAccount || req.body.creditAccountName,
+    });
     ApiResponse.created(res, result.transaction, 'Transaction recorded from natural language');
   } catch (error) {
     next(error);

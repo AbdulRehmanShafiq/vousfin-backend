@@ -26,6 +26,10 @@ jest.mock('../../../services/aiDecision.service', () => ({
   record: jest.fn().mockResolvedValue({ _id: 'dec1' }),
   recordOutcome: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../../../services/learnedResolution.service', () => ({
+  recallAccounts: jest.fn().mockResolvedValue(null),
+  learnAccountsFromConfirmation: jest.fn().mockResolvedValue(undefined),
+}));
 
 const transactionController = require('../../../controllers/transaction.controller');
 const transactionService    = require('../../../services/transaction.service');
@@ -35,6 +39,7 @@ const approvalService       = require('../../../services/approval.service');
 const accountRepository     = require('../../../repositories/account.repository');
 const batchPostingService   = require('../../../services/batchPosting.service');
 const aiDecisionService     = require('../../../services/aiDecision.service');
+const learnedResolution     = require('../../../services/learnedResolution.service');
 const { ApiError }          = require('../../../utils/ApiError');
 
 const mockRes = () => {
@@ -233,6 +238,56 @@ describe('processNaturalLanguage — AI decision lineage', () => {
     expect(aiDecisionService.record).toHaveBeenCalledWith('biz001', 'parse', expect.objectContaining({ inputsSummary: expect.any(String), confidence: 0.9 }));
     const payload = res.json.mock.calls[0][0];
     expect(payload.data.aiDecisionId).toBe('dec1');
+  });
+});
+
+// ── Closed Learning Loop (Intelligence Roadmap Phase 1) ─────────────────────────
+describe('processNaturalLanguage — learned account resolution', () => {
+  test('applies a learned mapping over the AI suggestion (learned beats fuzzy)', async () => {
+    require('../../../repositories/account.repository').findByBusiness.mockResolvedValue([
+      { _id: 'acc-util', accountName: 'Utilities Expense' },
+      { _id: 'acc-cash', accountName: 'Cash' },
+    ]);
+    learnedResolution.recallAccounts.mockResolvedValue({ debitAccountName: 'Utilities Expense', creditAccountName: 'Cash', hits: 6 });
+    parserService.parseTransaction.mockResolvedValue({
+      success: true,
+      parsedData: { amount: 1000, date: '2025-01-15', transactionType: 'Expense', description: 'Electric bill', intent: 'x', debitAccount: 'Wrong Guess', creditAccount: 'Petty Cash' },
+      journalEntries: [
+        { account: 'Wrong Guess', entryType: 'debit', amount: 1000 },
+        { account: 'Petty Cash', entryType: 'credit', amount: 1000 },
+      ],
+      confidence: { overall: 0.8 },
+      requiresReview: false, reviewReasons: [],
+      accountResolution: { debit: { matchType: 'fuzzy', confidence: 0.5 }, credit: { matchType: 'fuzzy', confidence: 0.5 } },
+    });
+    const req = reqWithUser({ text: 'Paid electricity bill of 1000' });
+    const res = mockRes();
+    await transactionController.processNaturalLanguage(req, res, mockNext);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.learnedMapping).toBe(true);
+    expect(payload.data.debitAccount).toBe('Utilities Expense');
+    expect(payload.data.creditAccount).toBe('Cash');
+  });
+});
+
+describe('confirmNaturalLanguage — learns from the confirmed transaction', () => {
+  test('records the final description → accounts mapping', async () => {
+    approvalService.submitOrPost.mockResolvedValue({ pendingApproval: false, transaction: { _id: 'tx-confirm' } });
+    const req = reqWithUser({
+      description: 'Paid electricity bill',
+      transactionType: 'Expense',
+      amount: 1000,
+      debitAccountId: 'acc-util',
+      creditAccountId: 'acc-cash',
+      debitAccount: 'Utilities Expense',
+      creditAccount: 'Cash',
+    });
+    const res = mockRes();
+    await transactionController.confirmNaturalLanguage(req, res, mockNext);
+    expect(learnedResolution.learnAccountsFromConfirmation).toHaveBeenCalledWith(
+      'biz001', 'Paid electricity bill',
+      { debitAccountName: 'Utilities Expense', creditAccountName: 'Cash' },
+    );
   });
 });
 
