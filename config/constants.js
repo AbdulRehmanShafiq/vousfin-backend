@@ -425,6 +425,25 @@ module.exports = {
     AI_AUTO_POSTED: 'ai_auto_posted',             // NL parse at >=98% confidence, exact account match, opt-in enabled
   },
 
+  // AI Decision Ledger (Intelligence Roadmap Phase 0) — the kind of AI action
+  // that produced a decision record, and the user's eventual verdict on it.
+  AI_DECISION_KINDS: {
+    PARSE:      'parse',       // NL / form parse → suggested transaction
+    CLASSIFY:   'classify',    // Excel/document row classification
+    MATCH:      'match',       // 3-way / bill / bank match
+    RECONCILE:  'reconcile',   // bank/AR/AP reconciliation
+    AUTOPOST:   'autopost',    // zero-click auto-post decision
+    ANOMALY:    'anomaly',     // anomaly verdict
+    FORECAST:   'forecast',    // forecast produced
+    RECOMMEND:  'recommend',   // advisory recommendation
+  },
+  AI_DECISION_OUTCOMES: {
+    PENDING:   'pending',    // recorded; user has not acted yet
+    ACCEPTED:  'accepted',   // user accepted the AI decision as-is
+    CORRECTED: 'corrected',  // user changed it before accepting (correctedTo captures the change)
+    REVERSED:  'reversed',   // a posted AI decision was later reversed
+  },
+
   // Extended journal lifecycle statuses
   JOURNAL_STATUS: {
     DRAFT: 'draft',
@@ -759,12 +778,13 @@ module.exports = {
     AUDIT_MANAGE:        'audit:manage',
     SOD_MANAGE:          'sod:manage',
     COMPLIANCE_MANAGE:   'compliance:manage',
+    AI_REVIEW:           'ai:review',   // view the AI Decision Ledger (lineage of AI actions)
   },
 
   // role -> permission strings. '*' = all permissions.
   ROLE_PERMISSIONS: {
     owner:      ['*'],
-    accountant: ['transaction:create', 'transaction:reverse', 'report:view', 'report:manage'],
+    accountant: ['transaction:create', 'transaction:reverse', 'report:view', 'report:manage', 'ai:review'],
     approver:   ['transaction:approve', 'report:view'],
     viewer:     ['report:view'],
   },
