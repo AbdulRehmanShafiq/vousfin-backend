@@ -7,7 +7,7 @@
 'use strict';
 
 const { _pure } = require('../../../services/proactiveInsights.service');
-const { normalizeLevel, actionFor, normalizeItem, dedupeAndRank, countBy } = _pure;
+const { normalizeLevel, actionFor, normalizeItem, dedupeAndRank, countBy, buildAutoPostedItem } = _pure;
 
 describe('normalizeLevel', () => {
   it('passes through known levels', () => {
@@ -79,5 +79,26 @@ describe('countBy', () => {
       { level: 'critical' }, { level: 'warning' }, { level: 'warning' }, { level: 'info' },
     ]);
     expect(c).toEqual({ critical: 1, warning: 2, info: 1, total: 4 });
+  });
+});
+
+// H6 + Phase 3 auto-post visibility — recently AI-auto-posted entries are
+// surfaced as a passive, low-urgency review item (not a blocking action).
+describe('buildAutoPostedItem', () => {
+  it('returns null when nothing was auto-posted', () => {
+    expect(buildAutoPostedItem(0)).toBeNull();
+  });
+
+  it('builds a low-urgency info item summarizing the count', () => {
+    const item = buildAutoPostedItem(3);
+    expect(item.level).toBe('info');
+    expect(item.title).toMatch(/auto-posted/i);
+    expect(item.message).toMatch(/3/);
+    expect(item.actionTo).toBe('/transactions?filter=ai_auto_posted');
+  });
+
+  it('singularizes the message for exactly one', () => {
+    const item = buildAutoPostedItem(1);
+    expect(item.message).not.toMatch(/1 transactions/i);
   });
 });

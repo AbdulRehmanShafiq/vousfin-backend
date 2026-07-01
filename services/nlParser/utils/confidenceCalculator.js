@@ -4,7 +4,13 @@
  * and determines if human review is required.
  */
 
-const REVIEW_THRESHOLD = 0.75;
+// Tiered confidence policy:
+//   >= AUTO_POST_THRESHOLD → eligible for zero-click auto-post (Phase 3; also
+//     gated on an exact account match + business opt-in, see parserService).
+//   REVIEW_THRESHOLD..AUTO_POST_THRESHOLD → prefill, require one confirm click.
+//   < REVIEW_THRESHOLD → the clarification loop asks a follow-up question.
+const REVIEW_THRESHOLD = 0.95;
+const AUTO_POST_THRESHOLD = 0.98;
 
 /**
  * Calculate overall confidence from individual field scores.
@@ -92,4 +98,5 @@ module.exports = {
   calculateConfidence,
   evaluateReviewNeed,
   REVIEW_THRESHOLD,
+  AUTO_POST_THRESHOLD,
 };

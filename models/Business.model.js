@@ -173,6 +173,18 @@ const businessSchema = new mongoose.Schema(
       allowSelfApproval: { type: Boolean, default: true },
     },
 
+    // ── AI Auto-Post (enterprise accounting hardening, Phase 3) ──────────────
+    /**
+     * aiSettings.autoPostEnabled is an opt-in switch: when true, an NL-parsed
+     * transaction at >=98% confidence with an EXACT account match posts with
+     * zero clicks (still subject to approvalSettings' amount threshold above —
+     * the two gates are independent). Default false — existing businesses see
+     * no behavior change until they explicitly turn it on.
+     */
+    aiSettings: {
+      autoPostEnabled: { type: Boolean, default: false },
+    },
+
     // ── FR-02.3 — Trend-alert thresholds ─────────────────────────────────────
     /**
      * Per-business detection thresholds for the trend monitor. Mixed so new

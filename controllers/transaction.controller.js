@@ -3,11 +3,32 @@ const transactionService = require('../services/transaction.service');
 const installmentService = require('../services/installment.service');
 const parserService = require('../services/nlParser/services/parserService');
 const accountRepository = require('../repositories/account.repository');
+const businessRepository = require('../repositories/business.repository');
 const { mapParserToPreview } = require('../utils/nlParserPreview.helper');
+const { matchAccountByName } = require('../utils/accountMatcher');
+const { AUTO_POST_THRESHOLD } = require('../services/nlParser/utils/confidenceCalculator');
+const { TRANSACTION_SOURCES } = require('../config/constants');
 const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
 const { parseExcelTransactions } = require('../utils/excelParser.utils');
 const logger = require('../config/logger');
+
+/**
+ * Eligible for zero-click auto-post only when ALL of:
+ *  - the business has explicitly opted in (default false)
+ *  - overall confidence clears the auto-post bar
+ *  - BOTH legs resolved to an EXACT account-name match (never on a fuzzy guess,
+ *    regardless of how high the overall score is)
+ * The amount-threshold approval gate in approvalService is a SEPARATE, still-
+ * enforced check — this only decides whether to attempt immediate posting.
+ */
+function isAutoPostEligible(confidence, accountResolution, autoPostEnabled) {
+  if (!autoPostEnabled) return false;
+  if (!confidence || confidence.overall < AUTO_POST_THRESHOLD) return false;
+  if (accountResolution?.debit?.matchType !== 'exact') return false;
+  if (accountResolution?.credit?.matchType !== 'exact') return false;
+  return true;
+}
 
 const resolveAccountIds = async (businessId, row) => {
   let debitAccountId = row.debitAccountId;
@@ -28,35 +49,15 @@ const resolveAccountIds = async (businessId, row) => {
 };
 
 /**
- * Build an in-memory account resolver from a pre-loaded accounts array.
- * Replicates the 3-tier fuzzy matching from accountRepository.findByBusinessAndName
- * so bulk imports need only ONE database query instead of N×2-3.
+ * Build an in-memory account resolver from a pre-loaded accounts array, so
+ * bulk imports need only ONE database query instead of N×2-3. Delegates to the
+ * shared matchAccountByName so every account-name resolution path in the app
+ * (Excel, NL, manual) uses the identical, tested, confidence-scored algorithm —
+ * critical for the auto-post gate, which trusts a SEPARATE matchAccountByName
+ * call (in parserService) to judge "exact match"; if this resolver disagreed
+ * with that judgement, the gate would be meaningless.
  */
-const buildAccountResolver = (accounts) => (name) => {
-  const clean = (name || '').trim();
-  if (!clean) return null;
-  const lower = clean.toLowerCase();
-  // 1. Exact case-insensitive
-  const exact = accounts.find(a => a.accountName.toLowerCase() === lower);
-  if (exact) return exact;
-  // 2. Partial / contains
-  const partial = accounts.find(
-    a => a.accountName.toLowerCase().includes(lower) || lower.includes(a.accountName.toLowerCase())
-  );
-  if (partial) return partial;
-  // 3. Word-overlap fuzzy
-  const words = lower.split(/\s+/).filter(w => w.length > 2);
-  if (words.length) {
-    let best = null, bestScore = 0;
-    for (const acc of accounts) {
-      const accWords = acc.accountName.toLowerCase().split(/\s+/);
-      const score = words.filter(w => accWords.some(aw => aw.includes(w) || w.includes(aw))).length;
-      if (score > bestScore) { bestScore = score; best = acc; }
-    }
-    if (bestScore > 0) return best;
-  }
-  return null;
-};
+const buildAccountResolver = (accounts) => (name) => matchAccountByName(accounts, name).account;
 
 /**
  * Create a transaction from structured form.
@@ -317,6 +318,49 @@ const processNaturalLanguage = async (req, res, next) => {
           }
         }
         preview.resolvedJournalLines = resolvedLines;
+      }
+    }
+
+    // ── Opt-in zero-click auto-post (Phase 3) ──────────────────────────────────
+    // Installments have their own multi-step config (down payment, frequency,
+    // interest) — out of scope for auto-post; always fall through to preview.
+    if (
+      preview.debitAccountId && preview.creditAccountId &&
+      !parsed.parsedData?.isInstallment
+    ) {
+      try {
+        const business = await businessRepository.findById(req.user.businessId);
+        if (isAutoPostEligible(parsed.confidence, parsed.accountResolution, business?.aiSettings?.autoPostEnabled)) {
+          const approvalService = require('../services/approval.service');
+          const transactionData = {
+            transactionDate: preview.transactionDate,
+            description:     preview.description,
+            transactionType: preview.transactionType,
+            amount:          preview.amount,
+            debitAccountId:  preview.debitAccountId,
+            creditAccountId: preview.creditAccountId,
+            businessId:      req.user.businessId,
+            inputMethod:     'nlp',
+            transactionSource: TRANSACTION_SOURCES.AI_AUTO_POSTED,
+            metadata: { aiConfidence: parsed.confidence.overall, autoPosted: true },
+          };
+          const result = await approvalService.submitOrPost(transactionData, req.user, req.ip, { source: 'nl-autopost' });
+          // The amount-threshold gate is independent of confidence — a large
+          // amount still parks for approval even at 100% AI confidence, so the
+          // response must not claim an auto-post happened.
+          if (!result.pendingApproval) {
+            const pct = Math.round(parsed.confidence.overall * 100);
+            return ApiResponse.created(
+              res,
+              { ...preview, autoPosted: true, transaction: result.transaction },
+              `Recorded automatically by AI (${pct}% confidence)`
+            );
+          }
+        }
+      } catch (autoPostErr) {
+        // Never let an auto-post attempt block the user from reviewing/confirming
+        // manually — fall through to the normal preview response.
+        logger.warn('NL auto-post attempt failed (non-fatal, falling back to preview):', autoPostErr.message);
       }
     }
 

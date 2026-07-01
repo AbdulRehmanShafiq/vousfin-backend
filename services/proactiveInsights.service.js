@@ -73,6 +73,24 @@ function dedupeAndRank(items) {
   });
 }
 
+/**
+ * Recently AI-auto-posted entries (Phase 3) are surfaced as a passive,
+ * low-urgency review item — never blocking, since the entries already posted
+ * and are fully reversible. Returns null when there's nothing to show.
+ */
+function buildAutoPostedItem(count) {
+  if (!count) return null;
+  return {
+    id: 'ai_auto_posted',
+    source: 'ai',
+    level: 'info',
+    title: 'Transactions auto-posted by AI',
+    message: `${count} transaction${count === 1 ? '' : 's'} were recorded automatically by AI in the last 24 hours — worth a quick spot-check.`,
+    action: 'Review',
+    actionTo: '/transactions?filter=ai_auto_posted',
+  };
+}
+
 function countBy(items) {
   return {
     critical: items.filter((i) => i.level === 'critical').length,
@@ -92,11 +110,16 @@ async function getNeedsAttention(businessId) {
 
   const trendMonitor = require('./trendMonitor.service'); // lazy — avoid cycle
 
-  const [insightsRes, outlook, anomaly, persistedAlerts] = await Promise.allSettled([
+  const JournalEntry = require('../models/JournalEntry.model'); // lazy — avoid cycle
+  const { TRANSACTION_SOURCES } = require('../config/constants');
+  const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const [insightsRes, outlook, anomaly, persistedAlerts, autoPostedCount] = await Promise.allSettled([
     financialIntelligence.getFinancialInsights(businessId),
     businessHealth.getForwardOutlook(businessId, { horizonMonths: 6 }),
     lstm.fetchAnomalyRisk(businessId),
     trendMonitor.listOpen(businessId),
+    JournalEntry.countDocuments({ businessId, transactionSource: TRANSACTION_SOURCES.AI_AUTO_POSTED, createdAt: { $gte: dayAgo } }),
   ]).then((r) => r.map((x) => (x.status === 'fulfilled' ? x.value : null)));
 
   const items = [];
@@ -133,6 +156,9 @@ async function getNeedsAttention(businessId) {
     }, 'anomaly'));
   }
 
+  const autoPostedItem = buildAutoPostedItem(autoPostedCount);
+  if (autoPostedItem) items.push(autoPostedItem);
+
   const merged = dedupeAndRank(items);
   return {
     items: merged,
@@ -144,5 +170,5 @@ async function getNeedsAttention(businessId) {
 
 module.exports = {
   getNeedsAttention,
-  _pure: { normalizeLevel, actionFor, normalizeItem, dedupeAndRank, countBy },
+  _pure: { normalizeLevel, actionFor, normalizeItem, dedupeAndRank, countBy, buildAutoPostedItem },
 };

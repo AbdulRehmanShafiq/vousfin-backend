@@ -2,6 +2,9 @@
 jest.mock('../../../services/transaction.service');
 jest.mock('../../../services/nlParser/services/parserService');
 jest.mock('../../../repositories/account.repository');
+jest.mock('../../../repositories/business.repository', () => ({
+  findById: jest.fn().mockResolvedValue({ aiSettings: { autoPostEnabled: false } }),
+}));
 jest.mock('../../../utils/excelParser.utils');
 // createFormTransaction routes through the approval gate; its evaluate() reads
 // the real Business model. Stub it to "approval disabled → post directly" so the
@@ -20,6 +23,8 @@ jest.mock('../../../config/logger', () => ({
 const transactionController = require('../../../controllers/transaction.controller');
 const transactionService    = require('../../../services/transaction.service');
 const parserService         = require('../../../services/nlParser/services/parserService');
+const businessRepository    = require('../../../repositories/business.repository');
+const approvalService       = require('../../../services/approval.service');
 const { ApiError }          = require('../../../utils/ApiError');
 
 const mockRes = () => {
@@ -95,6 +100,105 @@ describe('transactionController.processNaturalLanguage()', () => {
 
     await transactionController.processNaturalLanguage(req, res, mockNext);
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  // ── Phase 3: opt-in zero-click auto-post ─────────────────────────────────────
+  describe('opt-in auto-post (>=98% confidence, exact account match, business opted in)', () => {
+    const ACCOUNTS = [
+      { _id: 'acc-util', accountName: 'Utilities Expense' },
+      { _id: 'acc-cash', accountName: 'Cash' },
+    ];
+    const HIGH_CONF_PARSE = {
+      success: true,
+      parsedData: { amount: 1000, date: '2025-01-15', transactionType: 'Expense', description: 'Electricity bill', intent: 'Paid electricity' },
+      journalEntries: [
+        { account: 'Utilities Expense', entryType: 'debit', amount: 1000 },
+        { account: 'Cash', entryType: 'credit', amount: 1000 },
+      ],
+      confidence: { overall: 0.99 },
+      requiresReview: false,
+      reviewReasons: [],
+      accountResolution: {
+        debit:  { matchType: 'exact', confidence: 1.0 },
+        credit: { matchType: 'exact', confidence: 1.0 },
+      },
+    };
+
+    beforeEach(() => {
+      transactionService.__esModule = true;
+      require('../../../repositories/account.repository').findByBusiness.mockResolvedValue(ACCOUNTS);
+      transactionService.createTransaction.mockResolvedValue({ _id: 'tx-auto' });
+    });
+
+    test('auto-posts with zero clicks when opted in + exact match + >=98% confidence', async () => {
+      businessRepository.findById.mockResolvedValue({ aiSettings: { autoPostEnabled: true } });
+      parserService.parseTransaction.mockResolvedValue(HIGH_CONF_PARSE);
+      const req = reqWithUser({ text: 'Paid electricity bill of 1000 from cash' });
+      const res = mockRes();
+
+      await transactionController.processNaturalLanguage(req, res, mockNext);
+
+      expect(approvalService.submitOrPost).toHaveBeenCalledWith(
+        expect.objectContaining({ transactionSource: 'ai_auto_posted' }),
+        req.user, req.ip, expect.any(Object)
+      );
+      expect(res.status).toHaveBeenCalledWith(201);
+    });
+
+    test('does NOT auto-post when the business has not opted in (default false)', async () => {
+      businessRepository.findById.mockResolvedValue({ aiSettings: { autoPostEnabled: false } });
+      parserService.parseTransaction.mockResolvedValue(HIGH_CONF_PARSE);
+      const req = reqWithUser({ text: 'Paid electricity bill of 1000 from cash' });
+      const res = mockRes();
+
+      await transactionController.processNaturalLanguage(req, res, mockNext);
+
+      expect(approvalService.submitOrPost).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200); // plain preview, unchanged
+    });
+
+    test('does NOT auto-post when the account match is fuzzy, even at 100% overall confidence', async () => {
+      businessRepository.findById.mockResolvedValue({ aiSettings: { autoPostEnabled: true } });
+      parserService.parseTransaction.mockResolvedValue({
+        ...HIGH_CONF_PARSE,
+        confidence: { overall: 1.0 },
+        accountResolution: { debit: { matchType: 'fuzzy', confidence: 0.75 }, credit: { matchType: 'exact', confidence: 1.0 } },
+      });
+      const req = reqWithUser({ text: 'Paid electricity bill of 1000 from cash' });
+      const res = mockRes();
+
+      await transactionController.processNaturalLanguage(req, res, mockNext);
+
+      expect(approvalService.submitOrPost).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    test('does NOT auto-post when confidence is in the 95-98% band', async () => {
+      businessRepository.findById.mockResolvedValue({ aiSettings: { autoPostEnabled: true } });
+      parserService.parseTransaction.mockResolvedValue({ ...HIGH_CONF_PARSE, confidence: { overall: 0.96 } });
+      const req = reqWithUser({ text: 'Paid electricity bill of 1000 from cash' });
+      const res = mockRes();
+
+      await transactionController.processNaturalLanguage(req, res, mockNext);
+
+      expect(approvalService.submitOrPost).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
+
+    test('falls back to the plain preview when the amount still exceeds the approval threshold', async () => {
+      businessRepository.findById.mockResolvedValue({ aiSettings: { autoPostEnabled: true } });
+      parserService.parseTransaction.mockResolvedValue(HIGH_CONF_PARSE);
+      approvalService.submitOrPost.mockResolvedValueOnce({ pendingApproval: true, pendingTransaction: { _id: 'pend1' }, threshold: 500 });
+      const req = reqWithUser({ text: 'Paid electricity bill of 1000 from cash' });
+      const res = mockRes();
+
+      await transactionController.processNaturalLanguage(req, res, mockNext);
+
+      expect(approvalService.submitOrPost).toHaveBeenCalled();
+      // Even though the confidence gate passed, the amount gate parked it — the
+      // response must not claim the transaction auto-posted.
+      expect(res.status).toHaveBeenCalledWith(200);
+    });
   });
 });
 

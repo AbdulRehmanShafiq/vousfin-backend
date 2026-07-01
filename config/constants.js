@@ -422,6 +422,7 @@ module.exports = {
     INSTALLMENT_ENGINE: 'installment_engine',
     PAYMENT_SETTLEMENT: 'payment_settlement',
     BANK_RECONCILIATION: 'bank_reconciliation',   // #7 — entry posted from a bank statement line
+    AI_AUTO_POSTED: 'ai_auto_posted',             // NL parse at >=98% confidence, exact account match, opt-in enabled
   },
 
   // Extended journal lifecycle statuses
