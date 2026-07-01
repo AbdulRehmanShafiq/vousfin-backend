@@ -23,6 +23,25 @@ class AIDecisionRepository extends BaseRepository {
     return this.model.findOne({ _id: id, businessId }).lean();
   }
 
+  /**
+   * Count decisions per outcome for a tenant (optionally one kind). Missing
+   * buckets are filled with 0 so callers always get a complete shape.
+   * @returns {Promise<{pending:number, accepted:number, corrected:number, reversed:number}>}
+   */
+  async outcomeBreakdown(businessId, kind) {
+    const match = { businessId };
+    if (kind) match.kind = kind;
+    const rows = await this.model.aggregate([
+      { $match: match },
+      { $group: { _id: '$outcome', count: { $sum: 1 } } },
+    ]);
+    const out = { pending: 0, accepted: 0, corrected: 0, reversed: 0 };
+    for (const r of rows) {
+      if (Object.prototype.hasOwnProperty.call(out, r._id)) out[r._id] = r.count;
+    }
+    return out;
+  }
+
   /** Set the one-time outcome. Returns null if not found; throws if already set. */
   async setOutcome(id, businessId, newOutcome, correctedTo = null) {
     const existing = await this.model.findOne({ _id: id, businessId }).lean();
