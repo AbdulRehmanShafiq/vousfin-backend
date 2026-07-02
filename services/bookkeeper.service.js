@@ -17,6 +17,7 @@
 //
 'use strict';
 const { parseTransaction, parseTransactionFromImage } = require('./nlParser');
+const aiDecisionService = require('./aiDecision.service');
 const actionRouter = require('./actionRouter.service');
 const executors = require('./actionExecutors');
 const entityMemory = require('./entityMemory.service');
@@ -169,6 +170,21 @@ async function ingest({ businessId, rawText, source, submittedBy, image, mimeTyp
     return { document: await docRepo.findById(doc._id), action: null };
   }
 
+  // ── AI Decision Ledger (Phase 5): document-classification lineage ─────────
+  const aiDecision = await aiDecisionService.record(businessId, 'classify', {
+    inputsSummary: (hasImage ? `[document image] ${text}` : text).trim().slice(0, 2000) || 'document image',
+    candidates: (read.payload.journalLines || []).map((l) => l.accountName || l.description || '').filter(Boolean).slice(0, 20),
+    decision: {
+      description: read.payload.description,
+      amount: read.payload.amount,
+      transactionType: read.parsedData?.transactionType || null,
+    },
+    confidence: read.confidence,
+    model: hasImage ? 'gemini-vision-doc' : 'gemini-nl-parser',
+    promptVersion: 'doc-v1',
+    linkedEntityId: doc._id,
+  });
+
   // Propose through the router — policy decides queue vs. auto-post.
   const action = await actionRouter.propose({
     businessId,
@@ -186,6 +202,12 @@ async function ingest({ businessId, rawText, source, submittedBy, image, mimeTyp
     sourceId:   String(doc._id),
   });
 
+  // Auto-executed by policy → the classification stands accepted; queued
+  // proposals stay pending until the owner acts on them.
+  if (action.status === 'executed') {
+    await aiDecisionService.recordOutcome(aiDecision?._id ? String(aiDecision._id) : null, businessId, 'accepted', null);
+  }
+
   await docRepo.update(doc._id, {
     $set: {
       status: action.status === 'executed' ? SOURCE_DOCUMENT_STATUS.POSTED : SOURCE_DOCUMENT_STATUS.PROPOSED,
@@ -193,6 +215,7 @@ async function ingest({ businessId, rawText, source, submittedBy, image, mimeTyp
       confidence: read.confidence,
       proposedActionId: action._id,
       journalEntryId: action.result?.journalEntryId || null,
+      ...(aiDecision?._id ? { aiDecisionId: aiDecision._id } : {}),
     },
   });
 

@@ -8,6 +8,10 @@ jest.mock('../../../services/transaction.service', () => ({ createTransaction: j
 jest.mock('../../../repositories/account.repository', () => ({ findByBusiness: jest.fn() }));
 jest.mock('../../../repositories/business.repository', () => ({ findById: jest.fn() }));
 jest.mock('../../../repositories/sourceDocument.repository', () => ({ create: jest.fn(), update: jest.fn(), findById: jest.fn() }));
+jest.mock('../../../services/aiDecision.service', () => ({
+  record: jest.fn().mockResolvedValue({ _id: 'dec-doc' }),
+  recordOutcome: jest.fn().mockResolvedValue(undefined),
+}));
 
 const { parseTransaction } = require('../../../services/nlParser');
 const actionRouter = require('../../../services/actionRouter.service');
@@ -115,6 +119,27 @@ describe('ingest', () => {
 
   it('rejects empty input', async () => {
     await expect(bookkeeper.ingest({ businessId: BIZ, rawText: '   ' })).rejects.toThrow(/Nothing to read/i);
+  });
+
+  it('records document-classification lineage in the AI Decision Ledger (Phase 5)', async () => {
+    const aiDecisionService = require('../../../services/aiDecision.service');
+    parseTransaction.mockResolvedValue(parsedOk());
+    await bookkeeper.ingest({ businessId: BIZ, rawText: 'paid 50000 office rent to ABC', source: 'manual', submittedBy: 'u1' });
+    expect(aiDecisionService.record).toHaveBeenCalledWith(BIZ, 'classify', expect.objectContaining({
+      inputsSummary: expect.stringContaining('office rent'),
+      confidence: expect.any(Number),
+      linkedEntityId: 'doc1',
+    }));
+    // proposal (not auto-executed) stays pending — no outcome yet
+    expect(aiDecisionService.recordOutcome).not.toHaveBeenCalled();
+  });
+
+  it('marks the classify decision accepted when policy auto-executes the post', async () => {
+    const aiDecisionService = require('../../../services/aiDecision.service');
+    parseTransaction.mockResolvedValue(parsedOk());
+    actionRouter.propose.mockResolvedValueOnce({ _id: 'act2', status: 'executed', result: { journalEntryId: 'je9' } });
+    await bookkeeper.ingest({ businessId: BIZ, rawText: 'paid 50000 office rent to ABC', source: 'manual', submittedBy: 'u1' });
+    expect(aiDecisionService.recordOutcome).toHaveBeenCalledWith('dec-doc', BIZ, 'accepted', null);
   });
 
   it('marks the document failed when the AI cannot read it', async () => {
