@@ -15,6 +15,7 @@ const paymentsAgent = require('../services/paymentsAgent.service');
 const closeAgent = require('../services/closeAgent.service');
 const stpScorecard = require('../services/stpScorecard.service');
 const closeReadiness = require('../services/closeReadiness.service');
+const brainContext = require('../services/brainContext.service');
 const orchestrator = require('../services/orchestrator.service');
 const nlControl = require('../services/nlControl.service');
 const policy = require('../services/autonomyPolicy.service');
@@ -79,6 +80,13 @@ class AutonomyController {
   // GET /autonomy/close/readiness — Phase 3: weighted close-readiness checklist
   async getCloseReadiness(req, res, next) {
     try { res.json({ success: true, data: await closeReadiness.getReadiness(req.user.businessId) }); }
+    catch (err) { next(err); }
+  }
+
+  // GET /autonomy/brain-context — Phase 6: the unified shared context every
+  // agent (and the UI) reasons from.
+  async getBrainContext(req, res, next) {
+    try { res.json({ success: true, data: await brainContext.getContext(req.user.businessId) }); }
     catch (err) { next(err); }
   }
 

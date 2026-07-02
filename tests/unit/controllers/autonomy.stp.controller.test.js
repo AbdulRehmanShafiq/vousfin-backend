@@ -3,9 +3,11 @@
 // GET /autonomy/stp-scorecard and GET /autonomy/close/readiness.
 jest.mock('../../../services/stpScorecard.service', () => ({ getScorecard: jest.fn() }));
 jest.mock('../../../services/closeReadiness.service', () => ({ getReadiness: jest.fn() }));
+jest.mock('../../../services/brainContext.service', () => ({ getContext: jest.fn() }));
 
 const stpScorecard = require('../../../services/stpScorecard.service');
 const closeReadiness = require('../../../services/closeReadiness.service');
+const brainContext = require('../../../services/brainContext.service');
 const ctrl = require('../../../controllers/autonomy.controller');
 
 const mockRes = () => { const r = {}; r.status = jest.fn().mockReturnValue(r); r.json = jest.fn().mockReturnValue(r); return r; };
@@ -42,5 +44,15 @@ describe('autonomy controller — close readiness', () => {
     closeReadiness.getReadiness.mockRejectedValue(new Error('boom'));
     await ctrl.getCloseReadiness(req(), mockRes(), next);
     expect(next).toHaveBeenCalledWith(expect.any(Error));
+  });
+});
+
+describe('autonomy controller — brain context (Phase 6)', () => {
+  test('returns the unified tenant context', async () => {
+    brainContext.getContext.mockResolvedValue({ learning: { totalLearnedFacts: 12 }, asOf: 'now' });
+    const res = mockRes();
+    await ctrl.getBrainContext(req(), res, next);
+    expect(brainContext.getContext).toHaveBeenCalledWith('biz1');
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
   });
 });
