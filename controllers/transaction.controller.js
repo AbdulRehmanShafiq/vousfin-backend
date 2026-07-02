@@ -13,6 +13,7 @@ const { ApiError } = require('../utils/ApiError');
 const { parseExcelTransactions } = require('../utils/excelParser.utils');
 const aiDecisionService = require('../services/aiDecision.service');
 const learnedResolution = require('../services/learnedResolution.service');
+const importAccountResolution = require('../services/importAccountResolution.service');
 const logger = require('../config/logger');
 
 /**
@@ -636,30 +637,40 @@ const uploadExcelPreview = async (req, res, next) => {
 
     // ── Resolve account names → IDs (single DB query) ─────────────────────
     const allAccounts = await accountRepository.findByBusiness(businessId);
-    const resolve = buildAccountResolver(allAccounts);
 
     const resolvedRows = [];
     for (const row of validRows) {
-      const debit  = resolve(row.debitAccountName);
-      const credit = resolve(row.creditAccountName);
+      // Full deterministic chain in resolve-only mode: exact name → code →
+      // bookkeeping synonym. An account that STILL doesn't resolve is not an
+      // error any more — it's marked "will be created" and the confirm step
+      // creates it with a deterministic type/code. Only junk names (too short
+      // / numeric-only) remain hard errors.
+      const debitRes  = await importAccountResolution.resolveForImport(businessId, allAccounts, row.debitAccountName, {
+        side: 'debit', transactionType: row.transactionType, allowCreate: false,
+      });
+      const creditRes = await importAccountResolution.resolveForImport(businessId, allAccounts, row.creditAccountName, {
+        side: 'credit', transactionType: row.transactionType, allowCreate: false,
+      });
+      const debit  = debitRes.account;
+      const credit = creditRes.account;
 
-      if (!debit) {
+      if (!debit && !debitRes.wouldCreate) {
         errors.push({
           row:     row.originalRow,
           field:   'debitAccount',
-          message: `Debit account not found: "${row.debitAccountName}". Check your Chart of Accounts.`,
+          message: `Debit account not usable: "${row.debitAccountName}". Use a real account name or its code.`,
         });
         continue;
       }
-      if (!credit) {
+      if (!credit && !creditRes.wouldCreate) {
         errors.push({
           row:     row.originalRow,
           field:   'creditAccount',
-          message: `Credit account not found: "${row.creditAccountName}". Check your Chart of Accounts.`,
+          message: `Credit account not usable: "${row.creditAccountName}". Use a real account name or its code.`,
         });
         continue;
       }
-      if (debit._id.toString() === credit._id.toString()) {
+      if (debit && credit && debit._id.toString() === credit._id.toString()) {
         errors.push({
           row:     row.originalRow,
           field:   'general',
@@ -668,24 +679,29 @@ const uploadExcelPreview = async (req, res, next) => {
         continue;
       }
 
-      // Downgrade confidence if account was fuzzy-matched
+      // Downgrade confidence if account was fuzzy-matched; cap (not Low-block)
+      // rows whose account will be created — they import, flagged for review.
       let rowConf = row.confidenceScore;
       const rowFlags = [...(row.confidenceFlags || [])];
-      if (debit.accountName.toLowerCase()  !== row.debitAccountName.toLowerCase())  {
+      if (debit && debit.accountName.toLowerCase()  !== row.debitAccountName.toLowerCase())  {
         rowConf  -= 15; rowFlags.push('debit_fuzzy');
       }
-      if (credit.accountName.toLowerCase() !== row.creditAccountName.toLowerCase()) {
+      if (credit && credit.accountName.toLowerCase() !== row.creditAccountName.toLowerCase()) {
         rowConf  -= 15; rowFlags.push('credit_fuzzy');
       }
+      if (!debit)  { rowConf = Math.min(rowConf, 79); rowFlags.push('debit_new_account'); }
+      if (!credit) { rowConf = Math.min(rowConf, 79); rowFlags.push('credit_new_account'); }
       rowConf = Math.max(0, rowConf);
       const rowConfLabel = rowConf >= 80 ? 'High' : rowConf >= 50 ? 'Medium' : 'Low';
 
       resolvedRows.push({
         ...row,
-        debitAccountId:    debit._id,
-        creditAccountId:   credit._id,
-        debitAccountName:  debit.accountName,   // normalise to canonical name
-        creditAccountName: credit.accountName,
+        debitAccountId:    debit ? debit._id : null,
+        creditAccountId:   credit ? credit._id : null,
+        debitAccountName:  debit ? debit.accountName : row.debitAccountName,   // canonical when resolved
+        creditAccountName: credit ? credit.accountName : row.creditAccountName,
+        ...(debit  ? {} : { willCreateDebitAccount:  debitRes.wouldCreate }),
+        ...(credit ? {} : { willCreateCreditAccount: creditRes.wouldCreate }),
         confidenceScore:   rowConf,
         confidenceLabel:   rowConfLabel,
         confidenceFlags:   rowFlags,
@@ -738,11 +754,12 @@ const confirmExcelImport = async (req, res, next) => {
 
     // Pre-load all accounts once for re-validation (accounts may have changed since preview)
     const allAccounts = await accountRepository.findByBusiness(businessId);
-    const resolve = buildAccountResolver(allAccounts);
+    const refreshAccounts = () => accountRepository.findByBusiness(businessId);
 
     const transactionsToCreate = [];
     const accountErrors = [];
     let flagged = 0;
+    let createdAccounts = 0;
 
     for (const row of rows) {
       // Phase 4 — per-row confidence enforcement, mirroring the NL 98/95/<95
@@ -757,25 +774,35 @@ const confirmExcelImport = async (req, res, next) => {
         continue;
       }
 
-      // Re-resolve by name (authoritative); fall back to the ID from preview if name is missing
+      // Re-resolve by name (authoritative); fall back to the ID from preview if
+      // name is missing. Resolution runs the full deterministic chain — exact
+      // name → code → bookkeeping synonym ("Owner Equity" → Capital) — and, when
+      // the account genuinely doesn't exist yet, CREATES it with a deterministic
+      // type/code (flagged autoCreated + audit-logged) instead of failing the row.
       let debitAccountId  = row.debitAccountId;
       let creditAccountId = row.creditAccountId;
 
       if (row.debitAccountName) {
-        const acc = resolve(row.debitAccountName);
-        if (!acc) {
-          accountErrors.push({ row: row.originalRow, error: `Debit account not found: "${row.debitAccountName}"` });
+        const r = await importAccountResolution.resolveForImport(businessId, allAccounts, row.debitAccountName, {
+          side: 'debit', transactionType: row.transactionType, userId: req.user.id, refreshAccounts,
+        });
+        if (!r.account) {
+          accountErrors.push({ row: row.originalRow, error: `Debit account not found and could not be created: "${row.debitAccountName}"` });
           continue;
         }
-        debitAccountId = acc._id;
+        if (r.created) createdAccounts++;
+        debitAccountId = r.account._id;
       }
       if (row.creditAccountName) {
-        const acc = resolve(row.creditAccountName);
-        if (!acc) {
-          accountErrors.push({ row: row.originalRow, error: `Credit account not found: "${row.creditAccountName}"` });
+        const r = await importAccountResolution.resolveForImport(businessId, allAccounts, row.creditAccountName, {
+          side: 'credit', transactionType: row.transactionType, userId: req.user.id, refreshAccounts,
+        });
+        if (!r.account) {
+          accountErrors.push({ row: row.originalRow, error: `Credit account not found and could not be created: "${row.creditAccountName}"` });
           continue;
         }
-        creditAccountId = acc._id;
+        if (r.created) createdAccounts++;
+        creditAccountId = r.account._id;
       }
 
       if (!debitAccountId || !creditAccountId) {
@@ -824,13 +851,14 @@ const confirmExcelImport = async (req, res, next) => {
       pending:    batch.pending,
       failed:     [...batch.failed, ...accountErrors],
       flagged,   // imported but medium-confidence — worth a spot-check
+      createdAccounts, // accounts auto-created because a row referenced a new name
       batchId:    batch.batchId,
     };
 
-    logger.info(`Excel import complete: ${results.successful} posted, ${results.pending} pending approval, ${results.flagged} flagged, ${results.failed.length} failed`);
+    logger.info(`Excel import complete: ${results.successful} posted, ${results.pending} pending approval, ${results.flagged} flagged, ${results.failed.length} failed, ${createdAccounts} account(s) auto-created`);
     const msg = results.pending > 0
       ? `${results.successful} imported, ${results.pending} sent for approval`
-      : `${results.successful} transactions imported successfully`;
+      : `${results.successful} transactions imported successfully${createdAccounts > 0 ? ` (${createdAccounts} new account${createdAccounts === 1 ? '' : 's'} added to your chart)` : ''}`;
     ApiResponse.success(res, results, msg);
   } catch (error) {
     next(error);

@@ -30,6 +30,9 @@ jest.mock('../../../services/learnedResolution.service', () => ({
   recallAccounts: jest.fn().mockResolvedValue(null),
   learnAccountsFromConfirmation: jest.fn().mockResolvedValue(undefined),
 }));
+jest.mock('../../../services/importAccountResolution.service', () => ({
+  resolveForImport: jest.fn(),
+}));
 
 const transactionController = require('../../../controllers/transaction.controller');
 const transactionService    = require('../../../services/transaction.service');
@@ -40,6 +43,7 @@ const accountRepository     = require('../../../repositories/account.repository'
 const batchPostingService   = require('../../../services/batchPosting.service');
 const aiDecisionService     = require('../../../services/aiDecision.service');
 const learnedResolution     = require('../../../services/learnedResolution.service');
+const importAccountResolution = require('../../../services/importAccountResolution.service');
 const { ApiError }          = require('../../../utils/ApiError');
 
 const mockRes = () => {
@@ -307,6 +311,11 @@ describe('transactionController.confirmExcelImport()', () => {
   beforeEach(() => {
     accountRepository.findByBusiness.mockResolvedValue(ACCOUNTS);
     batchPostingService.postBatch.mockResolvedValue({ posted: 0, pending: 0, failed: [], batchId: 'batch1' });
+    // Default: emulate plain name resolution against the loaded accounts.
+    importAccountResolution.resolveForImport.mockImplementation(async (biz, accounts, name) => {
+      const acc = (accounts || []).find(a => a.accountName.toLowerCase() === String(name).toLowerCase());
+      return acc ? { account: acc, created: false, how: 'exact' } : { account: null, created: false, how: null };
+    });
   });
 
   test('High-confidence rows import normally (unchanged behavior)', async () => {
@@ -359,6 +368,57 @@ describe('transactionController.confirmExcelImport()', () => {
     const jsonArg = res.json.mock.calls[0][0];
     expect(jsonArg.data.flagged).toBe(1);
     expect(jsonArg.data.failed).toHaveLength(1);
+  });
+
+  // ── Enterprise import resolution: synonyms + auto-create ─────────────────────
+  test('an "Owner Equity" row imports via the synonym chain (the reported bug)', async () => {
+    batchPostingService.postBatch.mockResolvedValue({ posted: 1, pending: 0, failed: [], batchId: 'b' });
+    importAccountResolution.resolveForImport.mockImplementation(async (biz, accounts, name, ctx) => {
+      if (name === 'Owner Equity') return { account: { _id: 'acc-capital', accountName: 'Capital / Investment' }, created: false, how: 'synonym' };
+      if (name === 'Cash') return { account: { _id: 'acc-cash', accountName: 'Cash' }, created: false, how: 'exact' };
+      return { account: null, created: false, how: null };
+    });
+    const req = reqWithUser({ rows: [row(5, 'High', { debitAccountName: 'Cash', creditAccountName: 'Owner Equity', transactionType: 'Owner Investment' })] });
+    const res = mockRes();
+    await transactionController.confirmExcelImport(req, res, mockNext);
+
+    expect(batchPostingService.postBatch).toHaveBeenCalledWith(
+      'biz001',
+      expect.arrayContaining([expect.objectContaining({ debitAccountId: 'acc-cash', creditAccountId: 'acc-capital' })]),
+      req.user, req.ip, expect.any(Object)
+    );
+    // resolution context is passed so type inference can work when creation IS needed
+    expect(importAccountResolution.resolveForImport).toHaveBeenCalledWith(
+      'biz001', expect.any(Array), 'Owner Equity',
+      expect.objectContaining({ side: 'credit', transactionType: 'Owner Investment', userId: 'user1' })
+    );
+  });
+
+  test('a row naming an account that does not exist auto-creates it and reports the count', async () => {
+    batchPostingService.postBatch.mockResolvedValue({ posted: 1, pending: 0, failed: [], batchId: 'b' });
+    importAccountResolution.resolveForImport.mockImplementation(async (biz, accounts, name) => {
+      if (name === 'Drone Fleet Maintenance') return { account: { _id: 'acc-new', accountName: 'Drone Fleet Maintenance' }, created: true, how: 'created' };
+      if (name === 'Cash') return { account: { _id: 'acc-cash', accountName: 'Cash' }, created: false, how: 'exact' };
+      return { account: null, created: false, how: null };
+    });
+    const req = reqWithUser({ rows: [row(6, 'High', { debitAccountName: 'Drone Fleet Maintenance', creditAccountName: 'Cash', transactionType: 'Expense' })] });
+    const res = mockRes();
+    await transactionController.confirmExcelImport(req, res, mockNext);
+
+    const postedRows = batchPostingService.postBatch.mock.calls[0][1];
+    expect(postedRows[0].debitAccountId).toBe('acc-new');
+    const jsonArg = res.json.mock.calls[0][0];
+    expect(jsonArg.data.createdAccounts).toBe(1);
+  });
+
+  test('a truly unresolvable account (junk name) still fails the row with a clear error', async () => {
+    const req = reqWithUser({ rows: [row(7, 'High', { debitAccountName: '###', creditAccountName: 'Cash' })] });
+    const res = mockRes();
+    await transactionController.confirmExcelImport(req, res, mockNext);
+    const jsonArg = res.json.mock.calls[0][0];
+    expect(jsonArg.data.failed).toEqual(
+      expect.arrayContaining([expect.objectContaining({ row: 7, error: expect.stringMatching(/could not be created|not found/i) })])
+    );
   });
 });
 
