@@ -76,6 +76,17 @@ const chartOfAccountSchema = new mongoose.Schema(
       type: Boolean,
       default: false, // true for auto-generated default accounts
     },
+    /**
+     * True when the account was created automatically during a bulk import
+     * because a row referenced an account that didn't exist yet. Surfaced in
+     * the UI so the owner can review/rename these — never silently identical
+     * to hand-created accounts.
+     */
+    autoCreated: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
     runningBalance: {
       type: Number,
       default: 0,
