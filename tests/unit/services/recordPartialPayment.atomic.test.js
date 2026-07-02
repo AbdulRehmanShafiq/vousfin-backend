@@ -55,6 +55,7 @@ beforeEach(() => {
   jest.spyOn(transactionService, 'createTransaction').mockResolvedValue({ _id: 'child1' });
   transactionRepository.findByIdWithDetails.mockResolvedValue(makeParent());
   transactionRepository.updateTransaction.mockResolvedValue({});
+  transactionRepository.updateTransactionGuarded.mockResolvedValue({ _id: 'parent1' });
 });
 afterEach(() => jest.restoreAllMocks());
 
@@ -72,9 +73,11 @@ test('threads ONE session through child entry, parent update, and party balance'
     'u1', '127.0.0.1', 'SESSION'
   );
 
-  // Parent updated WITH the session, reflecting the new balance.
-  expect(transactionRepository.updateTransaction).toHaveBeenCalledWith(
+  // Parent updated WITH the session, reflecting the new balance — through the
+  // optimistic guard (F5) that matches on the remainingBalance we read.
+  expect(transactionRepository.updateTransactionGuarded).toHaveBeenCalledWith(
     'parent1', BIZ,
+    { remainingBalance: 1000 },
     expect.objectContaining({ remainingBalance: 900, partiallyPaidAmount: 100 }),
     'SESSION'
   );

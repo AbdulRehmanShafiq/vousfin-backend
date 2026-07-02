@@ -132,6 +132,21 @@ async function postCompoundJournal(payload, { updateBalances = true, session = n
     throw new ApiError(400, `Journal is not balanced (debits ${r2(sumDebit)} ≠ credits ${r2(sumCredit)}).`);
   }
 
+  // F16 — tenant defense-in-depth: every line's account must belong to the
+  // posting business. createTransaction validates human input; the poster now
+  // guards its (system) callers too, because a wrong-tenant accountId here
+  // would both reference AND re-balance another business's account.
+  const lineAccountIds = [...new Set(lines.map((l) => l.accountId && String(l.accountId._id || l.accountId)))];
+  if (lineAccountIds.some((id) => !id)) {
+    throw new ApiError(400, 'Every journal line must reference an account.');
+  }
+  const ownedAccounts = await accountRepository.findAllByBusinessAndIds(rest.businessId, lineAccountIds);
+  const ownedSet = new Set((ownedAccounts || []).map((a) => String(a._id)));
+  const foreignIds = lineAccountIds.filter((id) => !ownedSet.has(id));
+  if (foreignIds.length > 0) {
+    throw new ApiError(400, `Journal line account(s) do not belong to this business: ${foreignIds.join(', ')}`);
+  }
+
   // Unified idempotency — keyed on metadata.idempotencyKey (one batch = one entry).
   if (idempotencyKey) {
     const existing = await JournalEntry.findOne(
@@ -169,9 +184,32 @@ async function postCompoundJournal(payload, { updateBalances = true, session = n
     return je;
   };
 
-  if (session) return run(session);
-  if (!updateBalances) return run(null);
-  return withTransaction(run);
+  // F7 — the unique index {businessId, metadata.idempotencyKey} is the real
+  // idempotency arbiter: when a concurrent twin wins the insert race, our
+  // create gets E11000. Translate that into "already posted" by returning the
+  // committed twin — the losing attempt's transaction rolled back, so no
+  // balance was double-applied. An E11000 without a key (or with no committed
+  // twin, e.g. an invoice-number collision) is a genuine error and rethrows.
+  const runIdempotent = async (exec) => {
+    try {
+      return await exec();
+    } catch (err) {
+      if (err && err.code === 11000 && idempotencyKey) {
+        const twin = await JournalEntry.findOne(
+          { businessId: rest.businessId, 'metadata.idempotencyKey': idempotencyKey }
+        ).lean();
+        if (twin) {
+          logger.info(`[postCompoundJournal] lost idempotency race — key ${idempotencyKey} already posted as ${twin._id}`);
+          return twin;
+        }
+      }
+      throw err;
+    }
+  };
+
+  if (session) return runIdempotent(() => run(session));
+  if (!updateBalances) return runIdempotent(() => run(null));
+  return runIdempotent(() => withTransaction(run));
 }
 
 /**

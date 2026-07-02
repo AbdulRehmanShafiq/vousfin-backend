@@ -6,11 +6,23 @@ const { TRANSACTION_TYPES, JOURNAL_STATUS, PAYMENT_STATUS } = require('../config
 const { sanitizeAndValidateId, sanitizeQueryObject } = require('../utils/sanitize.helper');
 const logger = require('../config/logger');
 
-/** Active statuses included in financial reports */
+/**
+ * Statuses included in financial reports.
+ *
+ * 'reversed' MUST be included (audit 2026-07-02 F1): a reversed ORIGINAL keeps
+ * status 'reversed' while its counter-entry posts as 'posted'. Excluding the
+ * original would leave the flipped counter-entry in every statement with
+ * nothing to offset it (Cash −100 instead of 0) and would retroactively remove
+ * the original from its historical period. Enterprise GLs keep BOTH entries in
+ * the reports — the pair nets to zero, each side in its own period — which also
+ * matches how the cached running balances were applied (both postings moved
+ * them; see ledgerIntegrity.BALANCE_STATUSES).
+ */
 const REPORT_STATUSES = [
   JOURNAL_STATUS.POSTED,
   JOURNAL_STATUS.PARTIALLY_SETTLED,
   JOURNAL_STATUS.SETTLED,
+  JOURNAL_STATUS.REVERSED,
 ];
 
 /**
@@ -248,6 +260,32 @@ class TransactionRepository extends BaseRepository {
   }
 
   /**
+   * Optimistically-guarded update (audit 2026-07-02 F5). Adds the caller's
+   * `match` conditions to the filter so the write only lands if the document
+   * still looks the way the caller read it (e.g. `{ remainingBalance: 600 }`).
+   * Returns null when the guard misses — the caller lost a concurrent race and
+   * must NOT apply its precomputed values.
+   *
+   * @param {string} id
+   * @param {string} businessId
+   * @param {Object} match       extra filter conditions (the optimistic guard)
+   * @param {Object} updateData
+   * @param {import('mongoose').ClientSession|null} [session]
+   * @returns {Promise<Object|null>} the updated doc, or null if the guard missed
+   */
+  async updateTransactionGuarded(id, businessId, match, updateData, session = null) {
+    const validId = sanitizeAndValidateId(id);
+    const validBusinessId = sanitizeAndValidateId(businessId);
+    const options = { new: true, runValidators: true };
+    if (session) options.session = session;
+    return this.model.findOneAndUpdate(
+      { _id: validId, businessId: validBusinessId, ...match },
+      { ...updateData, updatedAt: new Date() },
+      options
+    ).exec();
+  }
+
+  /**
    * Permanently delete a transaction (use only for reversal in service layer).
    * @param {string} id
    * @param {string} businessId
@@ -303,7 +341,7 @@ class TransactionRepository extends BaseRepository {
     return this.model.find({
       businessId: validBusinessId,
       transactionDate: { $gte: startDate, $lte: endDate },
-      status: { $in: [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.PARTIALLY_SETTLED, JOURNAL_STATUS.SETTLED] },
+      status: { $in: REPORT_STATUSES },
       isArchived: { $ne: true },
       $or: [
         { debitAccountId: validAccountId },
@@ -472,19 +510,23 @@ class TransactionRepository extends BaseRepository {
     // transaction-first inventory sale's COGS (held in journalLines) was invisible
     // to the P&L while still hitting the Balance Sheet — the two disagreed.
     //
-    // Convention preserved from the previous implementation:
-    //   • Revenue = CREDIT lines posted to a Revenue account
-    //   • Expense = DEBIT  lines posted to an Expense account
+    // Convention (audit 2026-07-02 F1 — NET movement):
+    //   • Revenue = Σ credit lines − Σ debit lines on Revenue accounts
+    //   • Expense = Σ debit lines − Σ credit lines on Expense accounts
     //     (COGS accounts are accountType 'Expense', subtype 'Direct Cost')
-    // Closing entries (DR Revenue / CR Retained Earnings) are naturally excluded:
-    // their debit hits a Revenue account (ignored on the debit side) and their
-    // credit hits Equity (ignored on the credit side).
+    // The old gross convention (credit-only / debit-only) ignored a reversal's
+    // contra leg, so reversing a sale never reduced the P&L. Netting fixes that,
+    // but it means system closing / opening-balance sweeps (which the gross
+    // convention excluded "naturally") must now be excluded EXPLICITLY by
+    // entryType. Adjusting entries stay in — accruals/depreciation belong on
+    // the P&L.
     const pipeline = [
       {
         $match: {
           businessId: new mongoose.Types.ObjectId(validBusinessId),
           transactionDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
           status: { $in: REPORT_STATUSES },
+          entryType: { $nin: ['closing', 'opening_balance'] },
           isArchived: { $ne: true },
         },
       },
@@ -503,12 +545,38 @@ class TransactionRepository extends BaseRepository {
       {
         $facet: {
           revenue: [
-            { $match: { 'acc.accountType': 'Revenue', 'effectiveLines.type': 'credit' } },
-            { $group: { _id: '$acc.accountName', amount: { $sum: '$effectiveLines.amount' } } },
+            { $match: { 'acc.accountType': 'Revenue' } },
+            {
+              $group: {
+                _id: '$acc.accountName',
+                amount: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ['$effectiveLines.type', 'credit'] },
+                      '$effectiveLines.amount',
+                      { $multiply: ['$effectiveLines.amount', -1] },
+                    ],
+                  },
+                },
+              },
+            },
           ],
           expenses: [
-            { $match: { 'acc.accountType': 'Expense', 'effectiveLines.type': 'debit' } },
-            { $group: { _id: '$acc.accountName', amount: { $sum: '$effectiveLines.amount' } } },
+            { $match: { 'acc.accountType': 'Expense' } },
+            {
+              $group: {
+                _id: '$acc.accountName',
+                amount: {
+                  $sum: {
+                    $cond: [
+                      { $eq: ['$effectiveLines.type', 'debit'] },
+                      '$effectiveLines.amount',
+                      { $multiply: ['$effectiveLines.amount', -1] },
+                    ],
+                  },
+                },
+              },
+            },
           ],
         },
       },
@@ -621,6 +689,44 @@ class TransactionRepository extends BaseRepository {
   }
 
   /**
+   * F15 — line-level net cash movement per transaction type, for the Cash Flow
+   * Statement. Uses the SAME effective-lines normalisation as the other
+   * statements, so cash legs living only inside compound journalLines (payroll
+   * runs, taxed sales) are counted, a cash→cash transfer nets to zero, and
+   * reversal pairs cancel (REPORT_STATUSES includes 'reversed').
+   *
+   * @param {string} businessId
+   * @param {Array<string|Object>} cashAccountIds
+   * @param {Date|string} startDate
+   * @param {Date|string} endDate
+   * @returns {Promise<Array<{_id: string, cashIn: number, cashOut: number}>>}
+   */
+  async getCashLineTotals(businessId, cashAccountIds, startDate, endDate) {
+    const validBusinessId = sanitizeAndValidateId(businessId);
+    const ids = (cashAccountIds || []).map((id) => new mongoose.Types.ObjectId(String(id._id || id)));
+    return this.model.aggregate([
+      {
+        $match: {
+          businessId: new mongoose.Types.ObjectId(validBusinessId),
+          transactionDate: { $gte: new Date(startDate), $lte: new Date(endDate) },
+          status: { $in: REPORT_STATUSES },
+          isArchived: { $ne: true },
+        },
+      },
+      EFFECTIVE_LINES_STAGE,
+      { $unwind: '$effectiveLines' },
+      { $match: { 'effectiveLines.accountId': { $in: ids } } },
+      {
+        $group: {
+          _id: '$transactionType',
+          cashIn:  { $sum: { $cond: [{ $eq: ['$effectiveLines.type', 'debit'] },  '$effectiveLines.amount', 0] } },
+          cashOut: { $sum: { $cond: [{ $eq: ['$effectiveLines.type', 'credit'] }, '$effectiveLines.amount', 0] } },
+        },
+      },
+    ]);
+  }
+
+  /**
    * Get all transactions for General Ledger — ordered by date, with populated accounts.
    * Optionally filter by accountId.
    */
@@ -681,13 +787,11 @@ class TransactionRepository extends BaseRepository {
     return { assets: [], liabilities: [], equity: [] };
   }
 
-  /**
-   * Bulk create transactions (for Excel import).
-   */
-  async bulkCreate(entriesArray) {
-    if (!entriesArray || entriesArray.length === 0) return [];
-    return this.model.insertMany(entriesArray, { ordered: false });
-  }
+  // NOTE (audit 2026-07-02): the old `bulkCreate` (raw insertMany "for Excel
+  // import") was removed — it had no callers and bypassed every model guard
+  // (period locks, idempotency, balance updates). Bulk import goes through
+  // transaction.service.createBulkTransactions → createTransaction, the one
+  // pipeline every entry must use.
 
   /**
    * Get reversal entries for a given transaction.

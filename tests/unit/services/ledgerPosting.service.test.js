@@ -12,6 +12,7 @@ jest.mock('../../../models/JournalEntry.model', () => ({ create: jest.fn() }));
 jest.mock('../../../repositories/account.repository', () => ({
   findById: jest.fn(),
   updateRunningBalance: jest.fn(),
+  findAllByBusinessAndIds: jest.fn(),
 }));
 jest.mock('../../../config/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 // Simulate the standalone-server fallback: run the unit WITHOUT a session, which
@@ -33,6 +34,10 @@ beforeEach(() => {
     Promise.resolve({ _id: id, normalBalance: id === ID_DR ? 'Debit' : 'Credit' })
   );
   accountRepository.updateRunningBalance.mockResolvedValue(undefined);
+  // F16 tenant guard: resolve every requested account as owned by the business
+  // (cross-tenant rejection is covered in ledgerPosting.tenantGuard.test.js).
+  accountRepository.findAllByBusinessAndIds.mockImplementation((_biz, ids) =>
+    Promise.resolve(ids.map((id) => ({ _id: id }))));
   // create([doc], opts) echoes the payload back in an array with an _id
   // (mirrors Mongoose .create() array form used by the atomic poster).
   JournalEntry.create.mockImplementation((docs) =>

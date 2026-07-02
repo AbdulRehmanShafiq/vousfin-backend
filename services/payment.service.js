@@ -30,6 +30,7 @@ const ChartOfAccount = require('../models/ChartOfAccount.model');
 const customerRepository = require('../repositories/customer.repository');
 const vendorRepository = require('../repositories/vendor.repository');
 const { postBalancedJournal } = require('./ledgerPosting.service');
+const { withTransaction } = require('../utils/withTransaction'); // F14 — one atomic unit per payment
 const auditService = require('./audit.service');
 const { businessEvents, EVENTS } = require('./businessEventEngine.service');
 const { ApiError } = require('../utils/ApiError');
@@ -82,39 +83,56 @@ class PaymentService {
       lastModifiedBy: userId,
     });
 
+    // F14 — ONE atomic unit: every allocation, the on-account advance and the
+    // Payment document update commit together or roll back together. On a
+    // standalone dev server withTransaction runs the unit without a session
+    // and the best-effort compensation below remains the fallback.
     const appliedTxs = [];
+    let atomicSession = null;
     try {
       const txService = require('./transaction.service'); // lazy — avoid require cycle
 
-      // Apply each allocation through the proven settlement primitive.
-      for (const alloc of payment.allocations) {
-        const childTx = await txService.recordPartialPayment(
-          alloc.parentJournalEntryId,
-          businessId,
-          {
-            amount:           alloc.amount,
-            paymentAccountId: resolved.cashAccountId,
-            transactionDate:  payment.paymentDate,
-            reference:        data.reference || null,
-            description:      `Payment ${payment.paymentNumber}`,
-          },
-          userId,
-          ipAddress
-        );
-        alloc.settlementTransactionId = childTx._id;
-        appliedTxs.push(childTx);
-      }
+      await withTransaction(async (session) => {
+        // Re-entrant: the driver may retry the whole unit on a transient error;
+        // the previous attempt's writes were rolled back, so start clean.
+        atomicSession = session;
+        appliedTxs.length = 0;
 
-      // Overpayment → hold on account via an advance journal (keeps Cash whole).
-      if (resolved.unappliedAmount > 0.009) {
-        const advJe = await this._postUnappliedAdvance(payment, resolved, userId);
-        payment.unappliedJournalEntryId = advJe ? advJe._id : null;
-      }
+        // Apply each allocation through the proven settlement primitive.
+        for (const alloc of payment.allocations) {
+          const childTx = await txService.recordPartialPayment(
+            alloc.parentJournalEntryId,
+            businessId,
+            {
+              amount:           alloc.amount,
+              paymentAccountId: resolved.cashAccountId,
+              transactionDate:  payment.paymentDate,
+              reference:        data.reference || null,
+              description:      `Payment ${payment.paymentNumber}`,
+            },
+            userId,
+            ipAddress,
+            session
+          );
+          alloc.settlementTransactionId = childTx._id;
+          appliedTxs.push(childTx);
+        }
 
-      payment.lastModifiedBy = userId;
-      await payment.save(); // recomputes allocatedAmount / unappliedAmount / status
+        // Overpayment → hold on account via an advance journal (keeps Cash whole).
+        if (resolved.unappliedAmount > 0.009) {
+          const advJe = await this._postUnappliedAdvance(payment, resolved, userId, session);
+          payment.unappliedJournalEntryId = advJe ? advJe._id : null;
+        }
+
+        payment.lastModifiedBy = userId;
+        await payment.save({ session }); // recomputes allocatedAmount / unappliedAmount / status
+      });
     } catch (err) {
-      await this._compensate(payment, appliedTxs, businessId, userId, ipAddress, err);
+      await this._compensate(payment, appliedTxs, businessId, userId, ipAddress, err, {
+        // A real transaction already rolled every write back — only the
+        // standalone (sessionless) fallback needs manual reversals.
+        rolledBack: !!atomicSession,
+      });
       throw err;
     }
 
@@ -364,7 +382,7 @@ class PaymentService {
    *   outbound (we overpaid vendor): DR Advance to Suppliers (1160) / CR Cash
    * @private
    */
-  async _postUnappliedAdvance(payment, resolved, userId) {
+  async _postUnappliedAdvance(payment, resolved, userId, session = null) {
     const inbound = resolved.direction === 'inbound';
     const advanceCode = inbound ? '2190' : '1160';
     const [cashAcc, advAcc] = await Promise.all([
@@ -372,8 +390,14 @@ class PaymentService {
       ChartOfAccount.findOne({ businessId: payment.businessId, accountCode: advanceCode }).lean(),
     ]);
     if (!cashAcc || !advAcc) {
-      logger.warn(`[payment] unapplied advance JE skipped for ${payment.paymentNumber} — cash or advance account (${advanceCode}) missing`);
-      return null;
+      // F12 — fail loudly: skipping this journal leaves real received cash out
+      // of the GL while the Payment document shows the full amount. The caller's
+      // compensation path voids the payment instead.
+      throw new ApiError(
+        500,
+        `Cannot hold ${payment.paymentNumber}'s unapplied amount on account: ` +
+        `${!cashAcc ? 'the cash account' : `the advance account (${advanceCode})`} is not set up.`
+      );
     }
 
     return postBalancedJournal({
@@ -392,7 +416,7 @@ class PaymentService {
       exchangeRate:      payment.exchangeRate,
       createdBy:         userId,
       lastModifiedBy:    userId,
-    });
+    }, { session });
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -405,19 +429,25 @@ class PaymentService {
    * balance drift, if any, is detectable by the M1 reconciliation; full atomicity
    * needs MongoDB transactions.) @private
    */
-  async _compensate(payment, appliedTxs, businessId, userId, ipAddress, err) {
-    logger.error(`[payment] ${payment.paymentNumber} apply failed: ${err.message} — compensating ${appliedTxs.length} settlement(s)`);
-    const txService = require('./transaction.service');
-    for (const tx of appliedTxs) {
-      try {
-        await txService.deleteTransaction(tx._id, businessId, userId, ipAddress);
-      } catch (e) {
-        logger.error(`[payment] compensation reverse failed for settlement ${tx._id}: ${e.message}`);
+  async _compensate(payment, appliedTxs, businessId, userId, ipAddress, err, { rolledBack = false } = {}) {
+    logger.error(`[payment] ${payment.paymentNumber} apply failed: ${err.message}${rolledBack ? ' — transaction rolled back' : ` — compensating ${appliedTxs.length} settlement(s)`}`);
+    // F14 — when the apply ran inside a real MongoDB transaction, every ledger
+    // write already rolled back; manually "reversing" them would post journals
+    // against entries that no longer exist. Only the standalone fallback needs
+    // the manual unwind.
+    if (!rolledBack) {
+      const txService = require('./transaction.service');
+      for (const tx of appliedTxs) {
+        try {
+          await txService.deleteTransaction(tx._id, businessId, userId, ipAddress);
+        } catch (e) {
+          logger.error(`[payment] compensation reverse failed for settlement ${tx._id}: ${e.message}`);
+        }
       }
-    }
-    if (payment.unappliedJournalEntryId) {
-      try { await txService.deleteTransaction(payment.unappliedJournalEntryId, businessId, userId, ipAddress); }
-      catch (e) { logger.error(`[payment] compensation reverse failed for advance JE: ${e.message}`); }
+      if (payment.unappliedJournalEntryId) {
+        try { await txService.deleteTransaction(payment.unappliedJournalEntryId, businessId, userId, ipAddress); }
+        catch (e) { logger.error(`[payment] compensation reverse failed for advance JE: ${e.message}`); }
+      }
     }
     try {
       payment.status = 'void';

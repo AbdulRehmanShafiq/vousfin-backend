@@ -758,7 +758,57 @@ journalEntrySchema.pre('save', async function () {
 // throw to signal an error and return to proceed. Passing `next` as a
 // parameter causes Mongoose 9 to leave it undefined (async hooks are
 // promise-based), so calling next() throws "next is not a function".
+
+// ── Settlement-metadata allowlist (audit 2026-07-02 F9) ─────────────────────
+// Closing a period blocks POSTINGS into it — it must NOT freeze open-item
+// clearing. Applying a payment (or reversal bookkeeping) against an invoice
+// dated in a closed/locked period only updates these fields; the actual ledger
+// movement (the settlement/counter entry) posts in its own, open period. Any
+// update touching a field outside this set stays subject to the period lock,
+// and financial fields remain frozen separately by checkImmutability.
+const SETTLEMENT_METADATA_FIELDS = new Set([
+  'remainingBalance', 'partiallyPaidAmount', 'paymentStatus', 'status',
+  'settlements', 'relatedTransactions', 'metadata', 'lastModifiedBy', 'updatedAt',
+]);
+// `status` may only move within the settlement/reversal lifecycle — this path
+// must never let an entry be re-labelled draft/void (which would hide it).
+const SETTLEMENT_STATUS_VALUES = new Set([
+  JOURNAL_STATUS.POSTED, JOURNAL_STATUS.PARTIALLY_SETTLED,
+  JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.REVERSED,
+]);
+
+/**
+ * True when a query update touches ONLY settlement-metadata fields (and any
+ * status value stays within the settlement lifecycle). Pure — exported as a
+ * static for direct testing.
+ */
+function isSettlementMetadataOnlyUpdate(update) {
+  if (!update || typeof update !== 'object') return false;
+  const touched = new Map(); // top-level field → value (only for plain $set-like keys)
+  for (const [key, value] of Object.entries(update)) {
+    if (key === '$setOnInsert') continue; // upsert-insert defaults (timestamps adds createdAt) — never mutates an existing entry
+    if (key.startsWith('$')) {
+      for (const [path, v] of Object.entries(value || {})) {
+        touched.set(path.split('.')[0], v);
+      }
+    } else {
+      touched.set(key.split('.')[0], value);
+    }
+  }
+  if (touched.size === 0) return false;
+  for (const [field, value] of touched) {
+    if (!SETTLEMENT_METADATA_FIELDS.has(field)) return false;
+    if (field === 'status' && !SETTLEMENT_STATUS_VALUES.has(value)) return false;
+  }
+  return true;
+}
+
 async function checkPeriodLock() {
+  // Settlement-metadata-only updates clear open items; they are period-
+  // independent by design (F9) — skip the period lookup entirely.
+  const settlementUpdate = this.getUpdate ? this.getUpdate() : null;
+  if (isSettlementMetadataOnlyUpdate(settlementUpdate)) return;
+
   const docToUpdate = await this.model.findOne(this.getQuery());
   if (!docToUpdate) return;
 
@@ -815,6 +865,14 @@ journalEntrySchema.pre('findOneAndDelete', checkPeriodLock);
 journalEntrySchema.pre('updateMany', function () {
   throw new ApiError(403, 'Bulk updates not supported due to strict period locking invariants.');
 });
+// F17 — deleteMany had no guard at all; a bulk delete would bypass every
+// period-lock/immutability check above. Financial history is permanent.
+journalEntrySchema.pre('deleteMany', function () {
+  throw new ApiError(403, 'Bulk deletes not supported: journal entries are immutable financial history.');
+});
+
+// Exported for the period-lock hook and for direct unit testing.
+journalEntrySchema.statics.isSettlementMetadataOnlyUpdate = isSettlementMetadataOnlyUpdate;
 
 // ===============================
 // Post-write: keep the report cache fresh for ANY journal write
@@ -871,6 +929,20 @@ journalEntrySchema.index(
     sparse: true,
     name: 'idx_je_invoice_number',
     partialFilterExpression: { invoiceNumber: { $type: 'string' } },
+  }
+);
+
+// DB-enforced idempotency (audit 2026-07-02 F7). The posting paths guard on
+// metadata.idempotencyKey with a findOne BEFORE inserting — a check-then-insert
+// that two concurrent retries both pass, double-posting the journal. This
+// unique partial index makes the database the arbiter: the losing insert gets
+// E11000, which the posters translate into "already posted — return existing".
+journalEntrySchema.index(
+  { businessId: 1, 'metadata.idempotencyKey': 1 },
+  {
+    unique: true,
+    name: 'idx_je_idempotency_key',
+    partialFilterExpression: { 'metadata.idempotencyKey': { $type: 'string' } },
   }
 );
 
