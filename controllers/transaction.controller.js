@@ -542,8 +542,9 @@ const downloadExcelTemplate = async (req, res, next) => {
     addInfo('Optional columns:', 'Type, Customer, Vendor, Reference, Notes');
     addInfo('Date format:', 'YYYY-MM-DD or DD/MM/YYYY');
     addInfo('Amount format:', 'Positive numbers only (e.g. 25000 or 25,000.00)');
-    addInfo('Debit Account:', 'Exact account name from your Chart of Accounts');
-    addInfo('Credit Account:', 'Exact account name from your Chart of Accounts');
+    addInfo('Debit Account:', 'Account name OR code from the "Chart of Accounts" sheet (e.g. "Rent" or "6110")');
+    addInfo('Credit Account:', 'Account name OR code from the "Chart of Accounts" sheet');
+    addInfo('New accounts:', 'If a row names an account that does not exist yet, VousFin creates it automatically and marks it for your review');
     addInfo('Type (optional):', 'Income, Expense, Credit Sale, Credit Purchase, Transfer, Owner Investment, Owner Withdrawal, Loan Disbursement, Loan Repayment, Asset Purchase');
     addInfo('Customer:', 'Required for Credit Sale / Payment Received rows');
     addInfo('Vendor:', 'Required for Credit Purchase / Payment Made rows');
@@ -582,6 +583,29 @@ const downloadExcelTemplate = async (req, res, next) => {
         };
       });
     });
+
+    // ── Chart of Accounts reference sheet ─────────────────────────────────────
+    // The business's LIVE chart with reference codes, so imports can cite exact
+    // names or codes instead of guessing (non-fatal: template still downloads
+    // without it if the account load fails).
+    try {
+      const liveAccounts = await accountRepository.findByBusiness(req.user.businessId);
+      if (Array.isArray(liveAccounts) && liveAccounts.length > 0) {
+        const coa = wb.addWorksheet('Chart of Accounts');
+        [12, 42, 14, 24].forEach((w, i) => { coa.getColumn(i + 1).width = w; });
+        const coaHeader = coa.addRow(['Code', 'Account Name', 'Type', 'Group']);
+        coaHeader.eachCell(cell => {
+          cell.font = { bold: true, color: { argb: 'FFF8FAFC' } };
+          cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+        });
+        const typeOrder = { Asset: 1, Liability: 2, Equity: 3, Revenue: 4, Expense: 5 };
+        [...liveAccounts]
+          .sort((a, b) => (typeOrder[a.accountType] - typeOrder[b.accountType]) || String(a.accountCode || '9999').localeCompare(String(b.accountCode || '9999')))
+          .forEach(a => coa.addRow([a.accountCode || '', a.accountName, a.accountType, a.accountSubtype || '']));
+      }
+    } catch (coaErr) {
+      logger.warn(`Excel template: could not attach Chart of Accounts sheet (non-fatal): ${coaErr.message}`);
+    }
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="vousFin_import_template.xlsx"');
