@@ -472,10 +472,10 @@ class ReportService {
     const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
     // Disaggregate the SAME revenue the Income Statement reports, so the notes
-    // reconcile to the P&L by construction. The Income Statement counts revenue
-    // as the CREDIT lines posted to Revenue accounts (via the effective-lines
-    // stage); re-deriving it here as credit−debit would diverge whenever a
-    // revenue account also carries debits (closing entries, refunds/contra).
+    // reconcile to the P&L by construction. The Income Statement reports the
+    // NET movement per Revenue account (credits − debits, excluding closing /
+    // opening sweeps by entryType — audit F1); consuming its output here keeps
+    // the notes in lock-step with that convention automatically.
     const is = await this.getIncomeStatement(businessId, startDate, endDate);
 
     const disaggregation = (is.revenue?.accounts || [])
@@ -534,17 +534,13 @@ class ReportService {
       TRANSACTION_TYPES.OWNER_WITHDRAWAL,
     ]);
 
-    const seenIds = new Set();
-    const allCashTxns = [];
-    await Promise.all(cashAccounts.map(async cashAcc => {
-      const txns = await transactionRepository.getByAccount(businessId, cashAcc._id, startDate, endDate);
-      for (const tx of txns) {
-        const id = tx._id.toString();
-        if (seenIds.has(id)) continue;
-        seenIds.add(id);
-        allCashTxns.push({ tx, cashAccId: cashAcc._id.toString() });
-      }
-    }));
+    // F15 — line-level aggregation over the SAME effective-lines normalisation
+    // as the other statements: compound entries' cash legs (payroll, taxed
+    // sales) are counted, cash→cash transfers net to zero, and reversal pairs
+    // cancel out.
+    const cashLineRows = await transactionRepository.getCashLineTotals(
+      businessId, cashAccounts.map((a) => a._id), startDate, endDate
+    );
 
     const TYPE_LABELS = {
       SALE:              'Collections from Customers',
@@ -565,19 +561,17 @@ class ReportService {
     const investingBuckets = {};
     const financingBuckets = {};
 
-    for (const { tx, cashAccId } of allCashTxns) {
-      const isDebitCash = tx.debitAccountId.toString() === cashAccId;
-      const rawAmount   = (tx.baseCurrencyAmount != null && tx.baseCurrencyAmount !== 0)
-        ? tx.baseCurrencyAmount
-        : tx.amount;
-      const cashEffect  = isDebitCash ? rawAmount : -rawAmount;
-      const key         = tx.transactionType || 'Other';
-      const label       = TYPE_LABELS[key] || (key.charAt(0) + key.slice(1).toLowerCase().replace(/_/g, ' '));
+    const r2cf = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    for (const row of cashLineRows) {
+      const key        = row._id || 'Other';
+      const cashEffect = r2cf(row.cashIn - row.cashOut); // effective lines are already base currency
+      if (cashEffect === 0) continue; // e.g. a cash→cash transfer nets out
+      const label = TYPE_LABELS[key] || (String(key).charAt(0) + String(key).slice(1).toLowerCase().replace(/_/g, ' '));
 
       let buckets;
-      if (INVESTING_TYPES.has(tx.transactionType))       buckets = investingBuckets;
-      else if (FINANCING_TYPES.has(tx.transactionType))  buckets = financingBuckets;
-      else                                                buckets = operatingBuckets;
+      if (INVESTING_TYPES.has(key))       buckets = investingBuckets;
+      else if (FINANCING_TYPES.has(key))  buckets = financingBuckets;
+      else                                buckets = operatingBuckets;
 
       if (!buckets[key]) buckets[key] = { description: label, amount: 0, transactionType: key };
       buckets[key].amount += cashEffect;

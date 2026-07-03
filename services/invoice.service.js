@@ -36,6 +36,7 @@ const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // 
 const { ApiError } = require('../utils/ApiError');
 const { validateDocumentData, assertNoDuplicateNumber, assertPartyExists } = require('../utils/arApValidation'); // M4
 const paymentTermsUtil = require('../utils/paymentTerms'); // M8 — structured payment terms
+const { toBaseAmount } = require('../utils/currency.util'); // F2 — ledger is base currency
 const logger = require('../config/logger');
 const {
   INVOICE_STATES,
@@ -557,12 +558,15 @@ class InvoiceService {
           throw new ApiError(500, `Cannot write off invoice ${invoice.invoiceNumber}: Bad Debt Expense (6370) or Accounts Receivable (1110) account is not set up.`);
         }
 
+        // F2 (residual) — `outstanding` is in DOCUMENT currency; the ledger,
+        // party balance and open item are base.
+        const outstandingBase = toBaseAmount(outstanding, invoice.exchangeRate);
         const je = await postBalancedJournal({
           businessId:         invoice.businessId,
           transactionDate:    new Date(),
           description:        `Write-off: Invoice ${invoice.invoiceNumber} — ${reason || 'bad debt'}`,
           transactionType:    TRANSACTION_TYPES.ADJUSTING_ENTRY,
-          amount:             outstanding,
+          amount:             outstandingBase,
           debitAccountId:     badDebtAcct._id,
           creditAccountId:    arAcct._id,
           transactionSource:  TRANSACTION_SOURCES.SYSTEM_GENERATED,
@@ -574,7 +578,7 @@ class InvoiceService {
           currencyCode:       invoice.currencyCode || 'PKR',
           baseCurrencyCode:   invoice.baseCurrencyCode || 'PKR',
           exchangeRate:       invoice.exchangeRate || 1,
-          baseCurrencyAmount: outstanding,
+          baseCurrencyAmount: outstandingBase,
         }, { session: s });
         invoice.writeOffJournalId = je._id;
 
@@ -583,10 +587,19 @@ class InvoiceService {
           await partyBalanceService.adjustReceivable(
             invoice.businessId,
             invoice.customerId,
-            -outstanding,
+            -outstandingBase,
             { userId: user._id, reason: 'write_off', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id, session: s }
           );
         }
+
+        // Close the RECOGNITION JE's open item too (audit F3) — otherwise the
+        // aging report and payment engine keep seeing the written-off balance.
+        await require('./openItem.service').adjustOpenItem(
+          invoice.businessId,
+          invoice.linkedJournalEntryId || invoice.arJournalId,
+          -outstandingBase,
+          { session: s }
+        );
 
         return this._applyStateChange(invoice, INVOICE_STATES.WRITTEN_OFF, user, { reason, ipAddress, session: s });
       });
@@ -618,9 +631,11 @@ class InvoiceService {
       paid = await withTransaction(async (s) => {
         const p = await this._applyStateChange(invoice, INVOICE_STATES.PAID, user, { ipAddress, session: s });
         await this._postInvoiceSettlementJournal(invoice, outstanding, user, s);
-        await partyBalanceService.adjustReceivable(invoice.businessId, invoice.customerId, -outstanding, {
-          userId: user._id, reason: 'invoice_paid', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id, session: s,
-        });
+        // F2 (residual) — the party balance is base currency.
+        await partyBalanceService.adjustReceivable(invoice.businessId, invoice.customerId,
+          -toBaseAmount(outstanding, invoice.exchangeRate), {
+            userId: user._id, reason: 'invoice_paid', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id, session: s,
+          });
         return p;
       });
     } else {
@@ -739,8 +754,15 @@ class InvoiceService {
     const netAmount = r2(invoice.amount || (invoice.totalAmount - (invoice.taxAmount || 0)));
     const primaryAmount = netAmount > 0 ? netAmount : r2(invoice.totalAmount);
 
+    // F2 (residual) — the ledger is BASE currency; the document keeps the
+    // foreign face amounts. Convert at the invoice's booking rate here so the
+    // poster (which does no FX) never receives foreign units.
+    const bookingRate = Number(invoice.exchangeRate) > 0 ? Number(invoice.exchangeRate) : 1;
+    const primaryBase = toBaseAmount(primaryAmount, bookingRate);
+
     // ── Resolve the optional output-tax account up-front (read, no write) ────
     const taxAmount = r2(invoice.taxAmount || 0);
+    const taxBase = toBaseAmount(taxAmount, bookingRate);
     let outputTaxAcc = null;
     if (taxAmount > 0) {
       const acc = await ChartOfAccount.findOne({
@@ -766,7 +788,8 @@ class InvoiceService {
           transactionDate:   invoice.issueDate,
           description:       `AR Recognition — ${invoice.invoiceNumber}${invoice.customerSnapshot?.fullName ? ' (' + invoice.customerSnapshot.fullName + ')' : ''}`,
           transactionType:   TRANSACTION_TYPES.CREDIT_SALE,
-          amount:            primaryAmount,
+          amount:            primaryBase,          // BASE currency (F2)
+          baseCurrencyAmount: primaryBase,         // pinned so the model hook can't re-multiply
           debitAccountId:    arAccount._id,
           creditAccountId:   revenueAccountId,
           status:            JOURNAL_STATUS.POSTED,
@@ -774,14 +797,14 @@ class InvoiceService {
           invoiceNumber:     invoice.invoiceNumber,
           customerId:        invoice.customerId || null,
           currencyCode:      invoice.currencyCode || 'PKR',
-          exchangeRate:      invoice.exchangeRate || 1,
+          exchangeRate:      bookingRate,
           createdBy:         user._id,
           lastModifiedBy:    user._id,
           // M9 — this entry is the immutable projection of the authoritative invoice.
           isProjection:      true,
           projectionOf:      { documentType: 'invoice', documentId: invoice._id },
         }, { session });
-        arDebited = r2(arDebited + primaryAmount);
+        arDebited = r2(arDebited + primaryBase);
 
         invoice.arJournalId = primaryJe._id;
         if (!invoice.linkedJournalEntryId) invoice.linkedJournalEntryId = primaryJe._id;
@@ -798,8 +821,9 @@ class InvoiceService {
             transactionDate:   invoice.issueDate,
             description:       `AR Output Tax — ${invoice.invoiceNumber}`,
             transactionType:   TRANSACTION_TYPES.CREDIT_SALE,
-            amount:            taxAmount,
-            taxAmount:         taxAmount,
+            amount:            taxBase,            // BASE currency (F2)
+            baseCurrencyAmount: taxBase,
+            taxAmount:         taxBase,            // returns are filed in the functional currency
             taxType:           outputTaxType,
             debitAccountId:    arAccount._id,
             creditAccountId:   outputTaxAcc._id,
@@ -808,11 +832,11 @@ class InvoiceService {
             invoiceNumber:     invoice.invoiceNumber,
             customerId:        invoice.customerId || null,
             currencyCode:      invoice.currencyCode || 'PKR',
-            exchangeRate:      invoice.exchangeRate || 1,
+            exchangeRate:      bookingRate,
             createdBy:         user._id,
             lastModifiedBy:    user._id,
           }, { session });
-          arDebited = r2(arDebited + taxAmount);
+          arDebited = r2(arDebited + taxBase);
         }
 
         // Mirror the AR debit onto the customer's receivable balance.
@@ -928,12 +952,15 @@ class InvoiceService {
       throw new ApiError(500, `Cannot settle invoice ${invoice.invoiceNumber}: AR and cash resolve to the same account.`);
     }
 
+    // F2 (residual) — `amount` arrives in DOCUMENT currency; the ledger is base.
+    const settleBase = toBaseAmount(amount, invoice.exchangeRate);
     return postBalancedJournal({
       businessId,
       transactionDate:   new Date(),
       description:       `Invoice Payment — ${invoice.invoiceNumber}${invoice.customerSnapshot?.fullName ? ' (' + invoice.customerSnapshot.fullName + ')' : ''}`,
       transactionType:   TRANSACTION_TYPES.PAYMENT_RECEIVED,
-      amount,
+      amount:            settleBase,
+      baseCurrencyAmount: settleBase,
       debitAccountId:    cashAccount._id,
       creditAccountId:   arAccount._id,
       status:            JOURNAL_STATUS.POSTED,

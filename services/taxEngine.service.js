@@ -529,6 +529,45 @@ function _applyReverseCharge(originalLines, profile, netAmount, taxCfg) {
   }];
 }
 
+/**
+ * F11 (audit 2026-07-02) — resolve the Chart-of-Accounts id for a tax journal
+ * account WITHOUT depending on the account's display name alone.
+ *
+ * Order: exact name → the country profile's account CODE for that name →
+ * self-heal (seed the country's tax accounts via ensureTaxAccounts) → code
+ * again → null. Renaming "GST Payable" therefore no longer makes tax lines
+ * vanish, and a business whose tax accounts were never seeded heals itself on
+ * first taxable posting.
+ *
+ * @param {string} businessId
+ * @param {string} accountName  the engine's descriptor name (profile naming)
+ * @param {string} [countryCode='PK']
+ * @returns {Promise<any|null>} the ChartOfAccount _id, or null when unresolvable
+ */
+async function resolveTaxAccountId(businessId, accountName, countryCode = 'PK') {
+  if (!accountName) return null;
+  const escaped = String(accountName).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const byName = await ChartOfAccount.findOne({
+    businessId,
+    accountName: { $regex: new RegExp(`^${escaped}$`, 'i') },
+  }).lean();
+  if (byName) return byName._id;
+
+  const profile = getProfile(countryCode);
+  const spec = (profile.additionalAccounts || []).find(
+    (a) => String(a.accountName).toLowerCase() === String(accountName).toLowerCase()
+  );
+  if (!spec) return null;
+
+  const byCode = await ChartOfAccount.findOne({ businessId, accountCode: spec.accountCode }).lean();
+  if (byCode) return byCode._id;
+
+  // Self-heal: the business's tax accounts were never seeded (or were deleted).
+  await ensureTaxAccounts(businessId, countryCode);
+  const seeded = await ChartOfAccount.findOne({ businessId, accountCode: spec.accountCode }).lean();
+  return seeded ? seeded._id : null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 module.exports = {
   resolveApplicableTaxes,
@@ -538,4 +577,5 @@ module.exports = {
   getBusinessTaxConfig,
   isTaxEnabled,
   shouldApplyReverseCharge,
+  resolveTaxAccountId,
 };

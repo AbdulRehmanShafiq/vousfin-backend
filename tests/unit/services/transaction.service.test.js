@@ -7,6 +7,11 @@ jest.mock('../../../services/audit.service');
 // ERP refactor Step 3 — stub inventory.service so the purchase-side stock mirror
 // (section "7a" of createTransaction) can be asserted without touching a DB.
 jest.mock('../../../services/inventory.service');
+// F11 made tax failures fail CLOSED, so the real taxEngine (whose config read
+// needs a DB) must be stubbed to "tax not enabled" for these tax-free cases.
+jest.mock('../../../services/taxEngine.service', () => ({
+  isTaxEnabled: jest.fn().mockResolvedValue(false),
+}));
 // Phase 5.1 added an accounting-period lock check that queries a real Mongoose
 // model with the businessId. In unit tests there is no DB and the fixtures use a
 // non-ObjectId businessId, so stub the period lookup to "no covering period".
@@ -264,7 +269,7 @@ describe('TransactionService.createTransaction() — inventory purchase mirror',
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledTimes(1);
     // amount 500 / qty 5 = 100 inferred cost per unit
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledWith(
-      'biz001', 'item001', 5, 100, { userId: 'user1' }
+      'biz001', 'item001', 5, 100, expect.objectContaining({ userId: 'user1' })
     );
   });
 
@@ -273,7 +278,7 @@ describe('TransactionService.createTransaction() — inventory purchase mirror',
       { ...PURCHASE_DATA, unitCostPrice: 90 }, 'user1', '127.0.0.1'
     );
     expect(inventoryService.applyPurchaseStock).toHaveBeenCalledWith(
-      'biz001', 'item001', 5, 90, { userId: 'user1' }
+      'biz001', 'item001', 5, 90, expect.objectContaining({ userId: 'user1' })
     );
   });
 

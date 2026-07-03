@@ -18,6 +18,8 @@ const Bill = require('../models/Bill.model');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
 const vendorRepository = require('../repositories/vendor.repository');
 const partyBalanceService = require('./partyBalance.service');     // ERP Step 4 — centralized AP balance
+const openItemService = require('./openItem.service');              // audit F3 — recognition-JE open-item sync
+const { toBaseAmount } = require('../utils/currency.util');          // audit F2 — ledger is base currency
 const { postBalancedJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync
 const { withTransaction } = require('../utils/withTransaction');    // audit A9 — atomic multi-write
 const auditService = require('./audit.service');
@@ -194,6 +196,16 @@ class VendorCreditService {
 
       // Phase 3.2 — post vendor credit journal: DR AP, CR Vendor Credit
       await this.postCreditApplicationJournal(vc, bill, amount, user, s);
+
+      // Keep the RECOGNITION JE's open item in sync (audit F3): the payment
+      // engine, AP aging and the VE-6 reconcile read the JE's remainingBalance.
+      // F2 — the open item is BASE currency; relieve at the bill's booking rate.
+      await openItemService.adjustOpenItem(
+        vc.businessId,
+        bill.linkedJournalEntryId || bill.apLiabilityJournalId,
+        -toBaseAmount(amount, bill.exchangeRate || vc.exchangeRate),
+        { session: s }
+      );
     });
 
     try {
@@ -263,15 +275,21 @@ class VendorCreditService {
       throw new ApiError(500, 'Cannot apply vendor credit: AP and credit accounts resolve to the same account.');
     }
 
-    const appliedAmount = r2(amount);
-    if (appliedAmount <= 0) return;
+    // F2 (residual) — the ledger and the vendor balance are BASE currency; the
+    // credit relieves the bill's carrying value at its BOOKING rate (IAS 21).
+    const bookingRate = Number(bill.exchangeRate) > 0
+      ? Number(bill.exchangeRate)
+      : (Number(vc.exchangeRate) > 0 ? Number(vc.exchangeRate) : 1);
+    const appliedBase = toBaseAmount(amount, bookingRate);
+    if (appliedBase <= 0) return;
 
     await postBalancedJournal({
       businessId,
       transactionDate:  new Date(),
       description:      `Vendor Credit Applied — ${vc.creditNumber} → Bill ${bill.billNumber}`,
       transactionType:  TRANSACTION_TYPES.PAYMENT_MADE,
-      amount:           appliedAmount,
+      amount:           appliedBase,
+      baseCurrencyAmount: appliedBase,
       debitAccountId:   apAccount._id,   // DR Accounts Payable
       creditAccountId:  crAccount._id,   // CR Vendor Credit / Discount Received
       status:           JOURNAL_STATUS.POSTED,
@@ -279,7 +297,7 @@ class VendorCreditService {
       invoiceNumber:    bill.billNumber,
       vendorId:         vc.vendorId || null,
       currencyCode:     vc.currencyCode || 'PKR',
-      exchangeRate:     vc.exchangeRate || 1,
+      exchangeRate:     bookingRate,
       createdBy:        user._id,
       lastModifiedBy:   user._id,
     }, { session });
@@ -287,7 +305,7 @@ class VendorCreditService {
     // ERP Step 4: applying a credit reduces what we owe the vendor — mirror it
     // onto the vendor's payable balance (DR AP) and broadcast the change.
     if (vc.vendorId) {
-      await partyBalanceService.adjustPayable(businessId, vc.vendorId, -appliedAmount, {
+      await partyBalanceService.adjustPayable(businessId, vc.vendorId, -appliedBase, {
         userId: user._id, reason: 'vendor_credit_applied', entityType: ENTITY_TYPES.BILL, entityId: bill._id, session,
       });
     }

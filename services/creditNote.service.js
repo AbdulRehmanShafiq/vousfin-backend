@@ -19,6 +19,8 @@ const ChartOfAccount = require('../models/ChartOfAccount.model');
 const customerRepository = require('../repositories/customer.repository');
 const auditService = require('./audit.service');
 const partyBalanceService = require('./partyBalance.service');
+const openItemService = require('./openItem.service');
+const { toBaseAmount } = require('../utils/currency.util'); // F2 — ledger is base currency
 const { postBalancedJournal } = require('./ledgerPosting.service');
 const { withTransaction } = require('../utils/withTransaction');
 const { ApiError } = require('../utils/ApiError');
@@ -197,6 +199,13 @@ class CreditNoteService {
 
       // Post GL journal entry for credit_note: DR Sales Returns & Allowances / CR Accounts Receivable
       if (cn.noteType === 'credit_note') {
+        // F2 (residual) — the ledger, party balance and open item are BASE
+        // currency; the credit relieves the invoice's carrying value at its
+        // BOOKING rate (IAS 21), exactly mirroring how payments settle.
+        const bookingRate = Number(invoice.exchangeRate) > 0
+          ? Number(invoice.exchangeRate)
+          : (Number(cn.exchangeRate) > 0 ? Number(cn.exchangeRate) : 1);
+        const creditBase = toBaseAmount(cn.totalAmount, bookingRate);
         const [salesReturnsAcct, arAcct] = await Promise.all([
           ChartOfAccount.findOne({
             businessId: cn.businessId,
@@ -219,7 +228,7 @@ class CreditNoteService {
           transactionDate:    new Date(),
           description:        `Credit Note ${cn.creditNoteNumber} applied to ${cn.invoiceNumber || invoice.invoiceNumber}`,
           transactionType:    TRANSACTION_TYPES.REFUND,
-          amount:             cn.totalAmount,
+          amount:             creditBase,
           debitAccountId:     salesReturnsAcct._id,
           creditAccountId:    arAcct._id,
           transactionSource:  'system_generated',
@@ -229,8 +238,8 @@ class CreditNoteService {
           lastModifiedBy:     user._id,
           currencyCode:       cn.currencyCode || 'PKR',
           baseCurrencyCode:   cn.baseCurrencyCode || 'PKR',
-          exchangeRate:       cn.exchangeRate || 1,
-          baseCurrencyAmount: cn.totalAmount,
+          exchangeRate:       bookingRate,
+          baseCurrencyAmount: creditBase,
         }, { session: s });
         cn.linkedJournalEntryId = je._id;
 
@@ -239,7 +248,7 @@ class CreditNoteService {
           await partyBalanceService.adjustReceivable(
             cn.businessId,
             invoice.customerId,
-            -cn.totalAmount,
+            -creditBase,
             {
               userId:     user._id,
               reason:     'credit_note_applied',
@@ -249,6 +258,17 @@ class CreditNoteService {
             }
           );
         }
+
+        // Keep the RECOGNITION JE's open item in sync (audit F3): the payment
+        // engine, aging report and VE-5 reconcile all read the JE's
+        // remainingBalance — without this a fully-credited invoice could still
+        // be collected in full.
+        await openItemService.adjustOpenItem(
+          cn.businessId,
+          invoice.linkedJournalEntryId || invoice.arJournalId,
+          -creditBase,
+          { session: s }
+        );
       }
 
       cn.state = 'applied';
@@ -287,6 +307,12 @@ class CreditNoteService {
           invoice.lastModifiedBy = user._id;
           await invoice.save({ session: s });
 
+          // F2 — same base conversion as apply (party balance and open item are base).
+          const bookingRate = Number(invoice.exchangeRate) > 0
+            ? Number(invoice.exchangeRate)
+            : (Number(cn.exchangeRate) > 0 ? Number(cn.exchangeRate) : 1);
+          const creditBase = toBaseAmount(cn.totalAmount, bookingRate);
+
           if (cn.linkedJournalEntryId) {
             const transactionService = require('./transaction.service');
             await transactionService.reverseTransaction(
@@ -299,10 +325,20 @@ class CreditNoteService {
 
             if (cn.noteType === 'credit_note' && invoice.customerId) {
               await partyBalanceService.adjustReceivable(
-                cn.businessId, invoice.customerId, cn.totalAmount,
+                cn.businessId, invoice.customerId, creditBase,
                 { userId: user._id, reason: 'credit_note_cancelled', entityType: 'creditNote', entityId: cn._id, session: s }
               );
             }
+          }
+
+          // Restore the recognition JE's open item (audit F3) — mirror of apply.
+          if (cn.noteType === 'credit_note') {
+            await openItemService.adjustOpenItem(
+              cn.businessId,
+              invoice.linkedJournalEntryId || invoice.arJournalId,
+              creditBase,
+              { session: s }
+            );
           }
         }
       }

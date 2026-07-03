@@ -42,11 +42,14 @@ const { TRANSACTION_TYPES, JOURNAL_STATUS } = require('../../../config/constants
 const BIZ = 'biz1';
 const CASH = 'CASH';
 
+// NOTE (audit F2): remainingBalance is carried in BASE currency. For the
+// foreign fixtures (USD @280) the open item is therefore 280,000 — matching
+// what createTransaction actually books for a USD 1,000 credit sale.
 const makeParent = (o = {}) => ({
   _id: 'parent1', businessId: BIZ,
   transactionType: TRANSACTION_TYPES.CREDIT_SALE,
   status: JOURNAL_STATUS.POSTED,
-  remainingBalance: 1000, partiallyPaidAmount: 0, dueDate: null,
+  remainingBalance: 280000, partiallyPaidAmount: 0, dueDate: null,
   debitAccountId: { _id: 'AR' }, creditAccountId: { _id: 'SALES' },
   customerId: { _id: 'CUST' }, vendorId: null, invoiceNumber: 'INV-1',
   ...o,
@@ -58,6 +61,7 @@ beforeEach(() => {
   jest.spyOn(businessEvents, 'emit').mockReturnValue('evt');
   jest.spyOn(transactionService, 'createTransaction').mockResolvedValue({ _id: 'child1' });
   transactionRepository.updateTransaction.mockResolvedValue({});
+  transactionRepository.updateTransactionGuarded.mockResolvedValue({ _id: 'parent1' });
   fxService.getBaseCurrency.mockResolvedValue('PKR');
   fxSpy = jest.spyOn(journalGenerator, 'generateRealizedFxEntry').mockResolvedValue({ _id: 'fx1' });
 });

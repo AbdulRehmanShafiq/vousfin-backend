@@ -20,7 +20,12 @@ jest.mock('../../../utils/reportCache', () => ({ invalidate: jest.fn(), get: jes
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
 jest.mock('../../../repositories/customer.repository', () => ({ updateReceivableBalance: jest.fn() }));
 jest.mock('../../../repositories/vendor.repository',   () => ({ updatePayableBalance:    jest.fn() }));
-jest.mock('../../../repositories/account.repository',  () => ({ findById: jest.fn(), updateRunningBalance: jest.fn(), findByCode: jest.fn(), syncMissingDefaults: jest.fn() }));
+jest.mock('../../../repositories/account.repository',  () => ({
+  findById: jest.fn(), updateRunningBalance: jest.fn(), findByCode: jest.fn(), syncMissingDefaults: jest.fn(),
+  // F16 tenant guard: resolve every requested account as owned (cross-tenant
+  // rejection is covered in ledgerPosting.tenantGuard.test.js).
+  findAllByBusinessAndIds: jest.fn((_biz, ids) => Promise.resolve(ids.map((id) => ({ _id: id })))),
+}));
 jest.mock('../../../repositories/auditLog.repository', () => ({ getByBusiness: jest.fn(), getForEntity: jest.fn() }));
 jest.mock('../../../repositories/user.repository',     () => ({ findById: jest.fn() }));
 jest.mock('../../../models/JournalEntry.model',        () => ({ create: jest.fn() }));

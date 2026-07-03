@@ -21,6 +21,7 @@ const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // 
 const { ApiError } = require('../utils/ApiError');
 const { validateDocumentData, assertNoDuplicateNumber, assertPartyExists } = require('../utils/arApValidation'); // M4
 const paymentTermsUtil = require('../utils/paymentTerms'); // M8 — structured payment terms
+const { toBaseAmount } = require('../utils/currency.util'); // F2 — ledger is base currency
 const logger = require('../config/logger');
 const {
   BILL_STATES,
@@ -681,14 +682,19 @@ class BillService {
       if (purchasesAcc) expenseAccountId = purchasesAcc._id;
     }
 
-    const taxAmount = r2(bill.taxAmount || 0);
-    const netAmount = r2(bill.amount || (bill.totalAmount - taxAmount));
-    const billNet = netAmount > 0 ? netAmount : r2(bill.totalAmount - taxAmount);
+    // F2 (residual) — the ledger is BASE currency; the bill keeps its foreign
+    // face amounts. Convert at the bill's booking rate before building lines,
+    // so the GRNI comparison (GRNI accruals are posted in base) is also
+    // base-to-base instead of base-to-foreign.
+    const bookingRate = Number(bill.exchangeRate) > 0 ? Number(bill.exchangeRate) : 1;
+    const taxAmount = toBaseAmount(bill.taxAmount || 0, bookingRate);
+    const netAmount = r2(bill.amount || (bill.totalAmount - (bill.taxAmount || 0)));
+    const billNet = toBaseAmount(netAmount > 0 ? netAmount : r2(bill.totalAmount - (bill.taxAmount || 0)), bookingRate);
 
     // Stocked-line subtotal (lines that hit inventory) bounds how much GRNI we can clear.
-    const stockedSubtotal = r2((bill.lineItems || [])
+    const stockedSubtotal = toBaseAmount((bill.lineItems || [])
       .filter((li) => li.inventoryItemId)
-      .reduce((s, li) => s + Number(li.quantity || 0) * Number(li.unitPrice || 0), 0));
+      .reduce((s, li) => s + Number(li.quantity || 0) * Number(li.unitPrice || 0), 0), bookingRate);
 
     const linkedGrni = r2(await this._linkedGrniValue(bill));
     const grniDebit = r2(Math.min(linkedGrni, stockedSubtotal));
@@ -734,7 +740,8 @@ class BillService {
           invoiceNumber:     bill.billNumber,
           vendorId:          bill.vendorId || null,
           currencyCode:      bill.currencyCode || 'PKR',
-          exchangeRate:      bill.exchangeRate || 1,
+          exchangeRate:      bookingRate,
+          baseCurrencyAmount: apCredit,            // pinned (F2): lines are already base
           createdBy:         user._id,
           lastModifiedBy:    user._id,
           taxAmount:         taxAmount || 0,
