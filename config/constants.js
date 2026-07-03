@@ -773,6 +773,9 @@ module.exports = {
     // plain approver cannot override a match discrepancy — only roles granted
     // match:override (owner by default) may. See bill.routes / bill.service.
     MATCH_OVERRIDE:      'match:override',
+    // Post/reverse into a CLOSED or LOCKED accounting period — a hard override of
+    // period integrity. Owner-only by default; never granted to accountant/approver.
+    PERIOD_OVERRIDE:     'period:override',
     REPORT_VIEW:         'report:view',
     REPORT_MANAGE:       'report:manage',
     AUDIT_MANAGE:        'audit:manage',

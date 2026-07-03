@@ -76,6 +76,22 @@ test('an approver (no match:override) cannot force a blocked 3-way-match bill th
   expect(denied.mock.calls[0][0].statusCode).toBe(403);
 });
 
+test('only period:override holders can post into a locked/closed period (adminOverride)', () => {
+  const g = requirePermissionWhen((req) => req.body?.adminOverride === true, 'period:override');
+  // normal post (no override) always passes
+  const clean = jest.fn();
+  g({ body: {}, membership: { permissions: ['transaction:create'] } }, mkRes(), clean);
+  expect(clean).toHaveBeenCalledWith();
+  // an accountant trying to force into a locked period → 403
+  const denied = jest.fn();
+  g({ body: { adminOverride: true }, membership: { permissions: ['transaction:create'] } }, mkRes(), denied);
+  expect(denied.mock.calls[0][0].statusCode).toBe(403);
+  // owner (wildcard) can override
+  const owner = jest.fn();
+  g({ body: { adminOverride: true }, membership: { permissions: ['*'] } }, mkRes(), owner);
+  expect(owner).toHaveBeenCalledWith();
+});
+
 test('domainWriteGuard routes the permission by what the write does', () => {
   const g = domainWriteGuard({ create: 'transaction:create', approve: 'transaction:approve', reverse: 'transaction:reverse' });
   // accountant (create only) can create but not approve/reverse

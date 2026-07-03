@@ -18,12 +18,17 @@ const {
   batchTransactionsSchema,
 } = require('../../validations/transaction.validation');
 
-const { attachMembership, requirePermission, domainWriteGuard } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
+const { attachMembership, requirePermission, requirePermissionWhen, domainWriteGuard } = require('../../middleware/rbac.middleware'); // Phase 6A — RBAC
 const { PERMISSIONS } = require('../../config/constants');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 router.use(authMiddleware, requireBusiness, attachMembership, domainWriteGuard({ create: PERMISSIONS.TRANSACTION_CREATE, reverse: PERMISSIONS.TRANSACTION_REVERSE }));
+
+// Posting into a CLOSED/LOCKED period via `adminOverride:true` is a hard
+// integrity override — gate it behind period:override (owner-only) on every
+// write in this router. A normal post (no flag) passes through untouched.
+router.use(requirePermissionWhen((req) => req.body?.adminOverride === true, PERMISSIONS.PERIOD_OVERRIDE));
 
 // Transaction Creation (v2)
 router.post('/form', validate(createTransactionSchema), transactionController.createFormTransaction);
