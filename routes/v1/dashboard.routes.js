@@ -13,4 +13,8 @@ router.get('/revenue-vs-expenses', validate(kpiSchema, 'query'), dashboardContro
 router.get('/cash-flow-trend', validate(kpiSchema, 'query'), dashboardController.getCashFlowTrend);
 router.get('/all', validate(kpiSchema, 'query'), dashboardController.getAllDashboardData);
 
+// Personalised module shortcuts (most-used + recent) for the dashboard
+router.post('/module-usage',    dashboardController.recordModuleUsage);
+router.get('/module-shortcuts', dashboardController.getModuleShortcuts);
+
 module.exports = router;

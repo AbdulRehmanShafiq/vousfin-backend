@@ -1,5 +1,6 @@
 // controllers/dashboard.controller.js
 const dashboardService = require('../services/dashboard.service');
+const moduleUsageService = require('../services/moduleUsage.service');
 const ApiResponse = require('../utils/ApiResponse');
 const { ApiError } = require('../utils/ApiError');
 
@@ -107,9 +108,29 @@ const getAllDashboardData = async (req, res, next) => {
   }
 };
 
+// POST /dashboard/module-usage — record a module open/search (fire-and-forget UX telemetry)
+const recordModuleUsage = async (req, res, next) => {
+  try {
+    const { moduleKey, label, path } = req.body || {};
+    await moduleUsageService.record(req.user.businessId, req.user.id, { moduleKey, label, path });
+    ApiResponse.success(res, { recorded: true }, 'Recorded');
+  } catch (error) { next(error); }
+};
+
+// GET /dashboard/module-shortcuts — the user's most-used modules for the dashboard
+const getModuleShortcuts = async (req, res, next) => {
+  try {
+    const limit = Math.min(5, Math.max(1, Number(req.query.limit) || 5));
+    const shortcuts = await moduleUsageService.getShortcuts(req.user.businessId, req.user.id, { limit });
+    ApiResponse.success(res, shortcuts, 'Module shortcuts');
+  } catch (error) { next(error); }
+};
+
 module.exports = {
   getKPIs,
   getRevenueVsExpenses,
   getCashFlowTrend,
   getAllDashboardData,
+  recordModuleUsage,
+  getModuleShortcuts,
 };
