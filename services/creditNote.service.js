@@ -269,6 +269,62 @@ class CreditNoteService {
           -creditBase,
           { session: s }
         );
+      } else if (cn.noteType === 'debit_note') {
+        // Debit note = an additional charge to the customer. It was previously
+        // document-only (remainingBalance += amount) with NO GL entry and no AR
+        // adjustment — books understated revenue and receivable (audit F-gap).
+        // Post DR Accounts Receivable / CR Sales, and raise the receivable.
+        const bookingRate = Number(invoice.exchangeRate) > 0
+          ? Number(invoice.exchangeRate)
+          : (Number(cn.exchangeRate) > 0 ? Number(cn.exchangeRate) : 1);
+        const debitBase = toBaseAmount(cn.totalAmount, bookingRate);
+        const [arAcct, salesAcct] = await Promise.all([
+          ChartOfAccount.findOne({
+            businessId: cn.businessId,
+            $or: [{ accountCode: '1110' }, { accountName: /accounts receivable/i }],
+          }).lean(),
+          ChartOfAccount.findOne({
+            businessId: cn.businessId,
+            $or: [{ accountCode: '4110' }, { accountName: /^sales$/i }],
+          }).lean(),
+        ]);
+        if (!arAcct || !salesAcct) {
+          throw new ApiError(500, 'Cannot apply debit note: Accounts Receivable (1110) or Sales (4110) account is not set up.');
+        }
+        const je = await postBalancedJournal({
+          businessId:         cn.businessId,
+          transactionDate:    new Date(),
+          description:        `Debit Note ${cn.creditNoteNumber} applied to ${cn.invoiceNumber || invoice.invoiceNumber}`,
+          transactionType:    TRANSACTION_TYPES.CREDIT_SALE || 'Credit Sale',
+          amount:             debitBase,
+          debitAccountId:     arAcct._id,
+          creditAccountId:    salesAcct._id,
+          transactionSource:  'system_generated',
+          status:             'posted',
+          entryType:          'adjusting',
+          createdBy:          user._id,
+          lastModifiedBy:     user._id,
+          currencyCode:       cn.currencyCode || 'PKR',
+          baseCurrencyCode:   cn.baseCurrencyCode || 'PKR',
+          exchangeRate:       bookingRate,
+          baseCurrencyAmount: debitBase,
+        }, { session: s });
+        cn.linkedJournalEntryId = je._id;
+
+        if (invoice.customerId) {
+          await partyBalanceService.adjustReceivable(
+            cn.businessId, invoice.customerId, debitBase,
+            { userId: user._id, reason: 'debit_note_applied', entityType: 'creditNote', entityId: cn._id, session: s }
+          );
+        }
+        // The extra charge adds to the invoice's open item so the payment engine
+        // and aging see the higher amount due.
+        await openItemService.adjustOpenItem(
+          cn.businessId,
+          invoice.linkedJournalEntryId || invoice.arJournalId,
+          debitBase,
+          { session: s }
+        );
       }
 
       cn.state = 'applied';
@@ -328,6 +384,13 @@ class CreditNoteService {
                 cn.businessId, invoice.customerId, creditBase,
                 { userId: user._id, reason: 'credit_note_cancelled', entityType: 'creditNote', entityId: cn._id, session: s }
               );
+            } else if (cn.noteType === 'debit_note' && invoice.customerId) {
+              // Mirror of apply: the JE reversal above unwinds the ledger; here we
+              // lower the customer receivable back down by the extra charge.
+              await partyBalanceService.adjustReceivable(
+                cn.businessId, invoice.customerId, -creditBase,
+                { userId: user._id, reason: 'debit_note_cancelled', entityType: 'creditNote', entityId: cn._id, session: s }
+              );
             }
           }
 
@@ -337,6 +400,14 @@ class CreditNoteService {
               cn.businessId,
               invoice.linkedJournalEntryId || invoice.arJournalId,
               creditBase,
+              { session: s }
+            );
+          } else if (cn.noteType === 'debit_note') {
+            // Apply added the extra charge to the open item; cancel removes it.
+            await openItemService.adjustOpenItem(
+              cn.businessId,
+              invoice.linkedJournalEntryId || invoice.arJournalId,
+              -creditBase,
               { session: s }
             );
           }

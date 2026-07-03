@@ -336,4 +336,27 @@ describe('CreditNote — debit note', () => {
     const updatedInv = global.__mockInvoiceStoreForCN.get(String(inv._id));
     expect(updatedInv.remainingBalance).toBe(3500); // increased by 500
   });
+
+  test('debit note posts a GL entry (DR AR / CR Sales) and raises the customer receivable', async () => {
+    const partyBalance = require('../../../services/partyBalance.service');
+    const customerId = new mongoose.Types.ObjectId();
+    const inv = seedInvoice({ totalAmount: 5000, remainingBalance: 3000, customerId });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId, invoiceId: inv._id, creditNoteNumber: 'DN-002',
+      noteType: 'debit_note', issueDate: new Date(), totalAmount: 500, customerId,
+    }, user, '127.0.0.1');
+
+    await creditNoteService.approve(cn._id, user);
+    await creditNoteService.apply(cn._id, user);
+
+    // A balanced JE must be posted for the debit note (was the F-gap: none before)
+    expect(postBalancedJournal).toHaveBeenCalled();
+    // Receivable goes UP by the base amount (a debit note charges the customer more)
+    expect(partyBalance.adjustReceivable).toHaveBeenCalledWith(
+      inv.businessId, customerId, 500,
+      expect.objectContaining({ reason: 'debit_note_applied' })
+    );
+    const applied = global.__mockCnStore.get(String(cn._id));
+    expect(applied.linkedJournalEntryId).toBeTruthy();
+  });
 });
