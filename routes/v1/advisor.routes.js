@@ -8,6 +8,7 @@ const { requireBusiness } = require('../../middleware/business.middleware');
 
 router.use(authMiddleware, requireBusiness);
 
-router.get('/recommendations', ctrl.getRecommendations);
+router.get('/recommendations', ctrl.getRecommendations)
+router.post('/what-if', ctrl.whatIf) // conversational grounded affordability projection;
 
 module.exports = router;

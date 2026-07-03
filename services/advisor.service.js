@@ -15,7 +15,11 @@ const businessHealth = require('./businessHealth.service');
 const stpScorecard = require('./stpScorecard.service');
 const aiDecisionService = require('./aiDecision.service');
 const { buildRecommendations } = require('../utils/advisor.helper');
+const { parseWhatIf, projectAffordability } = require('../utils/whatIf.helper');
 const logger = require('../config/logger');
+
+const fmtRs = (n) => `Rs ${Math.round(Math.abs(Number(n) || 0)).toLocaleString('en-PK')}`;
+const mo = (n) => (n == null ? 'unknown' : `${n} month${n === 1 ? '' : 's'}`);
 
 async function safeSignal(name, fn) {
   try { return await fn(); }
@@ -72,4 +76,50 @@ async function getRecommendations(businessId) {
   return { recommendations, asOf: new Date().toISOString() };
 }
 
-module.exports = { getRecommendations };
+/**
+ * Conversational what-if — "can I afford to hire 2 people at Rs 60k?" → a
+ * grounded runway projection from the tenant's REAL cash + burn. Never invents
+ * numbers; when it can't ground the question it says so and asks for detail.
+ * Framing stays "here's what your runway does", not "you should".
+ * @returns {Promise<{understood:boolean, answer:string, projection?:object, parsed:object}>}
+ */
+async function answerWhatIf(businessId, question) {
+  const parsed = parseWhatIf(question);
+
+  if (parsed.kind === 'unknown') {
+    return { understood: false, parsed, answer: "I can only answer money questions I can ground in your numbers — try asking about hiring (\"can I afford to hire 2 people at Rs 60,000?\") or spending (\"what if I spend 50,000 a month on marketing?\")." };
+  }
+  if (parsed.monthlyDelta == null) {
+    return { understood: false, parsed, answer: `Tell me the monthly pay per person and I'll project it — e.g. "hire ${parsed.count || 2} people at Rs 60,000 each".` };
+  }
+
+  let financials = { cashBalance: 0, monthlyBurn: 0 };
+  try {
+    const h = await businessHealth.getHealthScore(businessId);
+    if (h && !h.insufficient && h.metrics) {
+      financials = { cashBalance: h.metrics.cashBalance || 0, monthlyBurn: h.metrics.monthlyBurn || 0 };
+    }
+  } catch (err) { logger.warn(`[advisor] what-if health load failed: ${err.message}`); }
+
+  const projection = projectAffordability(financials, parsed.monthlyDelta);
+  const what = parsed.kind === 'hire' ? `hiring ${parsed.count} (${fmtRs(parsed.monthlyDelta)}/month)` : `spending an extra ${fmtRs(parsed.monthlyDelta)}/month`;
+
+  let answer;
+  if (projection.runwayAfter == null) {
+    answer = `I don't have enough cash/spending history yet to project ${what}. Record a few months of activity and ask again.`;
+  } else if (projection.affordable) {
+    answer = `Yes — ${what} takes your cash runway from ${mo(projection.runwayBefore)} to ${mo(projection.runwayAfter)}, which still clears a healthy 6-month buffer. Based on ${fmtRs(financials.cashBalance)} cash and ${fmtRs(financials.monthlyBurn)}/month current spend.`;
+  } else {
+    answer = `Careful — ${what} would cut your cash runway from ${mo(projection.runwayBefore)} to ${mo(projection.runwayAfter)}, below a comfortable 6-month buffer. Based on ${fmtRs(financials.cashBalance)} cash and ${fmtRs(financials.monthlyBurn)}/month current spend.`;
+  }
+
+  await aiDecisionService.record(businessId, 'recommend', {
+    inputsSummary: `What-if: ${parsed.kind} — ${String(question).slice(0, 200)}`,
+    decision: { parsed, projection },
+    model: 'whatif-rules-v1', promptVersion: 'whatif-v1',
+  });
+
+  return { understood: true, answer, projection, parsed, asOf: new Date().toISOString() };
+}
+
+module.exports = { getRecommendations, answerWhatIf };
