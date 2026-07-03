@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-06-30T09:33:09.068Z",
+  "generatedAt": "2026-07-03T05:34:10.914Z",
   "entries": [
     {
       "id": "home",
@@ -1166,6 +1166,34 @@
         "about",
         "your",
         "finances",
+        "management",
+        "accounting",
+        "planning"
+      ],
+      "moduleKey": "planning",
+      "enablementKey": "planning"
+    },
+    {
+      "id": "planning.intelligence",
+      "type": "page",
+      "title": "Intelligence",
+      "path": [
+        "Planning",
+        "Intelligence"
+      ],
+      "href": "/ai/intelligence",
+      "desc": "Advice, automation depth, close readiness and the AI decision log",
+      "synonyms": [
+        "advice",
+        "automation",
+        "depth",
+        "close",
+        "readiness",
+        "and",
+        "the",
+        "ai",
+        "decision",
+        "log",
         "management",
         "accounting",
         "planning"
