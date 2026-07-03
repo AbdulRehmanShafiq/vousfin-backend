@@ -3,6 +3,7 @@
 // Registering the service runs executors.register(post_journal, …) at startup,
 // so the action router can post / reverse approved bookkeeping actions.
 const bookkeeper = require('../services/bookkeeper.service');
+const emailIntake = require('../services/emailIntake.service');
 
 const actor = (req) => req.user._id || req.user.id || null;
 
@@ -27,6 +28,23 @@ class BookkeeperController {
   async listDocuments(req, res, next) {
     try {
       res.json({ success: true, data: await bookkeeper.listDocuments(req.user.businessId) });
+    } catch (err) { next(err); }
+  }
+
+  // POST /bookkeeping/email-intake/enable — owner turns on forward-a-bill; returns the token
+  async enableEmailIntake(req, res, next) {
+    try {
+      res.json({ success: true, data: await emailIntake.enableForBusiness(req.user.businessId) });
+    } catch (err) { next(err); }
+  }
+
+  // POST /bookkeeping/email-intake — inbound webhook (token-auth, NO login).
+  // An email-forwarding service posts { token, subject, text, from, attachments }.
+  async emailWebhook(req, res, next) {
+    try {
+      const token = req.query.token || req.body.token || req.get('x-intake-token');
+      const result = await emailIntake.captureEmail(token, req.body);
+      res.status(201).json({ success: true, data: { documentId: result?.document?._id || null }, message: 'Email captured' });
     } catch (err) { next(err); }
   }
 }

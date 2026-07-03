@@ -183,6 +183,10 @@ const businessSchema = new mongoose.Schema(
      */
     aiSettings: {
       autoPostEnabled: { type: Boolean, default: false },
+      // Secret token embedded in a per-business forwarding address so a
+      // forwarded bill/receipt email can be captured without a login. Null
+      // until the owner enables email intake. Indexed for O(1) webhook lookup.
+      emailIntakeToken: { type: String, default: null, index: true },
     },
 
     // ── FR-02.3 — Trend-alert thresholds ─────────────────────────────────────
