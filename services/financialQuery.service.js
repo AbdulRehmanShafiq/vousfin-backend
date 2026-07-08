@@ -2,7 +2,7 @@
  * Financial Query Engine — FR-03.1.
  *
  * Deterministic, GROUNDED answers for common financial questions, computed
- * straight from the live GL. Sits IN FRONT of the Groq LLM inside
+ * straight from the live GL. Sits IN FRONT of the DeepSeek LLM inside
  * aiAssistant.chat(): if an intent matches, the answer is exact (labelled
  * "factual" with drill-down links); otherwise the LLM fallback handles it.
  * Forward-looking questions are answered from run-rate and labelled "estimate".

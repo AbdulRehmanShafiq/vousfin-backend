@@ -1,10 +1,10 @@
 /**
  * @module aiAssistant.service
- * @description Real AI financial assistant using Groq (LLaMA).
+ * @description Real AI financial assistant using DeepSeek.
  * Collects live accounting data, builds a compact context summary,
- * and sends it to Groq to answer financial questions.
+ * and sends it to DeepSeek to answer financial questions.
  *
- * Uses GROQ_API_KEY from .env. Does NOT touch the NL Parser,
+ * Uses DEEPSEEK_API_KEY from .env. Does NOT touch the NL Parser,
  * forecasting service, or any unrelated modules.
  */
 
@@ -14,7 +14,7 @@ const ragQuery = require('./ragQuery.service');
 const faithfulnessJudge = require('./faithfulnessJudge.service');
 const modelRouter = require('./modelRouter.service');
 const AIInteractionLog = require('../models/AIInteractionLog.model');
-const { extractJSON } = require('./nlParser/services/geminiService');
+const { extractJSON } = require('../utils/aiJson.helper');
 const logger = require('../config/logger');
 
 const RAG_REFUSAL = "I couldn't find financial records relevant to that question. I can answer about your revenue, expenses, profit, cash flow, and tax position for periods that have recorded activity. Try naming a specific month (for example, \"expenses in February 2026\"), or open the matching report page for the full breakdown.";
@@ -282,16 +282,16 @@ function formatContext(ctx) {
   return lines.join('\n');
 }
 
-// ── Groq API call helper ──────────────────────────────────────────────────────
+// ── DeepSeek call helper ──────────────────────────────────────────────────────
 
 /**
  * Send a messages array to the model gateway and return the assistant's text.
- * The gateway (modelRouter) owns provider selection, retries, timeouts and the
- * Groq → Gemini fallback chain, so this stays a thin text-only wrapper.
+ * The gateway (modelRouter) owns retries and timeouts against the single
+ * DeepSeek provider, so this stays a thin text-only wrapper.
  * @param {Array<{role:string,content:string}>} messages - OpenAI-format messages
  * @param {object} opts - Optional overrides: temperature, max_tokens
  */
-async function callGroq(messages, opts = {}) {
+async function callAI(messages, opts = {}) {
   const result = await modelRouter.callChat(messages, opts);
   return result.text;
 }
@@ -485,7 +485,7 @@ async function chatWithRag(question, businessId, chatHistory = [], options = {})
 }
 
 /**
- * Answer a financial question using the grounded engine, RAG, or live data + Groq.
+ * Answer a financial question using the grounded engine, RAG, or live data + DeepSeek.
  *
  * @param {string} question - User's question
  * @param {string} businessId - Authenticated business ID
@@ -536,7 +536,7 @@ async function chat(question, businessId, chatHistory = [], options = {}) {
   });
 
   try {
-    const answer = await callGroq(messages, { temperature: 0.5, max_tokens: 800 });
+    const answer = await callAI(messages, { temperature: 0.5, max_tokens: 800 });
     return { answer, response: answer, sources: [], confident: true, mode: 'llm' };
   } catch (error) {
     logger.warn(`[aiAssistant] Live-context model call failed, using deterministic fallback: ${error.message}`);
@@ -609,7 +609,7 @@ async function chatStream(question, businessId, chatHistory = [], options = {}) 
 }
 /**
  * Generate 3-4 AI-powered actionable financial recommendations
- * based on live accounting data. Falls back to rule-based tips if Groq fails.
+ * based on live accounting data. Falls back to rule-based tips if the AI call fails.
  *
  * @param {string} businessId
  * @returns {Promise<Array<{ type: string, text: string }>>}
@@ -634,7 +634,7 @@ async function generateRecommendations(businessId) {
             content: 'Generate exactly 3 to 4 specific, actionable recommendations. Return JSON only: [{ "type": "warning|positive|info", "text": "specific recommendation" }]',
           },
         ];
-        const raw = await callGroq(messages, { temperature: 0.25, max_tokens: 500 });
+        const raw = await callAI(messages, { temperature: 0.25, max_tokens: 500 });
         const parsed = extractJSON(raw);
 
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -672,14 +672,14 @@ Use "warning" for risks/problems, "positive" for strengths/opportunities, "info"
       { role: 'user',   content: prompt },
     ];
 
-    const raw    = await callGroq(messages, { temperature: 0.3, max_tokens: 500 });
+    const raw    = await callAI(messages, { temperature: 0.3, max_tokens: 500 });
     const parsed = extractJSON(raw);
 
     if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     if (Array.isArray(parsed?.recommendations)) return parsed.recommendations;
     throw new Error('Unexpected JSON shape');
   } catch (err) {
-    logger.warn('[aiAssistant] Recommendations Groq call failed, using rule-based fallback:', err.message);
+    logger.warn('[aiAssistant] Recommendations AI call failed, using rule-based fallback:', err.message);
     return buildRuleBasedRecommendations(ctx);
   }
 }

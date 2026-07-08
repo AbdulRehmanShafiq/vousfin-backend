@@ -5,7 +5,7 @@
  * → journal generation → validation → structured response.
  */
 
-const { callGeminiAPI, callGeminiVision } = require('./geminiService');
+const { callAIExtraction, callAIVision } = require('./aiExtractionService');
 const { normalizeExtraction } = require('./normalizationService');
 const { generateJournalEntries } = require('./journalGeneratorService');
 const { validateResult } = require('./validationService');
@@ -18,7 +18,7 @@ const { matchAccountByName } = require('../../../utils/accountMatcher');
  * accounting journal entry object.
  *
  * Pipeline:
- *   1. AI Extraction (Gemini API — with live business accounts injected)
+ *   1. AI Extraction (DeepSeek — with live business accounts injected)
  *   2. Normalization
  *   3. Accounting Rules Engine
  *   4. Journal Entry Generation
@@ -32,14 +32,15 @@ const { matchAccountByName } = require('../../../utils/accountMatcher');
  * @returns {Promise<object>} Structured journal entry response.
  */
 async function parseTransaction(rawInput, businessAccounts = [], opts = {}) {
-  // ── Step 1: AI Extraction — inject live accounts so Gemini uses real names ──
-  const rawExtraction = await callGeminiAPI(rawInput, businessAccounts);
+  // ── Step 1: AI Extraction — inject live accounts so the model uses real names ──
+  const rawExtraction = await callAIExtraction(rawInput, businessAccounts);
   return _finishParse(rawExtraction, rawInput, businessAccounts, opts);
 }
 
-/** Read a bill/receipt IMAGE into the same structured result as the text path. */
+/** Read a bill/receipt IMAGE into the same structured result as the text path.
+ *  Not supported with the current text-only provider — see callAIVision. */
 async function parseTransactionFromImage(imageBase64, mimeType = 'image/jpeg', businessAccounts = [], opts = {}) {
-  const rawExtraction = await callGeminiVision(imageBase64, mimeType, businessAccounts);
+  const rawExtraction = await callAIVision(imageBase64, mimeType, businessAccounts);
   return _finishParse(rawExtraction, opts.rawText || '', businessAccounts, opts);
 }
 

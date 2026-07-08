@@ -44,7 +44,7 @@ const parseNaturalLanguage = async (req, res, next) => {
 };
 
 /**
- * AI assistant chat — powered by Groq (LLaMA) with live financial context.
+ * AI assistant chat — powered by DeepSeek with live financial context.
  * POST /api/v1/ai/rag-query
  */
 const ragQuery = async (req, res, next) => {

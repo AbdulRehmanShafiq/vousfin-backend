@@ -6,7 +6,7 @@
 // 'bookkeeper-ingest' queue. When a source document is uploaded (receipt,
 // bill scan, forwarded email), a job is enqueued and this worker:
 //
-//   1. Calls bookkeeper.ingest() which runs the Gemini OCR/NL pipeline.
+//   1. Calls bookkeeper.ingest() which runs the AI text-extraction pipeline.
 //   2. The ingest function resolves accounts, recalls entity memory, and
 //      proposes a journal entry through the Action Router.
 //   3. Based on the autonomy policy, the entry is either auto-posted to the
@@ -127,7 +127,7 @@ function startWorker() {
       concurrency: 2,  // Process 2 documents at a time
       limiter: {
         max: 10,
-        duration: 60000, // Max 10 jobs per minute (rate-limit Gemini calls)
+        duration: 60000, // Max 10 jobs per minute (rate-limit AI calls)
       },
     },
   );

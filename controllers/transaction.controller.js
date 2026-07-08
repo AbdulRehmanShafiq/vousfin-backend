@@ -252,7 +252,7 @@ const processNaturalLanguage = async (req, res, next) => {
       throw new ApiError(400, 'Please provide a longer transaction description');
     }
 
-    // Phase 3: Load live business accounts so Gemini uses real CoA names.
+    // Phase 3: Load live business accounts so the AI uses real CoA names.
     // Non-fatal — parsing still proceeds with empty accounts on failure.
     let businessAccounts = [];
     try {
@@ -348,7 +348,7 @@ const processNaturalLanguage = async (req, res, next) => {
         amount: preview.amount,
       },
       confidence: parsed.confidence?.overall ?? null,
-      model: 'gemini-nl-parser',
+      model: 'deepseek-nl-parser',
       promptVersion: 'nl-v1',
     });
     if (aiDecision?._id) preview.aiDecisionId = String(aiDecision._id);

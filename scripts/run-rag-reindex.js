@@ -15,14 +15,7 @@ const PURGE_VECTORS = process.argv.includes('--purge-vectors');
 async function main() {
   if (!process.env.MONGO_URI) throw new Error('MONGO_URI not set in .env');
 
-  if (!process.env.GEMINI_API_KEY) {
-    console.warn('\n⚠  WARNING: GEMINI_API_KEY is not set in .env');
-    console.warn('   Embeddings will use a local deterministic fallback.');
-    console.warn('   These will NOT match Gemini embeddings used by the Vercel backend.');
-    console.warn('   Set GEMINI_API_KEY in .env before running to get real embeddings.\n');
-  } else {
-    console.log('✓ GEMINI_API_KEY found — will use real Gemini embeddings.\n');
-  }
+  console.log('ℹ  Embeddings are always local/deterministic (no embeddings API is used) — see services/embeddingService.js.\n');
 
   console.log('Connecting to MongoDB...');
   await mongoose.connect(process.env.MONGO_URI);

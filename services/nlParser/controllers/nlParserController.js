@@ -49,14 +49,14 @@ async function parseNaturalLanguage(req, res) {
     console.error('[NL Parser] Controller error:', error);
 
     // Determine if it's a known error type
-    if (error.message?.includes('GEMINI_API_KEY')) {
+    if (error.message?.includes('DEEPSEEK_API_KEY')) {
       return res.status(500).json({
         success: false,
         error: 'AI service configuration error. Please contact support.',
       });
     }
 
-    if (error.message?.includes('Gemini API failed')) {
+    if (error.message?.includes('AI extraction failed') || error.message?.includes('DeepSeek API')) {
       return res.status(502).json({
         success: false,
         error: 'AI service is temporarily unavailable. Please try again later.',
