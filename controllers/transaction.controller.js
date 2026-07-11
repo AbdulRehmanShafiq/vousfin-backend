@@ -262,8 +262,22 @@ const processNaturalLanguage = async (req, res, next) => {
       logger.warn('NL parse: could not load business accounts (non-fatal):', acctErr.message);
     }
 
+    // Live inventory items → the parser matches goods names against real items.
+    // Non-fatal: parsing proceeds itemless on failure.
+    let inventoryItems = [];
+    try {
+      const InventoryItem = require('../models/InventoryItem.model');
+      inventoryItems = await InventoryItem.find({ businessId: req.user.businessId, isActive: true })
+        .select('name unit unitCostPrice currentStock')
+        .limit(100)
+        .lean();
+    } catch (invErr) {
+      logger.warn('NL parse: could not load inventory items (non-fatal):', invErr.message);
+    }
+
     const parsed = await parserService.parseTransaction(text, businessAccounts, {
       attempt: Number(attempt) || 0,
+      inventoryItems,
     });
     const preview = mapParserToPreview(parsed, text);
 
@@ -338,6 +352,22 @@ const processNaturalLanguage = async (req, res, next) => {
       }
     }
 
+    // ── Structural guardrail: a purchase can never debit Revenue etc. ────────
+    // Fail-closed: a violation forces review and hard-blocks auto-post below.
+    const { checkJournalShape } = require('../utils/journalGuardrails');
+    const typeOfAccount = (id) =>
+      businessAccounts.find((a) => String(a._id) === String(id))?.accountType || null;
+    const guardrail = checkJournalShape({
+      transactionType:   preview.transactionType,
+      debitAccountType:  typeOfAccount(preview.debitAccountId),
+      creditAccountType: typeOfAccount(preview.creditAccountId),
+    });
+    preview.guardrail = guardrail;
+    if (!guardrail.ok) {
+      preview.requiresReview = true;
+      preview.reviewReasons = [...new Set([...(preview.reviewReasons || []), ...guardrail.violations])];
+    }
+
     // ── AI Decision Ledger (Phase 0): record the parse lineage ──────────────
     const aiDecision = await aiDecisionService.record(req.user.businessId, 'parse', {
       inputsSummary: text.slice(0, 2000),
@@ -356,9 +386,15 @@ const processNaturalLanguage = async (req, res, next) => {
     // ── Opt-in zero-click auto-post (Phase 3) ──────────────────────────────────
     // Installments have their own multi-step config (down payment, frequency,
     // interest) — out of scope for auto-post; always fall through to preview.
+    // Inventory gates: a pending item creation must always be reviewed, and a
+    // matched item without a quantity can't sync stock — both block auto-post.
+    const inventoryBlocksAutoPost =
+      preview.inventory?.mode === 'create' ||
+      (preview.inventory?.mode === 'existing' && !(preview.inventory.quantity > 0));
     if (
       preview.debitAccountId && preview.creditAccountId &&
-      !parsed.parsedData?.isInstallment
+      !parsed.parsedData?.isInstallment &&
+      guardrail.ok && !inventoryBlocksAutoPost
     ) {
       try {
         const business = await businessRepository.findById(req.user.businessId);
@@ -371,6 +407,10 @@ const processNaturalLanguage = async (req, res, next) => {
             amount:          preview.amount,
             debitAccountId:  preview.debitAccountId,
             creditAccountId: preview.creditAccountId,
+            // Matched inventory rides along so the stock subledger syncs (7a).
+            ...(preview.inventory?.mode === 'existing' && preview.inventory.quantity > 0
+              ? { inventoryItemId: preview.inventory.itemId, inventoryQty: preview.inventory.quantity }
+              : {}),
             businessId:      req.user.businessId,
             inputMethod:     'nlp',
             transactionSource: TRANSACTION_SOURCES.AI_AUTO_POSTED,

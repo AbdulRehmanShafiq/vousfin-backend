@@ -182,6 +182,10 @@ function mapParserToPreview(parsed, rawText) {
     // Invoice reference if detected (e.g., "INV-123" in the input)
     invoiceNumber:           parsedData.invoiceReference           || null,
 
+    // Smart entry — goods + inventory linkage for the confirm step
+    lineItems:               parsedData.lineItems                  || [],
+    inventory:               parsedData.inventory                  || { mode: 'none' },
+
     // Raw data passthrough (for debugging and manual correction flow)
     rawText,
     parsedData,
