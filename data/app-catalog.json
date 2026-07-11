@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-03T06:09:02.452Z",
+  "generatedAt": "2026-07-11T09:18:00.977Z",
   "entries": [
     {
       "id": "home",
@@ -16,6 +16,33 @@
         "at",
         "a",
         "glance"
+      ],
+      "moduleKey": "home",
+      "enablementKey": null
+    },
+    {
+      "id": "home.command-center",
+      "type": "page",
+      "title": "Command Center",
+      "path": [
+        "Home",
+        "Command Center"
+      ],
+      "href": "/command-center",
+      "desc": "Your one inbox — what needs you, and what VousFin is doing",
+      "synonyms": [
+        "your",
+        "one",
+        "inbox",
+        "what",
+        "needs",
+        "you",
+        "and",
+        "what",
+        "vousfin",
+        "is",
+        "doing",
+        "home"
       ],
       "moduleKey": "home",
       "enablementKey": null
