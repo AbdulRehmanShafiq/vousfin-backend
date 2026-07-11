@@ -28,9 +28,9 @@ function isOverload(err) {
  * @returns {Promise<object>} Parsed JSON response.
  * @throws {Error} If the call fails or the response isn't valid JSON.
  */
-async function callAIExtraction(rawInput, businessAccounts = []) {
+async function callAIExtraction(rawInput, businessAccounts = [], inventoryItems = []) {
   const messages = [
-    { role: 'system', content: buildSystemPrompt(businessAccounts) },
+    { role: 'system', content: buildSystemPrompt(businessAccounts, inventoryItems) },
     { role: 'user', content: buildUserPrompt(rawInput) },
   ];
   return generate(messages);

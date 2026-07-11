@@ -33,7 +33,7 @@ const { matchAccountByName } = require('../../../utils/accountMatcher');
  */
 async function parseTransaction(rawInput, businessAccounts = [], opts = {}) {
   // ── Step 1: AI Extraction — inject live accounts so the model uses real names ──
-  const rawExtraction = await callAIExtraction(rawInput, businessAccounts);
+  const rawExtraction = await callAIExtraction(rawInput, businessAccounts, opts.inventoryItems || []);
   return _finishParse(rawExtraction, rawInput, businessAccounts, opts);
 }
 
