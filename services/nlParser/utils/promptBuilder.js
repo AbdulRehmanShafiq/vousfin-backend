@@ -25,7 +25,7 @@ const {
  *   Live accounts from MongoDB. When provided, Gemini uses these exact names.
  *   When empty, falls back to generic guidance.
  */
-function buildSystemPrompt(businessAccounts = []) {
+function buildSystemPrompt(businessAccounts = [], inventoryItems = []) {
   const transactionTypes = Object.values(TRANSACTION_TYPES).join(', ');
   const expenseSubs      = Object.values(EXPENSE_SUBCATEGORIES).join(', ');
   const incomeSubs       = Object.values(INCOME_SUBCATEGORIES).join(', ');
@@ -60,6 +60,16 @@ The system will fuzzy-match your suggestions to the business's actual accounts.
 `;
   }
 
+  // ── Build live inventory items section (smart entry) ─────────────────────
+  let inventorySection = '';
+  if (Array.isArray(inventoryItems) && inventoryItems.length > 0) {
+    const names = inventoryItems.slice(0, 100).map((i) => `"${i.name}"`).join(', ');
+    inventorySection = `
+INVENTORY ITEMS THIS BUSINESS TRACKS (when the goods in the input are the same thing, use the EXACT name from this list in lineItems[].name):
+${names}
+`;
+  }
+
   return `You are an expert accounting transaction parser for Pakistani SME businesses. Your ONLY job is to extract structured accounting data from natural language input and output ONLY valid JSON.
 
 CRITICAL RULES:
@@ -90,6 +100,10 @@ CRITICAL RULES:
 25. For PAYROLL ACCRUAL (recording wages owed but not yet paid): transactionType = "payroll_payable".
 26. For PAYING WAGES (settling wages payable): transactionType = "payroll_payment".
 27. For GST/WHT FILING to FBR/SRB/PRA: transactionType = "tax_payable_payment", taxType = "GST"/"WHT"/"SRB".
+28. Extract PHYSICAL GOODS as lineItems: [{"name","quantity","unit","unitPrice"}]. Example: "bought 10 bags of rice at 500 each" → lineItems = [{"name":"rice","quantity":10,"unit":"bags","unitPrice":500}]. Services, rent, fees, utilities are NOT lineItems — use [] for them.
+29. For PURCHASES of goods set purchaseIntent: "resale" (bought to sell again — stock, inventory, maal, goods for the shop), "business_use" (consumed/used up by the business), "long_term_asset" (equipment, furniture, vehicle, machine kept long-term), or null when the input does not say.
+30. For SALES of physical goods set saleAffectsStock = true; for service/consulting income set it false.
+31. When the input contains an "Additional details:" section, those lines are the user's direct answers to follow-up questions — treat them as authoritative and let them override anything you inferred from the first sentence.
 
 VALID TRANSACTION TYPES:
 ${transactionTypes}
@@ -129,7 +143,7 @@ PAKISTANI CONTEXT:
 - Payroll: EOBI (Employee Old-Age Benefits Institution), SESSI, PESSI
 - Companies: Pvt Ltd, Sole Proprietorship, AOP (Association of Persons)
 - Common expenses: WAPDA/LESCO/IESCO (electricity), SNGPL/SSGC (gas), PTCL/Nayatel (internet)
-${accountsSection}
+${accountsSection}${inventorySection}
 INSTALLMENT / FINANCING DETECTION:
 - Keywords: installments, EMI, on credit, financed, hire purchase, kist, monthly payments, deferred payment
 - When detected: isInstallment = true, totalInstallmentAmount = total cost, installmentPeriodMonths = duration
@@ -210,6 +224,9 @@ You must respond with this EXACT JSON structure:
   "netAmount": number_or_null,
   "adjustmentType": "write_down or write_up or null",
   "eobi": number_or_null,
+  "lineItems": [{"name": "string", "quantity": number_or_null, "unit": "string or null", "unitPrice": number_or_null}],
+  "purchaseIntent": "resale or business_use or long_term_asset or null",
+  "saleAffectsStock": true_or_false,
   "confidence": {
     "intent": 0.0_to_1.0,
     "amount": 0.0_to_1.0,

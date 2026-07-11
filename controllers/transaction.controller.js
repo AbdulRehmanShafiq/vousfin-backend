@@ -33,20 +33,28 @@ function isAutoPostEligible(confidence, accountResolution, autoPostEnabled) {
   return true;
 }
 
-const resolveAccountIds = async (businessId, row) => {
+// Full deterministic chain (exact name → code → synonym → create-from-catalog
+// shape) via the same service the bulk importer uses — an NL confirm can no
+// longer fail just because the wording differs from the seeded chart.
+const resolveAccountIds = async (businessId, row, { transactionType = null, userId = null } = {}) => {
   let debitAccountId = row.debitAccountId;
   let creditAccountId = row.creditAccountId;
   const debitName = row.debitAccountName || row.debitAccount;
   const creditName = row.creditAccountName || row.creditAccount;
+  if ((debitAccountId || !debitName) && (creditAccountId || !creditName)) {
+    return { debitAccountId, creditAccountId };
+  }
+  const { resolveForImport } = require('../services/importAccountResolution.service');
+  const accounts = (await accountRepository.findByBusiness(businessId)) || [];
   if (!debitAccountId && debitName) {
-    const debit = await accountRepository.findByBusinessAndName(businessId, debitName);
-    if (!debit) throw new ApiError(400, `Debit account not found: "${debitName}". Please check your Chart of Accounts.`);
-    debitAccountId = debit._id;
+    const r = await resolveForImport(businessId, accounts, debitName, { side: 'debit', transactionType, userId });
+    if (!r.account) throw new ApiError(400, `Debit account not found: "${debitName}". Please check your Chart of Accounts.`);
+    debitAccountId = r.account._id;
   }
   if (!creditAccountId && creditName) {
-    const credit = await accountRepository.findByBusinessAndName(businessId, creditName);
-    if (!credit) throw new ApiError(400, `Credit account not found: "${creditName}". Please check your Chart of Accounts.`);
-    creditAccountId = credit._id;
+    const r = await resolveForImport(businessId, accounts, creditName, { side: 'credit', transactionType, userId });
+    if (!r.account) throw new ApiError(400, `Credit account not found: "${creditName}". Please check your Chart of Accounts.`);
+    creditAccountId = r.account._id;
   }
   return { debitAccountId, creditAccountId };
 };
@@ -262,8 +270,22 @@ const processNaturalLanguage = async (req, res, next) => {
       logger.warn('NL parse: could not load business accounts (non-fatal):', acctErr.message);
     }
 
+    // Live inventory items → the parser matches goods names against real items.
+    // Non-fatal: parsing proceeds itemless on failure.
+    let inventoryItems = [];
+    try {
+      const InventoryItem = require('../models/InventoryItem.model');
+      inventoryItems = await InventoryItem.find({ businessId: req.user.businessId, isActive: true })
+        .select('name unit unitCostPrice currentStock')
+        .limit(100)
+        .lean();
+    } catch (invErr) {
+      logger.warn('NL parse: could not load inventory items (non-fatal):', invErr.message);
+    }
+
     const parsed = await parserService.parseTransaction(text, businessAccounts, {
       attempt: Number(attempt) || 0,
+      inventoryItems,
     });
     const preview = mapParserToPreview(parsed, text);
 
@@ -338,6 +360,22 @@ const processNaturalLanguage = async (req, res, next) => {
       }
     }
 
+    // ── Structural guardrail: a purchase can never debit Revenue etc. ────────
+    // Fail-closed: a violation forces review and hard-blocks auto-post below.
+    const { checkJournalShape } = require('../utils/journalGuardrails');
+    const typeOfAccount = (id) =>
+      businessAccounts.find((a) => String(a._id) === String(id))?.accountType || null;
+    const guardrail = checkJournalShape({
+      transactionType:   preview.transactionType,
+      debitAccountType:  typeOfAccount(preview.debitAccountId),
+      creditAccountType: typeOfAccount(preview.creditAccountId),
+    });
+    preview.guardrail = guardrail;
+    if (!guardrail.ok) {
+      preview.requiresReview = true;
+      preview.reviewReasons = [...new Set([...(preview.reviewReasons || []), ...guardrail.violations])];
+    }
+
     // ── AI Decision Ledger (Phase 0): record the parse lineage ──────────────
     const aiDecision = await aiDecisionService.record(req.user.businessId, 'parse', {
       inputsSummary: text.slice(0, 2000),
@@ -356,9 +394,15 @@ const processNaturalLanguage = async (req, res, next) => {
     // ── Opt-in zero-click auto-post (Phase 3) ──────────────────────────────────
     // Installments have their own multi-step config (down payment, frequency,
     // interest) — out of scope for auto-post; always fall through to preview.
+    // Inventory gates: a pending item creation must always be reviewed, and a
+    // matched item without a quantity can't sync stock — both block auto-post.
+    const inventoryBlocksAutoPost =
+      preview.inventory?.mode === 'create' ||
+      (preview.inventory?.mode === 'existing' && !(preview.inventory.quantity > 0));
     if (
       preview.debitAccountId && preview.creditAccountId &&
-      !parsed.parsedData?.isInstallment
+      !parsed.parsedData?.isInstallment &&
+      guardrail.ok && !inventoryBlocksAutoPost
     ) {
       try {
         const business = await businessRepository.findById(req.user.businessId);
@@ -371,6 +415,10 @@ const processNaturalLanguage = async (req, res, next) => {
             amount:          preview.amount,
             debitAccountId:  preview.debitAccountId,
             creditAccountId: preview.creditAccountId,
+            // Matched inventory rides along so the stock subledger syncs (7a).
+            ...(preview.inventory?.mode === 'existing' && preview.inventory.quantity > 0
+              ? { inventoryItemId: preview.inventory.itemId, inventoryQty: preview.inventory.quantity }
+              : {}),
             businessId:      req.user.businessId,
             inputMethod:     'nlp',
             transactionSource: TRANSACTION_SOURCES.AI_AUTO_POSTED,
@@ -429,7 +477,10 @@ const confirmNaturalLanguage = async (req, res, next) => {
       interestRate,
     } = req.body;
 
-    const { debitAccountId, creditAccountId } = await resolveAccountIds(req.user.businessId, req.body);
+    const { debitAccountId, creditAccountId } = await resolveAccountIds(req.user.businessId, req.body, {
+      transactionType: req.body.transactionType || null,
+      userId: req.user.id,
+    });
     if (!debitAccountId || !creditAccountId) {
       throw new ApiError(400, 'Debit and credit accounts are required. Resolve account names or pass account IDs.');
     }
@@ -464,6 +515,22 @@ const confirmNaturalLanguage = async (req, res, next) => {
       // Include journal lines for multi-entry accounting (Phase 4).
       // When present, the service uses these for balance updates and storage.
       ...(journalLines ? { journalLines } : {}),
+      // Smart entry — inventory linkage (existing item) or consented creation
+      ...(req.body.inventoryItemId
+        ? { inventoryItemId: req.body.inventoryItemId, inventoryQty: Number(req.body.inventoryQty) || 1 }
+        : {}),
+      ...(!req.body.inventoryItemId && req.body.newInventoryItem?.name
+        ? {
+            newInventoryItem: {
+              name: String(req.body.newInventoryItem.name).trim().slice(0, 200),
+              unit: String(req.body.newInventoryItem.unit || 'units').trim().slice(0, 30),
+              quantity: Number(req.body.newInventoryItem.quantity),
+              unitCostPrice: Number(req.body.newInventoryItem.unitCostPrice) > 0
+                ? Number(req.body.newInventoryItem.unitCostPrice)
+                : null,
+            },
+          }
+        : {}),
     };
 
     // ── Phase 3: Installment routing ─────────────────────────────────────────

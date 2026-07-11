@@ -80,6 +80,10 @@ function normalizeExtraction(rawExtraction, opts = {}) {
     grossAmount:           normalizeAmount(rawExtraction.grossAmount || rawExtraction.gross_amount),
     // netAmount: the amount before tax (when Gemini extracts it separately)
     netAmount:             normalizeAmount(rawExtraction.netAmount || rawExtraction.net_amount),
+    // Smart entry — physical goods + why they were bought
+    lineItems:             normalizeLineItems(rawExtraction.lineItems, normalizeAmount(rawExtraction.amount)),
+    purchaseIntent:        normalizePurchaseIntent(rawExtraction.purchaseIntent),
+    saleAffectsStock:      rawExtraction.saleAffectsStock === true || rawExtraction.saleAffectsStock === 'true',
   };
 
   // Normalize date
@@ -274,6 +278,44 @@ function normalizeString(val) {
   return val.trim() || null;
 }
 
+// Amount is authoritative: when a single parsed line item's qty × unitPrice
+// disagrees with the headline amount by more than 1%, the per-unit claim is
+// recomputed from amount. The AI never gets the final word on arithmetic.
+const LINE_ITEM_TOLERANCE = 0.01;
+
+function normalizeLineItems(raw, amount) {
+  if (!Array.isArray(raw)) return [];
+  const items = raw
+    .map((li) => ({
+      name:      normalizeString(li?.name),
+      quantity:  normalizePositiveFloat(li?.quantity),
+      unit:      normalizeString(li?.unit),
+      unitPrice: normalizeAmount(li?.unitPrice),
+    }))
+    .filter((li) => li.name);
+
+  if (items.length === 1 && Number.isFinite(amount) && amount > 0) {
+    const li = items[0];
+    if (li.quantity && li.unitPrice) {
+      const implied = li.quantity * li.unitPrice;
+      if (Math.abs(implied - amount) / amount > LINE_ITEM_TOLERANCE) {
+        li.unitPrice = Math.round((amount / li.quantity) * 100) / 100;
+      }
+    } else if (li.quantity && !li.unitPrice) {
+      li.unitPrice = Math.round((amount / li.quantity) * 100) / 100;
+    } else if (!li.quantity && li.unitPrice && li.unitPrice <= amount) {
+      const q = amount / li.unitPrice;
+      if (Math.abs(q - Math.round(q)) < 0.02) li.quantity = Math.round(q);
+    }
+  }
+  return items;
+}
+
+function normalizePurchaseIntent(raw) {
+  const v = String(raw || '').toLowerCase().trim();
+  return ['resale', 'business_use', 'long_term_asset'].includes(v) ? v : null;
+}
+
 /**
  * Normalize tax type string.
  * Delegates to taxCalculator.resolveTaxType for canonical conversion.
@@ -305,4 +347,5 @@ module.exports = {
   normalizeSourceAccount,
   normalizeTaxType,
   normalizeAdjustmentType,
+  normalizeLineItems,
 };

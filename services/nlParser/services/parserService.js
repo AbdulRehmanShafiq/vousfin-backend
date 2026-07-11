@@ -7,6 +7,8 @@
 
 const { callAIExtraction, callAIVision } = require('./aiExtractionService');
 const { normalizeExtraction } = require('./normalizationService');
+const { resolveIntent, buildInventoryBlock, PURCHASE_FAMILY, INTENT_TO_TYPE } = require('./intentResolver');
+const { CASH_FLOW_MAP } = require('../constants/transactionTypes');
 const { generateJournalEntries } = require('./journalGeneratorService');
 const { validateResult } = require('./validationService');
 const { calculateConfidence, evaluateReviewNeed } = require('../utils/confidenceCalculator');
@@ -33,7 +35,7 @@ const { matchAccountByName } = require('../../../utils/accountMatcher');
  */
 async function parseTransaction(rawInput, businessAccounts = [], opts = {}) {
   // ── Step 1: AI Extraction — inject live accounts so the model uses real names ──
-  const rawExtraction = await callAIExtraction(rawInput, businessAccounts);
+  const rawExtraction = await callAIExtraction(rawInput, businessAccounts, opts.inventoryItems || []);
   return _finishParse(rawExtraction, rawInput, businessAccounts, opts);
 }
 
@@ -51,6 +53,36 @@ async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts
     rawText:     rawInput,
     countryCode: opts.countryCode || null,
   });
+
+  // ── Step 2.5: Intent resolution — decide WHY the thing was bought ─────────
+  // Deterministic: live item catalog + the user's own words beat the AI's
+  // keyword guess. Runs BEFORE journal generation so the journal template
+  // matches the resolved classification, not the original phrasing.
+  const intentResolution = resolveIntent(normalized, {
+    rawText: rawInput,
+    inventoryItems: opts.inventoryItems || [],
+  });
+  if (
+    intentResolution.classification &&
+    INTENT_TO_TYPE[intentResolution.classification] &&
+    PURCHASE_FAMILY.has(normalized.transactionType) &&
+    normalized.transactionType !== 'gst_exclusive_purchase' && // tax template owns its journal
+    normalized.transactionType !== INTENT_TO_TYPE[intentResolution.classification]
+  ) {
+    normalized.transactionType = INTENT_TO_TYPE[intentResolution.classification];
+    normalized.cashFlowDirection = CASH_FLOW_MAP[normalized.transactionType] || normalized.cashFlowDirection;
+  }
+  // Debit hint follows the classification — never let a stale suggestion
+  // point stock at an expense account or supplies at Inventory.
+  if (intentResolution.classification === 'resale') {
+    normalized.debitAccount = 'Inventory';
+  } else if (
+    intentResolution.classification === 'business_use' &&
+    /inventory|stock/i.test(normalized.debitAccount || '')
+  ) {
+    normalized.debitAccount = null; // journal generator falls back to the subcategory template
+  }
+  normalized.inventory = buildInventoryBlock(normalized, intentResolution);
 
   // ── Step 3 & 4: Journal Entry Generation (includes accounting rules) ──
   const journalEntries = generateJournalEntries(normalized);
@@ -93,7 +125,10 @@ async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts
   // follow-up question. The frontend collects the answer and re-parses (with a
   // higher `attempt`) so the form is filled with greater confidence. Stateless +
   // round-capped, so it always terminates.
-  const clarification = buildClarification(confidence, normalized, { attempt: opts.attempt || 0 });
+  const clarification = buildClarification(confidence, normalized, {
+    attempt: opts.attempt || 0,
+    intentResolution,
+  });
 
   // Add validation warnings to review reasons
   if (warnings.length > 0) {
@@ -139,6 +174,11 @@ async function _finishParse(rawExtraction, rawInput, businessAccounts = [], opts
     netAmount:        normalized.netAmount,
     adjustmentType:   normalized.adjustmentType,
     eobi:             normalized.eobi,
+    // Smart entry — goods, intent, and the inventory linkage block
+    lineItems:        normalized.lineItems,
+    purchaseIntent:   normalized.purchaseIntent,
+    saleAffectsStock: normalized.saleAffectsStock,
+    inventory:        normalized.inventory,
   };
 
   return {

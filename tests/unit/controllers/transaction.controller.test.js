@@ -5,6 +5,14 @@ jest.mock('../../../repositories/account.repository');
 jest.mock('../../../repositories/business.repository', () => ({
   findById: jest.fn().mockResolvedValue({ aiSettings: { autoPostEnabled: false } }),
 }));
+// Smart entry: the NL preview loads live inventory items for goods matching.
+jest.mock('../../../models/InventoryItem.model', () => ({
+  find: jest.fn().mockReturnValue({
+    select: jest.fn().mockReturnThis(),
+    limit: jest.fn().mockReturnThis(),
+    lean: jest.fn().mockResolvedValue([]),
+  }),
+}));
 jest.mock('../../../utils/excelParser.utils');
 jest.mock('../../../services/batchPosting.service', () => ({
   postBatch: jest.fn().mockResolvedValue({ posted: 0, pending: 0, failed: [], batchId: 'batch1' }),
