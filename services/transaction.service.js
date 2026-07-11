@@ -737,6 +737,58 @@ class TransactionService {
       logger.info(`Stock auto-incremented: qty ${data.inventoryQty} @ ${costPerUnit} for item ${data.inventoryItemId}`);
     }
 
+    // 7a-2. Consented NEW inventory item — create-or-link inside the persist
+    // session (ask-first happened in the clarification loop; nothing here is
+    // silent). Link-instead-of-create by exact name makes a client retry
+    // idempotent: it can never mint a duplicate item. The item starts at zero
+    // stock/cost and applyPurchaseStock sets both, so weighted-average cost is
+    // exact. The JE is stamped with the linkage in the SAME atomic unit.
+    if (
+      !data.skipInventorySync &&
+      PURCHASE_TYPES_TRIGGERING_STOCK.has(entryData.transactionType) &&
+      !data.inventoryItemId &&
+      data.newInventoryItem && typeof data.newInventoryItem === 'object'
+    ) {
+      const ni = data.newInventoryItem;
+      const niName = String(ni.name || '').trim();
+      const niQty = Number(ni.quantity);
+      if (!niName) throw new ApiError(400, 'The new inventory item needs a name');
+      if (!Number.isFinite(niQty) || niQty <= 0) {
+        throw new ApiError(400, 'The new inventory item needs a quantity greater than zero');
+      }
+      const niUnit = String(ni.unit || 'units').trim() || 'units';
+      const niCost = Number(ni.unitCostPrice) > 0
+        ? Math.round(Number(ni.unitCostPrice) * 100) / 100
+        : Math.round((entryData.amount / niQty) * 100) / 100;
+      const inventoryService = require('./inventory.service');
+      const escaped = niName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+      deferredSideEffects.push(async (s, savedEntry) => {
+        let item = await inventoryItemRepository.model
+          .findOne({ businessId: data.businessId, name: new RegExp(`^${escaped}$`, 'i') })
+          .session(s);
+        if (!item) {
+          [item] = await inventoryItemRepository.model.create(
+            [{ businessId: data.businessId, name: niName, unit: niUnit, unitCostPrice: 0, currentStock: 0 }],
+            { session: s }
+          );
+          logger.info(`[createTransaction] auto-created inventory item "${niName}" (${item._id}) with user consent`);
+        }
+        await inventoryService.applyPurchaseStock(data.businessId, item._id, niQty, niCost, { userId, session: s });
+        if (savedEntry?._id) {
+          const JournalEntry = require('../models/JournalEntry.model');
+          await JournalEntry.updateOne(
+            { _id: savedEntry._id },
+            { $set: { inventoryItemId: item._id, inventoryQty: niQty } },
+            { session: s }
+          );
+        }
+        data.inventoryItemId = item._id; // TRANSACTION_CREATED event carries the linkage
+        data.inventoryQty = niQty;
+      });
+      delete data.newInventoryItem;
+    }
+
     // 7b. Merge tax journal lines + validate balance
     if (pendingTaxLines.length > 0) {
       // Ensure a baseline journalLines array exists before appending tax lines
@@ -803,8 +855,9 @@ class TransactionService {
       }
       // F6 — party-balance / inventory writes queued by steps 6/7/7a commit in
       // the SAME unit as the entry: an insert failure above means none ran.
+      // Side effects also receive the created entry (7a-2 stamps linkage on it).
       for (const sideEffect of deferredSideEffects) {
-        await sideEffect(txnSession);
+        await sideEffect(txnSession, tx);
       }
       return tx;
     };
