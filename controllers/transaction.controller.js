@@ -33,20 +33,28 @@ function isAutoPostEligible(confidence, accountResolution, autoPostEnabled) {
   return true;
 }
 
-const resolveAccountIds = async (businessId, row) => {
+// Full deterministic chain (exact name → code → synonym → create-from-catalog
+// shape) via the same service the bulk importer uses — an NL confirm can no
+// longer fail just because the wording differs from the seeded chart.
+const resolveAccountIds = async (businessId, row, { transactionType = null, userId = null } = {}) => {
   let debitAccountId = row.debitAccountId;
   let creditAccountId = row.creditAccountId;
   const debitName = row.debitAccountName || row.debitAccount;
   const creditName = row.creditAccountName || row.creditAccount;
+  if ((debitAccountId || !debitName) && (creditAccountId || !creditName)) {
+    return { debitAccountId, creditAccountId };
+  }
+  const { resolveForImport } = require('../services/importAccountResolution.service');
+  const accounts = (await accountRepository.findByBusiness(businessId)) || [];
   if (!debitAccountId && debitName) {
-    const debit = await accountRepository.findByBusinessAndName(businessId, debitName);
-    if (!debit) throw new ApiError(400, `Debit account not found: "${debitName}". Please check your Chart of Accounts.`);
-    debitAccountId = debit._id;
+    const r = await resolveForImport(businessId, accounts, debitName, { side: 'debit', transactionType, userId });
+    if (!r.account) throw new ApiError(400, `Debit account not found: "${debitName}". Please check your Chart of Accounts.`);
+    debitAccountId = r.account._id;
   }
   if (!creditAccountId && creditName) {
-    const credit = await accountRepository.findByBusinessAndName(businessId, creditName);
-    if (!credit) throw new ApiError(400, `Credit account not found: "${creditName}". Please check your Chart of Accounts.`);
-    creditAccountId = credit._id;
+    const r = await resolveForImport(businessId, accounts, creditName, { side: 'credit', transactionType, userId });
+    if (!r.account) throw new ApiError(400, `Credit account not found: "${creditName}". Please check your Chart of Accounts.`);
+    creditAccountId = r.account._id;
   }
   return { debitAccountId, creditAccountId };
 };
@@ -469,7 +477,10 @@ const confirmNaturalLanguage = async (req, res, next) => {
       interestRate,
     } = req.body;
 
-    const { debitAccountId, creditAccountId } = await resolveAccountIds(req.user.businessId, req.body);
+    const { debitAccountId, creditAccountId } = await resolveAccountIds(req.user.businessId, req.body, {
+      transactionType: req.body.transactionType || null,
+      userId: req.user.id,
+    });
     if (!debitAccountId || !creditAccountId) {
       throw new ApiError(400, 'Debit and credit accounts are required. Resolve account names or pass account IDs.');
     }
@@ -504,6 +515,22 @@ const confirmNaturalLanguage = async (req, res, next) => {
       // Include journal lines for multi-entry accounting (Phase 4).
       // When present, the service uses these for balance updates and storage.
       ...(journalLines ? { journalLines } : {}),
+      // Smart entry — inventory linkage (existing item) or consented creation
+      ...(req.body.inventoryItemId
+        ? { inventoryItemId: req.body.inventoryItemId, inventoryQty: Number(req.body.inventoryQty) || 1 }
+        : {}),
+      ...(!req.body.inventoryItemId && req.body.newInventoryItem?.name
+        ? {
+            newInventoryItem: {
+              name: String(req.body.newInventoryItem.name).trim().slice(0, 200),
+              unit: String(req.body.newInventoryItem.unit || 'units').trim().slice(0, 30),
+              quantity: Number(req.body.newInventoryItem.quantity),
+              unitCostPrice: Number(req.body.newInventoryItem.unitCostPrice) > 0
+                ? Number(req.body.newInventoryItem.unitCostPrice)
+                : null,
+            },
+          }
+        : {}),
     };
 
     // ── Phase 3: Installment routing ─────────────────────────────────────────
