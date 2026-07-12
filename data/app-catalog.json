@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-11T09:18:00.977Z",
+  "generatedAt": "2026-07-12T02:29:58.945Z",
   "entries": [
     {
       "id": "home",
@@ -553,21 +553,23 @@
       "enablementKey": null
     },
     {
-      "id": "accounting.journal-entries",
+      "id": "accounting.transactions",
       "type": "page",
-      "title": "Journal Entries",
+      "title": "Transactions",
       "path": [
         "Accounting",
-        "Journal Entries"
+        "Transactions"
       ],
       "href": "/transactions",
-      "desc": "Every entry in your books",
+      "desc": "Every entry in your books — the journal",
       "synonyms": [
         "every",
         "entry",
         "in",
         "your",
         "books",
+        "the",
+        "journal",
         "general",
         "ledger",
         "accounting"
