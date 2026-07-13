@@ -40,9 +40,10 @@ async function parseTransaction(rawInput, businessAccounts = [], opts = {}) {
 }
 
 /** Read a bill/receipt IMAGE into the same structured result as the text path.
- *  Not supported with the current text-only provider — see callAIVision. */
+ *  Extraction runs on Gemini (see callAIVision); everything downstream
+ *  (normalization → journal generation → validation) is shared with parseTransaction. */
 async function parseTransactionFromImage(imageBase64, mimeType = 'image/jpeg', businessAccounts = [], opts = {}) {
-  const rawExtraction = await callAIVision(imageBase64, mimeType, businessAccounts);
+  const rawExtraction = await callAIVision(imageBase64, mimeType, businessAccounts, opts.inventoryItems || []);
   return _finishParse(rawExtraction, opts.rawText || '', businessAccounts, opts);
 }
 

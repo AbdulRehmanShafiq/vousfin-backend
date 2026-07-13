@@ -149,8 +149,9 @@ async function ingest({ businessId, rawText, source, submittedBy, image, mimeTyp
 
   let read;
   try {
-    // Read the typed text (photo/receipt reading is not available — DeepSeek
-    // is text-only; the image path throws a clear error, caught below).
+    // Read the typed text (DeepSeek) or the photo (Gemini vision) — same
+    // downstream pipeline either way. A read failure (bad photo, AI busy) is
+    // caught below and turned into a plain-English message.
     const parsed = hasImage
       ? await parseTransactionFromImage(image, mimeType || 'image/jpeg', accounts, { countryCode, rawText: text })
       : await parseTransaction(text, accounts, { countryCode });
@@ -181,7 +182,7 @@ async function ingest({ businessId, rawText, source, submittedBy, image, mimeTyp
       transactionType: read.parsedData?.transactionType || null,
     },
     confidence: read.confidence,
-    model: hasImage ? 'deepseek-vision-doc' : 'deepseek-nl-parser',
+    model: hasImage ? 'gemini-vision-doc' : 'deepseek-nl-parser',
     promptVersion: 'doc-v1',
     linkedEntityId: doc._id,
   });

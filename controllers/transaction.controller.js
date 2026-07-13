@@ -14,7 +14,35 @@ const { parseExcelTransactions } = require('../utils/excelParser.utils');
 const aiDecisionService = require('../services/aiDecision.service');
 const learnedResolution = require('../services/learnedResolution.service');
 const importAccountResolution = require('../services/importAccountResolution.service');
+const { checkJournalShape } = require('../utils/journalGuardrails');
 const logger = require('../config/logger');
+
+/**
+ * Load the live accounts + active inventory items for a business. Shared by
+ * every NL entry point (text and photo) — both non-fatal so parsing still
+ * proceeds (itemless / account-less) if either lookup fails.
+ */
+async function loadNlContext(businessId) {
+  let businessAccounts = [];
+  try {
+    businessAccounts = (await accountRepository.findByBusiness(businessId)) || [];
+  } catch (acctErr) {
+    logger.warn('NL parse: could not load business accounts (non-fatal):', acctErr.message);
+  }
+
+  let inventoryItems = [];
+  try {
+    const InventoryItem = require('../models/InventoryItem.model');
+    inventoryItems = await InventoryItem.find({ businessId, isActive: true })
+      .select('name unit unitCostPrice currentStock')
+      .limit(100)
+      .lean();
+  } catch (invErr) {
+    logger.warn('NL parse: could not load inventory items (non-fatal):', invErr.message);
+  }
+
+  return { businessAccounts, inventoryItems };
+}
 
 /**
  * Eligible for zero-click auto-post only when ALL of:
@@ -253,6 +281,179 @@ const recordInstallmentPayment = async (req, res, next) => {
 /**
  * Process natural language input and return a preview.
  */
+/**
+ * Shared NL-preview enrichment — EVERY entry point that produces a `parsed`
+ * result from parserService (text /nl, photo /nl/image, future voice/SMS)
+ * funnels through here so there is exactly one enrichment pipeline: learned-
+ * account recall, account-name resolution, journal-line resolution, the
+ * structural guardrail, an AI Decision Ledger record, and the opt-in
+ * zero-click auto-post attempt. Writes the response itself (success or
+ * created) so callers just `return` its result.
+ */
+async function buildNlPreviewResponse(req, res, { parsed, rawInput, businessAccounts, model, promptVersion }) {
+  const preview = mapParserToPreview(parsed, rawInput);
+
+  // ── Closed Learning Loop (Phase 1): a learned mapping beats a fuzzy guess ──
+  // If this tenant has previously confirmed accounts for a description like
+  // this one, prefer those account NAMES over the LLM's suggestion. The user
+  // still sees and can change them in the preview — this never overrides an
+  // explicit choice, it only improves the suggestion.
+  if (req.user.businessId) {
+    const learned = await learnedResolution.recallAccounts(req.user.businessId, preview.description || rawInput);
+    if (learned) {
+      preview.debitAccount = learned.debitAccountName;
+      preview.creditAccount = learned.creditAccountName;
+      preview.learnedMapping = true;
+    }
+  }
+
+  if (req.user.businessId && (preview.debitAccount || preview.creditAccount)) {
+    // Build an in-memory resolver from the accounts we already loaded (no extra DB round-trips).
+    const resolve = businessAccounts.length ? buildAccountResolver(businessAccounts) : null;
+
+    // Gracefully resolve primary accounts — fuzzy match, don't throw if not found
+    try {
+      if (preview.debitAccount) {
+        const debit = resolve
+          ? resolve(preview.debitAccount)
+          : await accountRepository.findByBusinessAndName(req.user.businessId, preview.debitAccount);
+        preview.debitAccountId = debit?._id || null;
+        if (debit) preview.debitAccount = debit.accountName; // normalize to canonical name
+      }
+      if (preview.creditAccount) {
+        const credit = resolve
+          ? resolve(preview.creditAccount)
+          : await accountRepository.findByBusinessAndName(req.user.businessId, preview.creditAccount);
+        preview.creditAccountId = credit?._id || null;
+        if (credit) preview.creditAccount = credit.accountName;
+      }
+    } catch (resolveErr) {
+      logger.warn('NL account resolution partial failure (non-fatal):', resolveErr.message);
+      // Continue — user will pick accounts manually in preview step
+    }
+
+    // ── Phase 4: Resolve multi-line journal entries (names → IDs) ────────────
+    // journalEntries are already in the preview (from mapParserToPreview).
+    // Resolve each line's account name to a MongoDB ID so the confirm step can
+    // forward the full journal line set without another round-trip.
+    if (Array.isArray(preview.journalEntries) && preview.journalEntries.length > 0) {
+      const resolvedLines = [];
+      for (const entry of preview.journalEntries) {
+        try {
+          const acc = resolve
+            ? resolve(entry.account)
+            : await accountRepository.findByBusinessAndName(req.user.businessId, entry.account);
+          resolvedLines.push({
+            accountId:   acc?._id    || null,
+            accountName: acc?.accountName || entry.account,
+            type:        entry.entryType,   // 'debit' | 'credit'
+            amount:      entry.amount,
+            resolved:    !!acc,
+          });
+        } catch (_) {
+          resolvedLines.push({
+            accountId:   null,
+            accountName: entry.account,
+            type:        entry.entryType,
+            amount:      entry.amount,
+            resolved:    false,
+          });
+        }
+      }
+      preview.resolvedJournalLines = resolvedLines;
+    }
+  }
+
+  // ── Structural guardrail: a purchase can never debit Revenue etc. ────────
+  // Fail-closed: a violation forces review and hard-blocks auto-post below.
+  const typeOfAccount = (id) =>
+    businessAccounts.find((a) => String(a._id) === String(id))?.accountType || null;
+  const guardrail = checkJournalShape({
+    transactionType:   preview.transactionType,
+    debitAccountType:  typeOfAccount(preview.debitAccountId),
+    creditAccountType: typeOfAccount(preview.creditAccountId),
+  });
+  preview.guardrail = guardrail;
+  if (!guardrail.ok) {
+    preview.requiresReview = true;
+    preview.reviewReasons = [...new Set([...(preview.reviewReasons || []), ...guardrail.violations])];
+  }
+
+  // ── AI Decision Ledger (Phase 0): record the parse lineage ──────────────
+  const aiDecision = await aiDecisionService.record(req.user.businessId, 'parse', {
+    inputsSummary: rawInput.slice(0, 2000),
+    candidates: [preview.debitAccount, preview.creditAccount].filter(Boolean),
+    decision: {
+      transactionType: preview.transactionType,
+      debitAccount: preview.debitAccount, creditAccount: preview.creditAccount,
+      amount: preview.amount,
+    },
+    confidence: parsed.confidence?.overall ?? null,
+    model,
+    promptVersion,
+  });
+  if (aiDecision?._id) preview.aiDecisionId = String(aiDecision._id);
+
+  // ── Opt-in zero-click auto-post (Phase 3) ──────────────────────────────────
+  // Installments have their own multi-step config (down payment, frequency,
+  // interest) — out of scope for auto-post; always fall through to preview.
+  // Inventory gates: a pending item creation must always be reviewed, and a
+  // matched item without a quantity can't sync stock — both block auto-post.
+  const inventoryBlocksAutoPost =
+    preview.inventory?.mode === 'create' ||
+    (preview.inventory?.mode === 'existing' && !(preview.inventory.quantity > 0));
+  if (
+    preview.debitAccountId && preview.creditAccountId &&
+    !parsed.parsedData?.isInstallment &&
+    guardrail.ok && !inventoryBlocksAutoPost
+  ) {
+    try {
+      const business = await businessRepository.findById(req.user.businessId);
+      if (isAutoPostEligible(parsed.confidence, parsed.accountResolution, business?.aiSettings?.autoPostEnabled)) {
+        const approvalService = require('../services/approval.service');
+        const transactionData = {
+          transactionDate: preview.transactionDate,
+          description:     preview.description,
+          transactionType: preview.transactionType,
+          amount:          preview.amount,
+          debitAccountId:  preview.debitAccountId,
+          creditAccountId: preview.creditAccountId,
+          // Matched inventory rides along so the stock subledger syncs (7a).
+          ...(preview.inventory?.mode === 'existing' && preview.inventory.quantity > 0
+            ? { inventoryItemId: preview.inventory.itemId, inventoryQty: preview.inventory.quantity }
+            : {}),
+          businessId:      req.user.businessId,
+          inputMethod:     'nlp',
+          transactionSource: TRANSACTION_SOURCES.AI_AUTO_POSTED,
+          metadata: { aiConfidence: parsed.confidence.overall, autoPosted: true },
+        };
+        const result = await approvalService.submitOrPost(transactionData, req.user, req.ip, { source: 'nl-autopost' });
+        // The amount-threshold gate is independent of confidence — a large
+        // amount still parks for approval even at 100% AI confidence, so the
+        // response must not claim an auto-post happened.
+        if (!result.pendingApproval) {
+          await aiDecisionService.recordOutcome(preview.aiDecisionId, req.user.businessId, 'accepted', null);
+          await learnedResolution.learnAccountsFromConfirmation(req.user.businessId, preview.description || rawInput, {
+            debitAccountName: preview.debitAccount, creditAccountName: preview.creditAccount,
+          });
+          const pct = Math.round(parsed.confidence.overall * 100);
+          return ApiResponse.created(
+            res,
+            { ...preview, autoPosted: true, transaction: result.transaction },
+            `Recorded automatically by AI (${pct}% confidence)`
+          );
+        }
+      }
+    } catch (autoPostErr) {
+      // Never let an auto-post attempt block the user from reviewing/confirming
+      // manually — fall through to the normal preview response.
+      logger.warn('NL auto-post attempt failed (non-fatal, falling back to preview):', autoPostErr.message);
+    }
+  }
+
+  return ApiResponse.success(res, preview, 'Preview generated. Confirm to save.');
+}
+
 const processNaturalLanguage = async (req, res, next) => {
   try {
     const { text, attempt } = req.body;
@@ -260,195 +461,56 @@ const processNaturalLanguage = async (req, res, next) => {
       throw new ApiError(400, 'Please provide a longer transaction description');
     }
 
-    // Phase 3: Load live business accounts so the AI uses real CoA names.
-    // Non-fatal — parsing still proceeds with empty accounts on failure.
-    let businessAccounts = [];
-    try {
-      // Defensive `|| []`: never let a nullish repo result crash the parser path.
-      businessAccounts = (await accountRepository.findByBusiness(req.user.businessId)) || [];
-    } catch (acctErr) {
-      logger.warn('NL parse: could not load business accounts (non-fatal):', acctErr.message);
-    }
-
-    // Live inventory items → the parser matches goods names against real items.
-    // Non-fatal: parsing proceeds itemless on failure.
-    let inventoryItems = [];
-    try {
-      const InventoryItem = require('../models/InventoryItem.model');
-      inventoryItems = await InventoryItem.find({ businessId: req.user.businessId, isActive: true })
-        .select('name unit unitCostPrice currentStock')
-        .limit(100)
-        .lean();
-    } catch (invErr) {
-      logger.warn('NL parse: could not load inventory items (non-fatal):', invErr.message);
-    }
+    const { businessAccounts, inventoryItems } = await loadNlContext(req.user.businessId);
 
     const parsed = await parserService.parseTransaction(text, businessAccounts, {
       attempt: Number(attempt) || 0,
       inventoryItems,
     });
-    const preview = mapParserToPreview(parsed, text);
 
-    // ── Closed Learning Loop (Phase 1): a learned mapping beats a fuzzy guess ──
-    // If this tenant has previously confirmed accounts for a description like
-    // this one, prefer those account NAMES over the LLM's suggestion. The user
-    // still sees and can change them in the preview — this never overrides an
-    // explicit choice, it only improves the suggestion.
-    if (req.user.businessId) {
-      const learned = await learnedResolution.recallAccounts(req.user.businessId, preview.description || text);
-      if (learned) {
-        preview.debitAccount = learned.debitAccountName;
-        preview.creditAccount = learned.creditAccountName;
-        preview.learnedMapping = true;
-      }
-    }
-
-    if (req.user.businessId && (preview.debitAccount || preview.creditAccount)) {
-      // Build an in-memory resolver from the accounts we already loaded (no extra DB round-trips).
-      const resolve = businessAccounts.length ? buildAccountResolver(businessAccounts) : null;
-
-      // Gracefully resolve primary accounts — fuzzy match, don't throw if not found
-      try {
-        if (preview.debitAccount) {
-          const debit = resolve
-            ? resolve(preview.debitAccount)
-            : await accountRepository.findByBusinessAndName(req.user.businessId, preview.debitAccount);
-          preview.debitAccountId = debit?._id || null;
-          if (debit) preview.debitAccount = debit.accountName; // normalize to canonical name
-        }
-        if (preview.creditAccount) {
-          const credit = resolve
-            ? resolve(preview.creditAccount)
-            : await accountRepository.findByBusinessAndName(req.user.businessId, preview.creditAccount);
-          preview.creditAccountId = credit?._id || null;
-          if (credit) preview.creditAccount = credit.accountName;
-        }
-      } catch (resolveErr) {
-        logger.warn('NL account resolution partial failure (non-fatal):', resolveErr.message);
-        // Continue — user will pick accounts manually in preview step
-      }
-
-      // ── Phase 4: Resolve multi-line journal entries (names → IDs) ────────────
-      // journalEntries are already in the preview (from mapParserToPreview).
-      // Resolve each line's account name to a MongoDB ID so the confirm step can
-      // forward the full journal line set without another round-trip.
-      if (Array.isArray(preview.journalEntries) && preview.journalEntries.length > 0) {
-        const resolvedLines = [];
-        for (const entry of preview.journalEntries) {
-          try {
-            const acc = resolve
-              ? resolve(entry.account)
-              : await accountRepository.findByBusinessAndName(req.user.businessId, entry.account);
-            resolvedLines.push({
-              accountId:   acc?._id    || null,
-              accountName: acc?.accountName || entry.account,
-              type:        entry.entryType,   // 'debit' | 'credit'
-              amount:      entry.amount,
-              resolved:    !!acc,
-            });
-          } catch (_) {
-            resolvedLines.push({
-              accountId:   null,
-              accountName: entry.account,
-              type:        entry.entryType,
-              amount:      entry.amount,
-              resolved:    false,
-            });
-          }
-        }
-        preview.resolvedJournalLines = resolvedLines;
-      }
-    }
-
-    // ── Structural guardrail: a purchase can never debit Revenue etc. ────────
-    // Fail-closed: a violation forces review and hard-blocks auto-post below.
-    const { checkJournalShape } = require('../utils/journalGuardrails');
-    const typeOfAccount = (id) =>
-      businessAccounts.find((a) => String(a._id) === String(id))?.accountType || null;
-    const guardrail = checkJournalShape({
-      transactionType:   preview.transactionType,
-      debitAccountType:  typeOfAccount(preview.debitAccountId),
-      creditAccountType: typeOfAccount(preview.creditAccountId),
+    await buildNlPreviewResponse(req, res, {
+      parsed, rawInput: text, businessAccounts,
+      model: 'deepseek-nl-parser', promptVersion: 'nl-v1',
     });
-    preview.guardrail = guardrail;
-    if (!guardrail.ok) {
-      preview.requiresReview = true;
-      preview.reviewReasons = [...new Set([...(preview.reviewReasons || []), ...guardrail.violations])];
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Photo/receipt entry — reads a bill image with Gemini vision, then runs the
+ * IDENTICAL enrichment as the text path (buildNlPreviewResponse). The photo
+ * only ever produces a suggestion: the user still confirms via the structured
+ * form, same as natural-language entry (see docs/superpowers/specs/
+ * 2026-07-13-photo-receipt-entry-design.md).
+ */
+const processTransactionImage = async (req, res, next) => {
+  try {
+    const { image, mimeType, attempt } = req.body;
+    if (!image || typeof image !== 'string' || image.length < 100) {
+      throw new ApiError(400, 'Please attach a photo of the bill or receipt');
     }
 
-    // ── AI Decision Ledger (Phase 0): record the parse lineage ──────────────
-    const aiDecision = await aiDecisionService.record(req.user.businessId, 'parse', {
-      inputsSummary: text.slice(0, 2000),
-      candidates: [preview.debitAccount, preview.creditAccount].filter(Boolean),
-      decision: {
-        transactionType: preview.transactionType,
-        debitAccount: preview.debitAccount, creditAccount: preview.creditAccount,
-        amount: preview.amount,
-      },
-      confidence: parsed.confidence?.overall ?? null,
-      model: 'deepseek-nl-parser',
-      promptVersion: 'nl-v1',
+    const { businessAccounts, inventoryItems } = await loadNlContext(req.user.businessId);
+
+    let parsed;
+    try {
+      parsed = await parserService.parseTransactionFromImage(image, mimeType || 'image/jpeg', businessAccounts, {
+        attempt: Number(attempt) || 0,
+        inventoryItems,
+      });
+    } catch (visionErr) {
+      if (visionErr.isVisionUnsupported) throw new ApiError(422, visionErr.message);
+      const busy = visionErr.isOverloaded || /overloaded|unavailable|busy|timed out|\b(503|429)\b/i.test(visionErr.message || '');
+      throw new ApiError(busy ? 503 : 422, busy
+        ? 'Our reader is busy right now — please try again in a moment.'
+        : 'Couldn’t read that photo clearly. Try a clearer photo, or type the transaction instead.');
+    }
+
+    await buildNlPreviewResponse(req, res, {
+      parsed, rawInput: parsed.rawInput || '', businessAccounts,
+      model: 'gemini-vision-doc', promptVersion: 'nl-image-v1',
     });
-    if (aiDecision?._id) preview.aiDecisionId = String(aiDecision._id);
-
-    // ── Opt-in zero-click auto-post (Phase 3) ──────────────────────────────────
-    // Installments have their own multi-step config (down payment, frequency,
-    // interest) — out of scope for auto-post; always fall through to preview.
-    // Inventory gates: a pending item creation must always be reviewed, and a
-    // matched item without a quantity can't sync stock — both block auto-post.
-    const inventoryBlocksAutoPost =
-      preview.inventory?.mode === 'create' ||
-      (preview.inventory?.mode === 'existing' && !(preview.inventory.quantity > 0));
-    if (
-      preview.debitAccountId && preview.creditAccountId &&
-      !parsed.parsedData?.isInstallment &&
-      guardrail.ok && !inventoryBlocksAutoPost
-    ) {
-      try {
-        const business = await businessRepository.findById(req.user.businessId);
-        if (isAutoPostEligible(parsed.confidence, parsed.accountResolution, business?.aiSettings?.autoPostEnabled)) {
-          const approvalService = require('../services/approval.service');
-          const transactionData = {
-            transactionDate: preview.transactionDate,
-            description:     preview.description,
-            transactionType: preview.transactionType,
-            amount:          preview.amount,
-            debitAccountId:  preview.debitAccountId,
-            creditAccountId: preview.creditAccountId,
-            // Matched inventory rides along so the stock subledger syncs (7a).
-            ...(preview.inventory?.mode === 'existing' && preview.inventory.quantity > 0
-              ? { inventoryItemId: preview.inventory.itemId, inventoryQty: preview.inventory.quantity }
-              : {}),
-            businessId:      req.user.businessId,
-            inputMethod:     'nlp',
-            transactionSource: TRANSACTION_SOURCES.AI_AUTO_POSTED,
-            metadata: { aiConfidence: parsed.confidence.overall, autoPosted: true },
-          };
-          const result = await approvalService.submitOrPost(transactionData, req.user, req.ip, { source: 'nl-autopost' });
-          // The amount-threshold gate is independent of confidence — a large
-          // amount still parks for approval even at 100% AI confidence, so the
-          // response must not claim an auto-post happened.
-          if (!result.pendingApproval) {
-            await aiDecisionService.recordOutcome(preview.aiDecisionId, req.user.businessId, 'accepted', null);
-            await learnedResolution.learnAccountsFromConfirmation(req.user.businessId, preview.description || text, {
-              debitAccountName: preview.debitAccount, creditAccountName: preview.creditAccount,
-            });
-            const pct = Math.round(parsed.confidence.overall * 100);
-            return ApiResponse.created(
-              res,
-              { ...preview, autoPosted: true, transaction: result.transaction },
-              `Recorded automatically by AI (${pct}% confidence)`
-            );
-          }
-        }
-      } catch (autoPostErr) {
-        // Never let an auto-post attempt block the user from reviewing/confirming
-        // manually — fall through to the normal preview response.
-        logger.warn('NL auto-post attempt failed (non-fatal, falling back to preview):', autoPostErr.message);
-      }
-    }
-
-    ApiResponse.success(res, preview, 'Preview generated. Confirm to save.');
   } catch (error) {
     next(error);
   }
@@ -1372,6 +1434,7 @@ module.exports = {
   createInstallmentTransaction,
   recordInstallmentPayment,
   processNaturalLanguage,
+  processTransactionImage,
   confirmNaturalLanguage,
   downloadExcelTemplate,
   uploadExcelPreview,

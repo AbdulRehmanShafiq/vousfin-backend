@@ -11,6 +11,7 @@ const {
   recordPaymentSchema,
   createInstallmentSchema,
   naturalLanguageSchema,
+  naturalLanguageImageSchema,
   confirmNaturalLanguageSchema,
   transactionFiltersSchema,
   transactionIdParamSchema,
@@ -64,6 +65,7 @@ router.post('/installments/refresh-overdue',    transactionController.refreshOve
 
 // Natural Language
 router.post('/nl', validate(naturalLanguageSchema), transactionController.processNaturalLanguage);
+router.post('/nl/image', validate(naturalLanguageImageSchema), transactionController.processTransactionImage);
 router.post('/nl/confirm', validate(confirmNaturalLanguageSchema), transactionController.confirmNaturalLanguage);
 
 // Excel Bulk Import  (GET template must come before /:id to avoid route collision)

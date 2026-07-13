@@ -204,6 +204,18 @@ const naturalLanguageSchema = Joi.object({
 });
 
 /**
+ * NL image (photo/receipt) parse schema — Phase 1 of the transaction-entry
+ * upgrade. `image` is a raw base64 payload (no data: URI prefix); the client
+ * downscales to ~1600px before sending so this stays well under the app's
+ * 10mb JSON body limit.
+ */
+const naturalLanguageImageSchema = Joi.object({
+  image: Joi.string().min(100).required(),
+  mimeType: Joi.string().valid('image/jpeg', 'image/png', 'image/webp', 'image/heic').optional(),
+  attempt: Joi.number().integer().min(0).max(5).optional(),
+});
+
+/**
  * NL confirm schema — extends the base transaction schema with installment / financing
  * fields that the NL preview step may forward back (Phase 3).
  *
@@ -292,6 +304,7 @@ module.exports = {
   recordPaymentSchema,
   createInstallmentSchema,
   naturalLanguageSchema,
+  naturalLanguageImageSchema,
   confirmNaturalLanguageSchema,
   excelUploadSchema,
   confirmExcelImportSchema,

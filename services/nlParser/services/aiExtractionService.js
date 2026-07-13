@@ -1,19 +1,17 @@
 /**
  * @module aiExtractionService
- * @description Structured-JSON transaction extraction, powered by DeepSeek
- * (services/deepseek.service.js — the app's single LLM provider).
- *
- * DeepSeek's hosted API is text-only: there is no image/vision input. The
- * text-extraction path (callAIExtraction) works exactly as before; the
- * image path (callAIVision) throws a clear, catchable error so callers
- * (bookkeeper.service.js) degrade to their existing "couldn't read this one"
- * message instead of silently failing. Wire in a dedicated OCR step ahead of
- * this call if photo/receipt capture needs to come back.
+ * @description Structured-JSON transaction extraction. Text goes through
+ * DeepSeek (services/deepseek.service.js); photos/receipts go through Gemini
+ * (services/gemini.service.js) — DeepSeek's hosted API is text-only. Both
+ * paths share the same prompt schema (buildSystemPrompt) and produce the
+ * identical rawExtraction shape, so the rest of the pipeline
+ * (_finishParse onward) never needs to know which provider ran.
  */
 'use strict';
 const { buildSystemPrompt, buildUserPrompt } = require('../utils/promptBuilder');
 const { extractJSON } = require('../../../utils/aiJson.helper');
 const deepseek = require('../../deepseek.service');
+const gemini = require('../../gemini.service');
 
 // A 503/429/overloaded/timeout means the AI is busy, not that the input is bad.
 function isOverload(err) {
@@ -37,14 +35,39 @@ async function callAIExtraction(rawInput, businessAccounts = [], inventoryItems 
 }
 
 /**
- * Image/receipt extraction — NOT supported by DeepSeek's text-only API.
- * Always throws; callers must catch and fall back to asking the user to type
- * the transaction instead.
+ * Extract a structured transaction from a photo of a bill/receipt.
+ * Uses Gemini (the app's only multimodal provider) with the SAME system
+ * prompt schema as the text path, so the result merges into the pipeline
+ * identically to callAIExtraction's output.
+ * @param {string} imageBase64 - Raw base64 image data (no data: URI prefix).
+ * @param {string} mimeType - e.g. 'image/jpeg'.
+ * @param {Array}  businessAccounts - Live accounts from MongoDB for context injection.
+ * @param {Array}  inventoryItems - Live inventory items for goods-name matching.
+ * @returns {Promise<object>} Parsed JSON response.
+ * @throws {Error} isVisionUnsupported=true if GEMINI_API_KEY is not configured;
+ *   a plain Error for any other failure (bad reply, network, overload).
  */
-async function callAIVision(_imageBase64, _mimeType = 'image/jpeg', _businessAccounts = []) {
-  const err = new Error('Photo/receipt reading is not available with the current AI provider (DeepSeek is text-only). Please type the transaction instead.');
-  err.isVisionUnsupported = true;
-  throw err;
+async function callAIVision(imageBase64, mimeType = 'image/jpeg', businessAccounts = [], inventoryItems = []) {
+  const system = buildSystemPrompt(businessAccounts, inventoryItems);
+  const user = 'This image is a photo of a bill, receipt, or invoice. Read every visible detail — vendor/customer name, line items, amounts, tax, date — and extract the transaction as JSON per the schema above. If a field is not visible in the image, set it to null.';
+
+  let response;
+  try {
+    response = await gemini.callVision(imageBase64, mimeType, { system, user });
+  } catch (error) {
+    if (/GEMINI_API_KEY/.test(error.message || '')) {
+      const err = new Error('Photo/receipt reading is not available right now (AI vision is not configured). Please type the transaction instead.');
+      err.isVisionUnsupported = true;
+      throw err;
+    }
+    const err = new Error(`AI vision extraction failed: ${error.message}`);
+    err.isOverloaded = !!error.isOverloaded;
+    throw err;
+  }
+
+  const parsed = extractJSON(response.text);
+  if (!parsed) throw new Error('Failed to parse JSON from AI vision response');
+  return parsed;
 }
 
 /** POST to DeepSeek in JSON mode, retrying on overload. */

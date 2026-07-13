@@ -492,3 +492,85 @@ describe('transactionController.deleteTransaction()', () => {
     expect(res.status).toHaveBeenCalledWith(200);
   });
 });
+
+// ── processTransactionImage (Photo/receipt entry — Phase 1) ─────────────────────
+describe('transactionController.processTransactionImage()', () => {
+  const PARSED_IMAGE_RESULT = {
+    success: true,
+    rawInput: '',
+    parsedData: {
+      amount: 1500, date: '2025-01-15', transactionType: 'Cash Purchase',
+      description: 'Office supplies', intent: 'Bought office supplies',
+    },
+    journalEntries: [
+      { account: 'Office Supplies', entryType: 'debit', amount: 1500 },
+      { account: 'Cash', entryType: 'credit', amount: 1500 },
+    ],
+    confidence: { overall: 0.85 },
+    requiresReview: false,
+    reviewReasons: [],
+  };
+
+  test('throws 400 when no image is provided', async () => {
+    const req = reqWithUser({});
+    const res = mockRes();
+    await transactionController.processTransactionImage(req, res, mockNext);
+    expect(mockNext).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400 }));
+  });
+
+  test('parses the image and returns a preview identical in shape to the text path', async () => {
+    require('../../../repositories/account.repository').findByBusiness.mockResolvedValue([]);
+    parserService.parseTransactionFromImage.mockResolvedValue(PARSED_IMAGE_RESULT);
+    const req = reqWithUser({ image: 'A'.repeat(200), mimeType: 'image/jpeg' });
+    const res = mockRes();
+
+    await transactionController.processTransactionImage(req, res, mockNext);
+
+    expect(parserService.parseTransactionFromImage).toHaveBeenCalledWith(
+      'A'.repeat(200), 'image/jpeg', [], expect.objectContaining({ attempt: 0 })
+    );
+    expect(res.status).toHaveBeenCalledWith(200);
+    const payload = res.json.mock.calls[0][0];
+    expect(payload.data.amount).toBe(1500);
+    expect(payload.data.description).toBe('Office supplies');
+  });
+
+  test('records the AI decision with the gemini vision model tag', async () => {
+    require('../../../repositories/account.repository').findByBusiness.mockResolvedValue([]);
+    parserService.parseTransactionFromImage.mockResolvedValue(PARSED_IMAGE_RESULT);
+    const req = reqWithUser({ image: 'A'.repeat(200) });
+    const res = mockRes();
+
+    await transactionController.processTransactionImage(req, res, mockNext);
+
+    expect(aiDecisionService.record).toHaveBeenCalledWith('biz001', 'parse', expect.objectContaining({
+      model: 'gemini-vision-doc', promptVersion: 'nl-image-v1',
+    }));
+  });
+
+  test('maps isVisionUnsupported to a 422 with a plain-English message', async () => {
+    require('../../../repositories/account.repository').findByBusiness.mockResolvedValue([]);
+    const err = new Error('Photo/receipt reading is not available right now.');
+    err.isVisionUnsupported = true;
+    parserService.parseTransactionFromImage.mockRejectedValue(err);
+    const req = reqWithUser({ image: 'A'.repeat(200) });
+    const res = mockRes();
+
+    await transactionController.processTransactionImage(req, res, mockNext);
+
+    expect(mockNext).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 422 }));
+  });
+
+  test('maps an overloaded vision failure to a 503 "busy" message', async () => {
+    require('../../../repositories/account.repository').findByBusiness.mockResolvedValue([]);
+    const err = new Error('Gemini API failed after 2 attempt(s): 503');
+    err.isOverloaded = true;
+    parserService.parseTransactionFromImage.mockRejectedValue(err);
+    const req = reqWithUser({ image: 'A'.repeat(200) });
+    const res = mockRes();
+
+    await transactionController.processTransactionImage(req, res, mockNext);
+
+    expect(mockNext).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 503 }));
+  });
+});
