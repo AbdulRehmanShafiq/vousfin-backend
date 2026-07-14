@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-12T02:29:58.945Z",
+  "generatedAt": "2026-07-14T15:09:44.583Z",
   "entries": [
     {
       "id": "home",
@@ -593,6 +593,32 @@
         "for",
         "sign",
         "off",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.close-the-month",
+      "type": "page",
+      "title": "Close the Month",
+      "path": [
+        "Accounting",
+        "Close the Month"
+      ],
+      "href": "/accounting/close",
+      "desc": "The month-end checklist, then lock the period",
+      "synonyms": [
+        "the",
+        "month",
+        "end",
+        "checklist",
+        "then",
+        "lock",
+        "the",
+        "period",
         "general",
         "ledger",
         "accounting"
