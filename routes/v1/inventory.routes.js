@@ -1,6 +1,9 @@
 // routes/v1/inventory.routes.js
 const express = require('express');
 const inventoryController = require('../../controllers/inventory.controller');
+// These operations are repeatable ON PURPOSE, so retry-safety can only come from
+// a caller-supplied key — see middleware/idempotency.middleware.js.
+const { idempotencyKey } = require('../../middleware/idempotency.middleware');
 const { authMiddleware } = require('../../middleware/auth.middleware');
 const { requireBusiness } = require('../../middleware/business.middleware');
 const { attachMembership, writeGuard } = require('../../middleware/rbac.middleware');
@@ -39,7 +42,7 @@ router.route('/boms')
   .post(inventoryController.createBom)
   .get(inventoryController.listBoms);
 router.get('/boms/:id/quote', inventoryController.quoteBuild);
-router.post('/boms/:id/build', inventoryController.build);
+router.post('/boms/:id/build', idempotencyKey, inventoryController.build);
 
 // ── Phase 10 — reports (derived from the stock sub-ledger) ──────────────────
 router.get('/reports/valuation',    inventoryController.reportValuation);
@@ -55,7 +58,7 @@ router.route('/:id')
 
 router.patch('/:id/toggle-active', inventoryController.toggleActive);
 router.post('/:id/add-stock',      inventoryController.addStock);
-router.post('/:id/adjust',         inventoryController.adjustStock); // Phase 2 — adjustments/counts/NRV
+router.post('/:id/adjust',         idempotencyKey, inventoryController.adjustStock); // Phase 2 — adjustments/counts/NRV
 router.get('/:id/ledger',          inventoryController.getStockLedger);
 router.post('/:id/recalculate',    inventoryController.recalculate); // R-04 — replay & heal WAC
 router.get('/:id/atp',             inventoryController.getAtp);      // Phase 6 — available to promise

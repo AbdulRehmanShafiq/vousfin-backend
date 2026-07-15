@@ -151,9 +151,11 @@ class AssemblyService {
           businessId,
           transactionDate: when,
           description: `Labour built into stock — ${quote.outputQty} × ${bom.name || 'assembly'}`,
-          // Repeatable on purpose: the same BOM is built again and again. A key
-          // derived from the BOM would block the second legitimate build.
-          idempotencyKey: null,
+          // Repeatable on purpose: the same BOM is built again and again, so a
+          // key derived from the BOM would block the second legitimate build.
+          // Only the caller can tell a retry from a real second build, and it
+          // says so with an Idempotency-Key header (idempotency.middleware).
+          idempotencyKey: p.idempotencyKey ? `build-labour:${p.idempotencyKey}` : null,
           transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
           amount: labour,
           debitAccountId: inventoryAccountId, // value into the finished good

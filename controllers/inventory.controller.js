@@ -60,7 +60,11 @@ exports.adjustStock = async (req, res, next) => {
   try {
     const inventoryAdjustmentService = require('../services/inventoryAdjustment.service');
     const result = await inventoryAdjustmentService.adjustStock(
-      req.user.businessId, req.params.id, req.body, req.user
+      req.user.businessId, req.params.id,
+      // A stock adjustment is repeatable on purpose, so only the caller can say
+      // whether this is a retry or a second deliberate one (idempotency.middleware).
+      { ...req.body, idempotencyKey: req.idempotencyKey },
+      req.user
     );
     ApiResponse.success(res, result, result?.noChange ? 'No change needed' : 'Stock adjusted');
   } catch (e) { next(e); }
@@ -177,7 +181,11 @@ exports.quoteBuild = async (req, res, next) => {
 };
 exports.build = async (req, res, next) => {
   try {
-    const r = await assemblyService.build(req.user.businessId, { ...req.body, bomId: req.params.id }, req.user);
+    const r = await assemblyService.build(
+      req.user.businessId,
+      { ...req.body, bomId: req.params.id, idempotencyKey: req.idempotencyKey },
+      req.user
+    );
     ApiResponse.success(res, r, 'Built and added to stock');
   } catch (e) { next(e); }
 };
