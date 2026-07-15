@@ -11,6 +11,7 @@
 jest.mock('../../../models/JournalEntry.model', () => ({ create: jest.fn() }));
 jest.mock('../../../repositories/account.repository', () => ({
   findById: jest.fn(),
+  findByIdInSession: jest.fn(),
   updateRunningBalance: jest.fn(),
   findAllByBusinessAndIds: jest.fn(),
 }));
@@ -33,6 +34,9 @@ beforeEach(() => {
   accountRepository.findById.mockImplementation((id) =>
     Promise.resolve({ _id: id, normalBalance: id === ID_DR ? 'Debit' : 'Credit' })
   );
+  // The poster reads through findByIdInSession so it can join a caller's
+  // transaction; same data, same answers.
+  accountRepository.findByIdInSession.mockImplementation(accountRepository.findById.getMockImplementation());
   accountRepository.updateRunningBalance.mockResolvedValue(undefined);
   // F16 tenant guard: resolve every requested account as owned by the business
   // (cross-tenant rejection is covered in ledgerPosting.tenantGuard.test.js).
@@ -124,7 +128,7 @@ describe('ledgerPosting.applyRunningBalance()', () => {
   });
 
   it('logs and skips when the account is not found', async () => {
-    accountRepository.findById.mockResolvedValue(null);
+    accountRepository.findByIdInSession.mockResolvedValue(null);
     await applyRunningBalance('missing', 100, 'debit');
     expect(accountRepository.updateRunningBalance).not.toHaveBeenCalled();
   });

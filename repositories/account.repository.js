@@ -75,10 +75,33 @@ class AccountRepository extends BaseRepository {
   }
 
   /**
+   * findById that can join a caller's transaction.
+   *
+   * BaseRepository.findById takes `populateFields` as its second argument, so it
+   * cannot carry a session. The ledger poster needs one: it may be balancing an
+   * account the resolver created earlier in the same transaction, which a
+   * session-less read cannot see.
+   *
+   * @param {string|ObjectId} id
+   * @param {import('mongoose').ClientSession|null} [session]
+   */
+  async findByIdInSession(id, session = null) {
+    return this.model.findById(id).session(session).lean();
+  }
+
+  /**
    * Return all accounts from a list of IDs that belong to the given business.
    * Used to validate journal line account IDs for tenant isolation.
+   *
+   * @param {string|ObjectId} businessId
+   * @param {Array<string|ObjectId>} ids
+   * @param {Object} [opts]
+   * @param {import('mongoose').ClientSession} [opts.session] — REQUIRED when the
+   *   caller is inside a transaction that may have just created one of these
+   *   accounts. A read without the session cannot see its own transaction's
+   *   uncommitted writes, so the account would look like it does not exist.
    */
-  async findAllByBusinessAndIds(businessId, ids) {
+  async findAllByBusinessAndIds(businessId, ids, { session = null } = {}) {
     const mongoose = require('mongoose');
     const validIds = ids
       .filter(id => mongoose.isValidObjectId(id))
@@ -87,7 +110,7 @@ class AccountRepository extends BaseRepository {
     return this.model.find(
       { businessId, _id: { $in: validIds } },
       { _id: 1 }
-    ).lean();
+    ).session(session).lean();
   }
 
   /**

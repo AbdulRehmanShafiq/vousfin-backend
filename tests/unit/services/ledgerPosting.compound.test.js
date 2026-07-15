@@ -3,7 +3,8 @@
 jest.mock('../../../config/logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }));
 jest.mock('../../../models/JournalEntry.model', () => ({ create: jest.fn(), findOne: jest.fn() }));
 jest.mock('../../../repositories/account.repository', () => ({
-  findById: jest.fn(), updateRunningBalance: jest.fn(), findAllByBusinessAndIds: jest.fn(),
+  findById: jest.fn(),
+  findByIdInSession: jest.fn(), updateRunningBalance: jest.fn(), findAllByBusinessAndIds: jest.fn(),
 }));
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
 
@@ -18,6 +19,9 @@ const NB = { '6180': 'Debit', '2140': 'Credit', '2141': 'Credit', cash: 'Debit',
 beforeEach(() => {
   jest.clearAllMocks();
   accountRepo.findById.mockImplementation((id) => Promise.resolve({ _id: id, normalBalance: NB[id] || 'Debit' }));
+  // The poster reads through findByIdInSession so it can join a caller's
+  // transaction; same accounts, same answers.
+  accountRepo.findByIdInSession.mockImplementation((id) => Promise.resolve({ _id: id, normalBalance: NB[id] || 'Debit' }));
   accountRepo.findAllByBusinessAndIds.mockImplementation((biz, ids) => Promise.resolve(ids.map((id) => ({ _id: id }))));
   accountRepo.updateRunningBalance.mockResolvedValue({});
   let n = 0;

@@ -25,6 +25,14 @@ jest.mock('../../../models/FiscalYear.model',     () => ({ findOne: jest.fn(), c
 jest.mock('../../../models/AccountingPeriod.model', () => ({ findOne: jest.fn(), updateOne: jest.fn(), updateMany: jest.fn(), countDocuments: jest.fn(), insertMany: jest.fn() }));
 jest.mock('../../../models/JournalEntry.model',   () => ({ aggregate: jest.fn(), countDocuments: jest.fn() }));
 jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn(), find: jest.fn() }));
+// Closing entries resolve 3210/3310 through the resolver now, not by hand-rolled
+// findOne queries — see accountResolver.service. Its own behaviour (resolve by
+// code, heal a missing default, refuse an unknown one) is proved for real in
+// tests/live/accountResolver.live.test.js; here we only care which accounts the
+// closing entry lands on.
+jest.mock('../../../services/accountResolver.service', () => ({
+  resolve: jest.fn(), resolveMany: jest.fn(), resolveId: jest.fn(),
+}));
 
 const mongoose            = require('mongoose');
 const fiscalYearService   = require('../../../services/fiscalYear.service');
@@ -34,6 +42,7 @@ const FiscalYear          = require('../../../models/FiscalYear.model');
 const AccountingPeriod    = require('../../../models/AccountingPeriod.model');
 const JournalEntry        = require('../../../models/JournalEntry.model');
 const ChartOfAccount      = require('../../../models/ChartOfAccount.model');
+const accountResolver     = require('../../../services/accountResolver.service');
 const { PERIOD_STATUS, FISCAL_YEAR_STATUS } = require('../../../config/constants');
 
 const oid = () => new mongoose.Types.ObjectId();
@@ -43,22 +52,16 @@ const USER = oid().toString();
 const leanOf = (val) => ({ lean: () => Promise.resolve(val) });
 
 /**
- * Classify a ChartOfAccount.findOne(query) the way the service issues them and
- * return the matching account. Handles both `{ accountCode: '3310' }` and
- * `{ accountName: { $regex: /.../i } }` forms used across the closing lookups.
+ * Point the resolver at the two equity accounts a close needs. Replaces a
+ * hand-rolled findOne classifier that had to understand the service's $or/regex
+ * query shapes — the exact coupling the resolver removed.
  */
-const makeAcctFindOne = ({ cyeId, reId, revId }) => (q) => {
-  const tokens = (q.$or || [])
-    .map(c => c.accountCode || (c.accountName && c.accountName.$regex && c.accountName.$regex.source) || '')
-    .join('|');
-  if (tokens.includes('3310') || /current.?year/i.test(tokens)) {
-    return leanOf({ _id: cyeId, accountName: 'Current Year Earnings' });
-  }
-  if (/retained/i.test(tokens)) {
-    return leanOf({ _id: reId, accountName: 'Retained Earnings' });
-  }
-  if (q.accountType === 'Revenue') return leanOf({ _id: revId, accountType: 'Revenue' });
-  return leanOf(null);
+const makeAcctFindOne = ({ cyeId, reId }) => {
+  accountResolver.resolveMany.mockResolvedValue({
+    retainedEarningsAcct: { _id: reId, accountCode: '3210', accountName: 'Retained Earnings' },
+    clearingAcct:         { _id: cyeId, accountCode: '3310', accountName: 'Current Year Earnings' },
+  });
+  return () => leanOf(null);
 };
 
 beforeEach(() => {
@@ -126,7 +129,13 @@ describe('closeFiscalYear — closing entry net income uses effective lines (A7)
 
     expect(postBalancedJournal).toHaveBeenCalledTimes(1);
     expect(postBalancedJournal).toHaveBeenCalledWith(
-      expect.objectContaining({ amount: 400 }) // 1000 - 600
+      expect.objectContaining({
+        amount: 400, // 1000 - 600
+        // One closing entry per year, forever — the key is what stops a retry
+        // transferring net income into Retained Earnings twice.
+        idempotencyKey: `fy-close:${fyId}`,
+      }),
+      expect.anything() // { session } — close posts inside its own transaction
     );
     expect(res.retainedEarningsTransferred).toBe(400);
   });

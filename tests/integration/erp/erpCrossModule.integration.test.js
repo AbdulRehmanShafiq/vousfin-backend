@@ -21,7 +21,8 @@ jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn
 jest.mock('../../../repositories/customer.repository', () => ({ updateReceivableBalance: jest.fn() }));
 jest.mock('../../../repositories/vendor.repository',   () => ({ updatePayableBalance:    jest.fn() }));
 jest.mock('../../../repositories/account.repository',  () => ({
-  findById: jest.fn(), updateRunningBalance: jest.fn(), findByCode: jest.fn(), syncMissingDefaults: jest.fn(),
+  findById: jest.fn(),
+  findByIdInSession: jest.fn(), updateRunningBalance: jest.fn(), findByCode: jest.fn(), syncMissingDefaults: jest.fn(),
   // F16 tenant guard: resolve every requested account as owned (cross-tenant
   // rejection is covered in ledgerPosting.tenantGuard.test.js).
   findAllByBusinessAndIds: jest.fn((_biz, ids) => Promise.resolve(ids.map((id) => ({ _id: id })))),
@@ -143,6 +144,9 @@ describe('Scenario 5 — Balanced journal posts AND moves both running balances'
     accountRepository.findById.mockImplementation((id) =>
       Promise.resolve({ _id: id, normalBalance: id === 'AR' ? 'Debit' : 'Credit' })
     );
+  // The poster reads through findByIdInSession so it can join a caller's
+  // transaction; same data, same answers.
+  accountRepository.findByIdInSession.mockImplementation(accountRepository.findById.getMockImplementation());
     accountRepository.updateRunningBalance.mockResolvedValue(undefined);
 
     const je = await ledgerPosting.postBalancedJournal({

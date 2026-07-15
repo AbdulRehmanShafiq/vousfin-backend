@@ -64,9 +64,14 @@ const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 async function applyRunningBalance(accountId, amount, side, { session = null, strict = false } = {}) {
   if (!accountId) return;
   try {
-    const account = await accountRepository.findById(accountId);
+    // Read inside the session. This used to be a session-less read, justified by
+    // "normalBalance is immutable, so it is consistent anyway" — true, but it
+    // assumed the account already existed. It can now be created earlier in this
+    // same transaction (the resolver healing a missing default), and a
+    // session-less read cannot see its own transaction's writes: the account
+    // looked absent and, under strict, blew up the whole posting.
+    const account = await accountRepository.findByIdInSession(accountId, session);
     if (!account) {
-      // normalBalance is immutable, so a non-session read is consistent here.
       const msg = `[ledgerPosting] account ${accountId} not found — running balance not updated`;
       if (strict) throw new Error(msg);
       logger.warn(msg);
@@ -140,7 +145,13 @@ async function postCompoundJournal(payload, { updateBalances = true, session = n
   if (lineAccountIds.some((id) => !id)) {
     throw new ApiError(400, 'Every journal line must reference an account.');
   }
-  const ownedAccounts = await accountRepository.findAllByBusinessAndIds(rest.businessId, lineAccountIds);
+  // Read inside the caller's session: an account the caller legitimately created
+  // earlier in this same transaction (the resolver healing a missing default,
+  // say) is invisible to a session-less read, and this guard would reject the
+  // business's own account as foreign.
+  const ownedAccounts = await accountRepository.findAllByBusinessAndIds(
+    rest.businessId, lineAccountIds, { session }
+  );
   const ownedSet = new Set((ownedAccounts || []).map((a) => String(a._id)));
   const foreignIds = lineAccountIds.filter((id) => !ownedSet.has(id));
   if (foreignIds.length > 0) {

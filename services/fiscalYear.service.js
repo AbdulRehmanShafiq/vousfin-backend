@@ -19,6 +19,8 @@ const AccountingPeriod = require('../models/AccountingPeriod.model');
 const JournalEntry   = require('../models/JournalEntry.model');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
 const { postBalancedJournal } = require('./ledgerPosting.service');
+const accountResolver = require('./accountResolver.service');
+const { withTransaction } = require('../utils/withTransaction');
 const transactionRepository = require('../repositories/transaction.repository');
 const {
   FISCAL_YEAR_STATUS, PERIOD_STATUS, PERIOD_TYPE,
@@ -272,26 +274,34 @@ async function closeFiscalYear(businessId, fiscalYearId, userId, { reason = '' }
     throw new ApiError(400, `${openPeriods} monthly period(s) are still open. Close all periods before closing the fiscal year.`);
   }
 
-  // Run automated closing entries
-  const { closingEntryIds, retainedEarningsTransferred } =
-    await _runClosingEntries(businessId, bizId, fy, userId);
+  // Closing the year and posting its closing entries are ONE act. Previously
+  // the entries posted outside the transaction that flipped the status, so a
+  // failure in between left the entries posted with the year still open — and
+  // closing again posted them a second time. Either both happen or neither does.
+  const { closingEntryIds, retainedEarningsTransferred } = await withTransaction(
+    async (session) => {
+      const result = await _runClosingEntries(businessId, bizId, fy, userId, { session });
 
-  await FiscalYear.updateOne(
-    { _id: fy._id },
-    {
-      $set:  {
-        status: FISCAL_YEAR_STATUS.CLOSED,
-        closingEntryIds,
-        retainedEarningsTransferred,
-      },
-      $push: {
-        auditTrail: {
-          action:      PERIOD_ACTION.CLOSED,
-          performedBy: new mongoose.Types.ObjectId(String(userId)),
-          performedAt: new Date(),
-          reason:      reason || 'Year-end close',
+      await FiscalYear.updateOne(
+        { _id: fy._id },
+        {
+          $set: {
+            status: FISCAL_YEAR_STATUS.CLOSED,
+            closingEntryIds: result.closingEntryIds,
+            retainedEarningsTransferred: result.retainedEarningsTransferred,
+          },
+          $push: {
+            auditTrail: {
+              action:      PERIOD_ACTION.CLOSED,
+              performedBy: new mongoose.Types.ObjectId(String(userId)),
+              performedAt: new Date(),
+              reason:      reason || 'Year-end close',
+            },
+          },
         },
-      },
+        { session }
+      );
+      return result;
     }
   );
 
@@ -347,22 +357,26 @@ async function lockFiscalYear(businessId, fiscalYearId, userId, { reason = '' } 
    CLOSING ENTRIES — Revenue + Expense → Retained Earnings
 ════════════════════════════════════════════════════════════════════════════ */
 
-async function _runClosingEntries(businessId, bizId, fy, userId) {
+async function _runClosingEntries(businessId, bizId, fy, userId, { session = null } = {}) {
   const closingEntryIds = [];
 
-  // Find Retained Earnings account for this business
-  const retainedEarningsAcct = await ChartOfAccount.findOne({
-    businessId: bizId,
-    $or: [
-      { accountName: { $regex: /retained earnings/i } },
-      { accountName: { $regex: /retained profit/i } },
-    ],
-  }).lean();
-
-  if (!retainedEarningsAcct) {
-    logger.warn(`No Retained Earnings account found for business ${businessId}. Skipping closing entries.`);
-    return { closingEntryIds: [], retainedEarningsTransferred: 0 };
-  }
+  // Retained Earnings (3210) and the Current Year Earnings clearing account
+  // (3310), resolved by CODE through the self-healing resolver.
+  //
+  // This used to match on /retained earnings/i and, on a miss, log a warning and
+  // return zero — while closeFiscalYear marked the year CLOSED anyway. So an
+  // owner who renamed the account to "Accumulated Profit" got a year that closed
+  // with no closing entry at all: the P&L never rolled into equity, retained
+  // earnings stayed wrong forever, and nothing surfaced but a log line.
+  //
+  // Resolving by code is rename-proof, and the resolver seeds either account if
+  // it is genuinely absent — so the common causes heal instead of failing, and a
+  // cause we cannot heal now throws rather than silently skipping.
+  const { retainedEarningsAcct, clearingAcct } = await accountResolver.resolveMany(
+    businessId,
+    { retainedEarningsAcct: '3210', clearingAcct: '3310' },
+    { session }
+  );
 
   // Aggregate total revenue and expenses for this fiscal year. Use the SAME
   // effective-lines income-statement aggregation the financial statements use
@@ -382,29 +396,18 @@ async function _runClosingEntries(businessId, bizId, fy, userId) {
   }
 
   // Contra for the closing entry = the dedicated "Current Year Earnings" clearing
-  // account (3310 in DEFAULT_ACCOUNTS). Posting the net-income leg here instead of
+  // account (3310, resolved above). Posting the net-income leg here instead of
   // an arbitrary Revenue account avoids driving a real revenue account negative
   // (audit A8). The Balance Sheet already folds this account's economic balance
   // into its synthetic "Current Year Earnings" line (report.service `realCYEBalance`),
   // so the synthetic line nets to zero after close and the profit lands in Retained
   // Earnings — equity totals stay correct and the P&L is untouched (the closing
-  // legs hit equity-only accounts). Fall back to a Revenue account only if a
-  // business somehow lacks 3310, preserving the previous behaviour.
-  const clearingAcct = await ChartOfAccount.findOne({
-    businessId: bizId,
-    $or: [
-      { accountCode: '3310' },
-      { accountName: { $regex: /current.?year.?earnings/i } },
-    ],
-  }).lean() || await ChartOfAccount.findOne({
-    businessId: bizId,
-    accountType: 'Revenue',
-  }).lean();
-
-  if (!clearingAcct) {
-    logger.warn(`No Current Year Earnings / Revenue account found for closing entry for business ${businessId}`);
-    return { closingEntryIds: [], retainedEarningsTransferred: 0 };
-  }
+  // legs hit equity-only accounts).
+  //
+  // The old "fall back to any Revenue account" branch is gone on purpose: it
+  // silently posted the closing entry against a real revenue account, which is
+  // the very thing A8 fixed. 3310 is a default, so the resolver seeds it rather
+  // than needing a fallback at all.
 
   // Net income > 0: DR Current Year Earnings / CR Retained Earnings (equity increases)
   // Net income < 0: DR Retained Earnings / CR Current Year Earnings (equity decreases)
@@ -437,7 +440,12 @@ async function _runClosingEntries(businessId, bizId, fy, userId) {
     transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
     lastModifiedBy:  new mongoose.Types.ObjectId(String(userId)),
     tags:            ['closing-entry', `fy-${fy.name}`],
-  });
+    // A fiscal year has exactly one closing entry, forever. Keying on the year
+    // makes a retry return the original instead of transferring net income into
+    // Retained Earnings twice — the DB-level unique index (audit F7) is the
+    // arbiter, so even two concurrent closes cannot both post.
+    idempotencyKey:  `fy-close:${fy._id}`,
+  }, { session });
 
   closingEntryIds.push(closingEntry._id);
 

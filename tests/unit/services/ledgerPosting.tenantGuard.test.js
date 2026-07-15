@@ -15,6 +15,8 @@ jest.mock('../../../models/JournalEntry.model', () => ({
 }));
 jest.mock('../../../repositories/account.repository', () => ({
   findById: jest.fn().mockResolvedValue({ _id: 'a1', normalBalance: 'Debit' }),
+  // The poster reads through findByIdInSession so it can join a caller's txn.
+  findByIdInSession: jest.fn().mockResolvedValue({ _id: 'a1', normalBalance: 'Debit' }),
   findAllByBusinessAndIds: jest.fn(),
   updateRunningBalance: jest.fn().mockResolvedValue(undefined),
 }));
@@ -57,6 +59,10 @@ describe('F16 — poster tenant-ownership guard', () => {
     const je = await postCompoundJournal(payload());
 
     expect(je._id).toBe('je1');
-    expect(accountRepository.findAllByBusinessAndIds).toHaveBeenCalledWith('biz1', ['a1', 'a2']);
+    // The session is threaded through so the guard can see an account the
+    // caller created earlier in this same transaction (a healed default).
+    expect(accountRepository.findAllByBusinessAndIds).toHaveBeenCalledWith(
+      'biz1', ['a1', 'a2'], { session: null }
+    );
   });
 });
