@@ -79,7 +79,9 @@ class PartyBalanceService {
     const amount = round2(delta);
     if (!id || amount === 0) return null; // nothing to do — safe no-op
 
-    const updated = await customerRepository.updateReceivableBalance(id, amount, ctx.session || null);
+    // Pass businessId so the update is tenant-scoped: a wrong-tenant id must not
+    // be able to move another business's receivable (audit 2026-07-02 P3).
+    const updated = await customerRepository.updateReceivableBalance(id, amount, ctx.session || null, businessId);
     if (!updated) {
       // The party was deleted between the ledger write and this balance update.
       // Throw so the enclosing transaction rolls back — a posted AR move with no
@@ -119,7 +121,8 @@ class PartyBalanceService {
     const amount = round2(delta);
     if (!id || amount === 0) return null; // nothing to do — safe no-op
 
-    const updated = await vendorRepository.updatePayableBalance(id, amount, ctx.session || null);
+    // Tenant-scoped — see adjustReceivable.
+    const updated = await vendorRepository.updatePayableBalance(id, amount, ctx.session || null, businessId);
     if (!updated) {
       throw new ApiError(404, `Cannot update payable: vendor ${id} not found.`);
     }

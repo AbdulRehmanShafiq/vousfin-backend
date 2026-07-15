@@ -93,7 +93,7 @@ describe('Scenario 1 — AP recognition propagates: vendor balance + event + cac
     await partyBalanceService.adjustPayable(BIZ_A, 'v1', 1000, { reason: 'bill_approved' });
     await flush();
 
-    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith('v1', 1000, null);   // AP module (3rd arg = no session)
+    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith('v1', 1000, null, BIZ_A);   // AP module (3rd = no session, 4th = tenant scope)
     expect(reportCache.invalidate).toHaveBeenCalledWith(BIZ_A);                        // analytics module
   });
 });
@@ -105,7 +105,7 @@ describe('Scenario 2 — AR recognition propagates: customer balance + event + c
     await partyBalanceService.adjustReceivable(BIZ_A, 'c1', 500, { reason: 'invoice_approved' });
     await flush();
 
-    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith('c1', 500, null);
+    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith('c1', 500, null, BIZ_A);
     expect(reportCache.invalidate).toHaveBeenCalledWith(BIZ_A);
   });
 });
@@ -117,7 +117,7 @@ describe('Scenario 3 — Settlement propagates: balance decrement + event + cach
     await partyBalanceService.adjustPayable(BIZ_A, 'v1', -1000, { reason: 'bill_paid' });
     await flush();
 
-    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith('v1', -1000, null);
+    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith('v1', -1000, null, BIZ_A);
     expect(reportCache.invalidate).toHaveBeenCalledWith(BIZ_A);
   });
 });

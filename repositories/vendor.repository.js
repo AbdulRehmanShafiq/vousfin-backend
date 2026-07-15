@@ -83,19 +83,27 @@ class VendorRepository extends BaseRepository {
 
   /**
    * Update payable balance atomically using $inc.
+   *
+   * Scoped by businessId as well as _id — see customer.repository
+   * updateReceivableBalance for why (audit 2026-07-02 P3).
+   *
    * @param {string} vendorId
    * @param {number} delta - Positive to increase, negative to decrease
+   * @param {import('mongoose').ClientSession|null} [session]
+   * @param {string|ObjectId} [businessId] - when given, the update is tenant-scoped
    * @returns {Promise<Object|null>}
    */
-  async updatePayableBalance(vendorId, delta, session = null) {
+  async updatePayableBalance(vendorId, delta, session = null, businessId = null) {
     const validVendorId = sanitizeAndValidateId(vendorId);
     if (typeof delta !== 'number' || isNaN(delta)) {
       throw new Error('Delta must be a number');
     }
     const options = { new: true, runValidators: false };
     if (session) options.session = session; // join an all-or-nothing transaction when given
-    return this.model.findByIdAndUpdate(
-      validVendorId,
+    const filter = { _id: validVendorId };
+    if (businessId) filter.businessId = sanitizeAndValidateId(businessId);
+    return this.model.findOneAndUpdate(
+      filter,
       { $inc: { currentPayableBalance: delta } },
       options
     ).exec();

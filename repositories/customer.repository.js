@@ -83,19 +83,30 @@ class CustomerRepository extends BaseRepository {
 
   /**
    * Update receivable balance atomically using $inc.
+   *
+   * Scoped by businessId as well as _id (audit 2026-07-02 P3): keyed on _id
+   * alone, a wrong-tenant customerId reaching this would silently move another
+   * business's receivable. The caller always knows the business, so make the
+   * query say so — a mismatch returns null, and the service treats that as the
+   * hard error it is.
+   *
    * @param {string} customerId
    * @param {number} delta - Positive to increase, negative to decrease
+   * @param {import('mongoose').ClientSession|null} [session]
+   * @param {string|ObjectId} [businessId] - when given, the update is tenant-scoped
    * @returns {Promise<Object|null>}
    */
-  async updateReceivableBalance(customerId, delta, session = null) {
+  async updateReceivableBalance(customerId, delta, session = null, businessId = null) {
     const validCustomerId = sanitizeAndValidateId(customerId);
     if (typeof delta !== 'number' || isNaN(delta)) {
       throw new Error('Delta must be a number');
     }
     const options = { new: true, runValidators: false };
     if (session) options.session = session; // join an all-or-nothing transaction when given
-    return this.model.findByIdAndUpdate(
-      validCustomerId,
+    const filter = { _id: validCustomerId };
+    if (businessId) filter.businessId = sanitizeAndValidateId(businessId);
+    return this.model.findOneAndUpdate(
+      filter,
       { $inc: { currentReceivableBalance: delta } },
       options
     ).exec();

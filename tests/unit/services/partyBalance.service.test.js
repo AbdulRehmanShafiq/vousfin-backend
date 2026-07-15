@@ -46,7 +46,7 @@ describe('PartyBalanceService.adjustReceivable()', () => {
       userId: 'u1', reason: 'credit_sale', entityType: 'journal_entry', entityId: 'tx9',
     });
 
-    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith(ID_CUSTOMER, 1000, null);
+    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith(ID_CUSTOMER, 1000, null, ID_BUSINESS);
     expect(res.currentReceivableBalance).toBe(1500);
 
     expect(emittedNames()).toContain(EVENTS.CUSTOMER_BALANCE_CHANGED);
@@ -61,7 +61,7 @@ describe('PartyBalanceService.adjustReceivable()', () => {
   it('rounds the delta to 2dp before writing', async () => {
     customerRepository.updateReceivableBalance.mockResolvedValue({ _id: ID_CUSTOMER, currentReceivableBalance: 10 });
     await partyBalanceService.adjustReceivable(ID_BUSINESS, ID_CUSTOMER, 33.333, {});
-    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith(ID_CUSTOMER, 33.33, null);
+    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith(ID_CUSTOMER, 33.33, null, ID_BUSINESS);
   });
 
   it('is a no-op (no repo call, no event) when delta is 0', async () => {
@@ -88,7 +88,7 @@ describe('PartyBalanceService.adjustReceivable()', () => {
   it('accepts a populated customer sub-doc and normalizes its _id', async () => {
     customerRepository.updateReceivableBalance.mockResolvedValue({ _id: ID_CUSTOMER, currentReceivableBalance: 5 });
     await partyBalanceService.adjustReceivable(ID_BUSINESS, { _id: ID_CUSTOMER }, -250, {});
-    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith(ID_CUSTOMER, -250, null);
+    expect(customerRepository.updateReceivableBalance).toHaveBeenCalledWith(ID_CUSTOMER, -250, null, ID_BUSINESS);
   });
 });
 
@@ -101,7 +101,7 @@ describe('PartyBalanceService.adjustPayable()', () => {
       userId: 'u1', reason: 'bill_approved', entityType: 'bill', entityId: 'b3',
     });
 
-    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith(ID_VENDOR, 800, null);
+    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith(ID_VENDOR, 800, null, ID_BUSINESS);
     expect(res.currentPayableBalance).toBe(800);
 
     expect(emittedNames()).toContain(EVENTS.VENDOR_BALANCE_CHANGED);
@@ -116,7 +116,7 @@ describe('PartyBalanceService.adjustPayable()', () => {
   it('decrements on a negative delta (settlement) and broadcasts', async () => {
     vendorRepository.updatePayableBalance.mockResolvedValue({ _id: ID_VENDOR, currentPayableBalance: 0 });
     await partyBalanceService.adjustPayable(ID_BUSINESS, ID_VENDOR, -800, { reason: 'bill_paid' });
-    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith(ID_VENDOR, -800, null);
+    expect(vendorRepository.updatePayableBalance).toHaveBeenCalledWith(ID_VENDOR, -800, null, ID_BUSINESS);
     const payload = lastPayloadFor(EVENTS.VENDOR_BALANCE_CHANGED);
     expect(payload.newBalance).toBe(0);
     expect(payload.reason).toBe('bill_paid');

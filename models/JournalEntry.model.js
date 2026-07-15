@@ -647,32 +647,20 @@ journalEntrySchema.statics.getByDateRange = function (businessId, startDate, end
   }).sort('transactionDate');
 };
 
-/**
- * Get total debits or credits for a specific account within a date range.
- * Used in ledger reports.
- * @param {string} businessId
- * @param {string} accountId
- * @param {Date} startDate
- * @param {Date} endDate
- * @param {string} side - 'debit' or 'credit'
- * @returns {Promise<number>}
- */
-journalEntrySchema.statics.getAccountTurnover = async function (businessId, accountId, startDate, endDate, side) {
-  const matchField = side === 'debit' ? 'debitAccountId' : 'creditAccountId';
-  const result = await this.aggregate([
-    {
-      $match: {
-        businessId,
-        status: { $in: [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.PARTIALLY_SETTLED, JOURNAL_STATUS.SETTLED] },
-        isArchived: { $ne: true },
-        transactionDate: { $gte: startDate, $lte: endDate },
-        [matchField]: accountId,
-      },
-    },
-    { $group: { _id: null, total: { $sum: '$amount' } } },
-  ]);
-  return result.length ? result[0].total : 0;
-};
+// REMOVED (audit 2026-07-02 P3, closed 2026-07-16): `getAccountTurnover`.
+//
+// It summed `$amount` filtered on the top-level debitAccountId/creditAccountId
+// pair, which is a DERIVED projection — not the ledger's truth. Any compound
+// entry's third-or-later leg (a tax or COGS line living only in `journalLines`)
+// was invisible to it, and it counted the whole entry `amount` against the first
+// debit/credit rather than that account's own line. It was also blind to the
+// `reversed` convention F1 fixed.
+//
+// It had no callers, and deleting it beats fixing it: an unused helper that
+// models the wrong pattern is a trap for whoever finds it next and assumes it is
+// safe. Anything needing per-account turnover must read through
+// `transaction.repository.EFFECTIVE_LINES_STAGE`, which uses `journalLines` when
+// present and synthesises the pair otherwise — the same source every report uses.
 
 // System-generated year-end CLOSING and OPENING-BALANCE entries are an intrinsic
 // part of the close process: they are dated at period boundaries (e.g. the fiscal
