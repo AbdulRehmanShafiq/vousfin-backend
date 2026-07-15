@@ -38,6 +38,14 @@ jest.mock('../../../services/inventory.service', () => ({
   applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
   reduceStock: jest.fn(),
   resolveCostAccounts: jest.fn(),
+  applyReceiptReversal: jest.fn().mockResolvedValue({ removedValue: 0 }),
+}));
+// Standard costing (inventory Phase 8) made GRN receipt read the item itself to
+// quote the receipt, so this suite began reaching the REAL model with no database
+// behind it — every GRN test then hung until Mongoose's 10s buffering timeout.
+// .findOne().select().lean(); null → the receipt is valued at actual cost.
+jest.mock('../../../models/InventoryItem.model', () => ({
+  findOne: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve(null) }) })),
 }));
 // AR/AP M1 — mock the reconciler at its boundary so we can assert the
 // payment.recorded subscriber actually drives ledger→document reconciliation.

@@ -38,6 +38,20 @@ jest.mock('../../services/inventory.service', () => ({
   applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
   reduceStock:        jest.fn().mockResolvedValue({ updatedStock: 0 }),
   resolveCostAccounts: jest.fn(),
+  // GRN cancel reverses the receipt at its ORIGINAL cost (inventory Phase 0).
+  // Absent from this mock, cancel died with "not a function".
+  applyReceiptReversal: jest.fn().mockResolvedValue({ removedValue: 0 }),
+}));
+// Standard costing (inventory Phase 8) made _receiveStock read the item itself
+// to quote the receipt, so this suite started reaching the REAL model — with no
+// database behind it, every GRN test hung until Mongoose's 10s buffering timeout
+// (which is why the failure count wandered between runs). Mock it: this suite is
+// about GRNI accounting, and the costing quote is proved in the inventory tests.
+jest.mock('../../models/InventoryItem.model', () => ({
+  // .findOne().select().lean() — null → quoteReceipt values the receipt at the
+  // actual cost paid, i.e. no standard-cost variance, which is what these
+  // GRNI assertions expect.
+  findOne: jest.fn(() => ({ select: () => ({ lean: () => Promise.resolve(null) }) })),
 }));
 jest.mock('../../services/ledgerPosting.service', () => ({
   postCompoundJournal: jest.fn(),
