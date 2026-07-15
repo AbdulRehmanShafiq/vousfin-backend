@@ -416,6 +416,9 @@ class PaymentService {
       exchangeRate:      payment.exchangeRate,
       createdBy:         userId,
       lastModifiedBy:    userId,
+      // A payment holds its unapplied remainder on account exactly once. Without
+      // a key a retry posts the advance twice and the cash account overstates.
+      idempotencyKey:    `payment-advance:${payment._id}`,
     }, { session });
   }
 

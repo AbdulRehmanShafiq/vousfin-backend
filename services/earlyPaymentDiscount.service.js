@@ -146,6 +146,9 @@ class EarlyPaymentDiscountService {
       status: JOURNAL_STATUS.POSTED, transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
       invoiceNumber: numberRef, currencyCode: bill.currencyCode || 'PKR', exchangeRate: bill.exchangeRate || 1,
       createdBy: user._id, lastModifiedBy: user._id, vendorId: bill.vendorId,
+      // One discount per bill: a retry must not credit Discount Received twice
+      // and reduce AP below what is actually owed.
+      idempotencyKey: `discount-vendor:${bill._id}`,
     });
 
     const remaining = r2(bill.remainingBalance != null ? bill.remainingBalance : bill.totalAmount);

@@ -82,6 +82,9 @@ class ArApVoidCreditService {
     if (net > 0 && incomeExpenseId) {
       const je = await postBalancedJournal({
         ...common, description: `Void ${numberRef} — reverse recognition`,
+        // A document is voided once, so each leg is keyed on it. Without a key a
+        // retry reverses recognition twice and drives AR/AP the wrong way.
+        idempotencyKey: `void:${doc._id}:recognition`,
         transactionType: isInvoice ? TRANSACTION_TYPES.CREDIT_SALE : TRANSACTION_TYPES.CREDIT_PURCHASE,
         amount: net,
         debitAccountId:  isInvoice ? incomeExpenseId : control._id,  // invoice: DR Revenue | bill: DR AP
@@ -93,6 +96,7 @@ class ArApVoidCreditService {
     if (tax > 0 && taxAcc) {
       const je = await postBalancedJournal({
         ...common, description: `Void ${numberRef} — reverse tax`,
+        idempotencyKey: `void:${doc._id}:tax`,
         transactionType: isInvoice ? TRANSACTION_TYPES.CREDIT_SALE : TRANSACTION_TYPES.CREDIT_PURCHASE,
         amount: tax,
         debitAccountId:  isInvoice ? taxAcc._id : control._id,
@@ -104,6 +108,7 @@ class ArApVoidCreditService {
     if (paid > 0 && cashAcc) {
       const je = await postBalancedJournal({
         ...common, description: `Void ${numberRef} — reverse payment`,
+        idempotencyKey: `void:${doc._id}:payment`,
         transactionType: isInvoice ? TRANSACTION_TYPES.PAYMENT_RECEIVED : TRANSACTION_TYPES.PAYMENT_MADE,
         amount: paid,
         debitAccountId:  isInvoice ? control._id : cashAcc._id,   // invoice: DR AR / CR Cash (refund)
@@ -172,6 +177,12 @@ class ArApVoidCreditService {
       invoiceNumber: numberRef, currencyCode: doc.currencyCode || 'PKR', exchangeRate: doc.exchangeRate || 1,
       createdBy: user._id, lastModifiedBy: user._id,
       ...(isInvoice ? { customerId: doc.customerId } : { vendorId: doc.vendorId }),
+      // Keyed on the memo's SEQUENCE, not the document: a document may carry
+      // several partial credit memos, so `credit-memo:{docId}` alone would block
+      // the second legitimate one. The index is taken before the append below,
+      // so retrying the Nth memo returns the Nth journal while a genuinely new
+      // memo gets a new key.
+      idempotencyKey: `credit-memo:${doc._id}:${(doc.creditMemos || []).length}`,
     });
 
     // Apply as a non-cash settlement.

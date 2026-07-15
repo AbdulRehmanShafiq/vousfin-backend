@@ -188,6 +188,11 @@ class RecognitionScheduleService {
             currencyCode:      schedule.currencyCode,
             createdBy:         schedule.createdBy,
             lastModifiedBy:    schedule.createdBy,
+            // One journal per schedule line, forever. This runs on a cron: a
+            // re-run, or a crash between posting and saving line.status, would
+            // otherwise recognise the same period's revenue (or amortise the
+            // same prepaid) a second time.
+            idempotencyKey:    `recognition:${schedule._id}:${line.periodNumber}`,
           });
           line.status = 'posted';
           line.journalEntryId = je._id;
