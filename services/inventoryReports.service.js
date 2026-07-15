@@ -212,9 +212,16 @@ class InventoryReportsService {
    * Margin by item — what you sold it for (invoices) minus what it cost you
    * (the sub-ledger). Revenue and cost come from different sources on purpose:
    * each is read from its own authority, never from a stored summary.
+   *
+   * Both sides answer to POSTED-NESS, not to workflow state. The stock
+   * sub-ledger only moves when an invoice posts, so if revenue counted an
+   * unposted invoice the two sides would be reading different populations and
+   * the margin would be fiction (revenue with no cost behind it = a 100%
+   * margin the income statement never agreed with).
    */
   async marginByItem(businessId, { startDate, endDate } = {}) {
     const Invoice = require('../models/Invoice.model');
+    const { INVOICE_STATES } = require('../config/constants');
     const end = endDate ? new Date(endDate) : new Date();
     const start = startDate ? new Date(startDate) : new Date(end.getFullYear(), end.getMonth(), 1);
 
@@ -223,7 +230,19 @@ class InventoryReportsService {
         { $match: {
           businessId: oid(businessId),
           isArchived: { $ne: true },
-          state: { $nin: ['draft', 'cancelled', 'void'] },
+          // An invoice earns revenue when it posts its AR/revenue journal —
+          // never merely by reaching a state. Filtering on `state` alone let an
+          // approved-but-unposted invoice contribute revenue the GL had never
+          // recognized (and for which no COGS could exist).
+          $or: [
+            { arJournalId:          { $ne: null } },
+            { linkedJournalEntryId: { $ne: null } },
+          ],
+          // Voided/cancelled revenue is reversed (or never belonged) in the GL,
+          // so exclude it even though the document still carries its journal id.
+          // Names come from the enum: the hand-typed 'void' here matched no
+          // state at all, silently counting every voided invoice as revenue.
+          state: { $nin: [INVOICE_STATES.DRAFT, INVOICE_STATES.CANCELLED, INVOICE_STATES.VOIDED] },
           issueDate: { $gte: start, $lte: end },
         } },
         { $unwind: '$lineItems' },

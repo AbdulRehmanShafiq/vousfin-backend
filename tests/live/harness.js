@@ -174,48 +174,30 @@ async function subLedgerDrift(businessId) {
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 
 /**
- * Assert all four at once. Call this after every operation a live test performs.
- * Failures name the specific invariant, because "the books are wrong" is not an
- * actionable test failure.
+ * Assert every invariant. Call this after every operation a live test performs.
+ *
+ * Delegates to `booksAssurance.assertCorrect` — the PRODUCT's own standing check
+ * — rather than re-implementing the maths here. That is the whole point: a test
+ * that reimplements the rule only proves it agrees with itself, whereas asserting
+ * the product's check means a green suite is evidence about the product.
+ *
+ * It then adds one check the product's version deliberately skips: that EVERY
+ * individual entry balances. computeDrift proves the ledger balances in total,
+ * which a pair of equal-and-opposite broken entries could still satisfy. Scanning
+ * every entry is too expensive to do on a live request, but a test can afford it.
  */
 async function expectGoldenInvariants(businessId, { asOf = new Date() } = {}) {
+  const booksAssurance = require('../../services/booksAssurance.service');
+  const result = await booksAssurance.assertCorrect(businessId, { asOf });
+
   const journals = await assertJournalsBalance(businessId);
   if (journals.broken.length) {
     throw new Error(
-      `Golden invariant 1 — unbalanced journal(s):\n${JSON.stringify(journals.broken, null, 2)}`
-    );
-  }
-  if (journals.totalDr !== journals.totalCr) {
-    throw new Error(
-      `Golden invariant 1 — trial balance does not balance: Dr ${journals.totalDr} vs Cr ${journals.totalCr}`
+      `Unbalanced journal(s) — each entry must balance on its own:\n${JSON.stringify(journals.broken, null, 2)}`
     );
   }
 
-  const drift = await driftReport(businessId);
-  const drifted = (drift.accounts || []).filter((a) => Math.abs(a.drift) >= 0.01);
-  if (drifted.length) {
-    throw new Error(
-      `Golden invariant 2 — cached balances drifted from the journal:\n${JSON.stringify(drifted, null, 2)}`
-    );
-  }
-
-  const { diff, bs } = await balanceSheetEquation(businessId, asOf);
-  if (Math.abs(diff) >= 0.01) {
-    throw new Error(
-      `Golden invariant 3 — balance sheet does not balance by ${diff} `
-      + `(assets ${bs.totalAssets} vs L+E ${bs.totalLiabilitiesAndEquity})`
-    );
-  }
-
-  const sub = await subLedgerDrift(businessId);
-  if (!sub.reconciled) {
-    throw new Error(
-      'Golden invariant 4 — sub-ledger does not reconcile to its control account: '
-      + `AR drift ${sub.ar.subledgerDrift}, AP drift ${sub.ap.subledgerDrift}`
-    );
-  }
-
-  return { journals, drift, balanceSheet: bs, subLedger: sub };
+  return { assurance: result, journals };
 }
 
 module.exports = {

@@ -208,10 +208,15 @@ class BillService {
   async submitForApproval(id, user, ipAddress, opts = {}) {
     const bill = await this._loadOrThrow(id, user?.businessId);
     if (!bill.approvalRequired) {
-      return this._applyStateChange(bill, BILL_STATES.APPROVED, user, {
+      // Landing in `approved` IS the recognition event, whichever door it came
+      // through — so this path must post the AP liability exactly like approve()
+      // does. It previously returned here, leaving every below-threshold bill
+      // approved with no payable in the GL.
+      await this._applyStateChange(bill, BILL_STATES.APPROVED, user, {
         reason: 'Below approval threshold — auto-approved',
         ipAddress,
       });
+      return this._recognizeApprovedBill(bill, user, ipAddress);
     }
     bill.approvalLog.push({
       action:    'submitted',
@@ -330,13 +335,26 @@ class BillService {
     bill.approvalStatus = APPROVAL_STATUS.APPROVED;
     bill.approvedBy = user._id;
     bill.approvedAt = new Date();
-    const approved = await this._applyStateChange(bill, BILL_STATES.APPROVED, user, { reason: note, ipAddress });
+    await this._applyStateChange(bill, BILL_STATES.APPROVED, user, { reason: note, ipAddress });
 
-    // Post the AP liability journal. Do NOT swallow a failure here — the GL must
-    // reflect the liability the moment a bill is approved. The poster is atomic
-    // and idempotent (guards on apLiabilityJournalId), so a surfaced error can be
-    // retried safely; a silent failure would leave AP understated (audit P2).
-    await this.postApLiabilityJournal(approved, user, ipAddress);
+    return this._recognizeApprovedBill(bill, user, ipAddress);
+  }
+
+  /**
+   * Recognize a bill that has just landed in `approved`.
+   *
+   * Shared by BOTH doors into that state: the explicit approve() and
+   * submitForApproval()'s below-threshold auto-promote, so the two paths can
+   * never drift apart on what "approved" means to the books.
+   *
+   * Post the AP liability journal. Do NOT swallow a failure here — the GL must
+   * reflect the liability the moment a bill is approved. The poster is atomic
+   * and idempotent (guards on apLiabilityJournalId), so a surfaced error can be
+   * retried safely; a silent failure would leave AP understated (audit P2).
+   * @private
+   */
+  async _recognizeApprovedBill(bill, user, ipAddress) {
+    await this.postApLiabilityJournal(bill, user, ipAddress);
 
     // ERP Step 4 — broadcast so dashboard / forecasting / AP-aging subscribers refresh.
     businessEvents.emit(EVENTS.BILL_APPROVED, {
@@ -349,7 +367,7 @@ class BillService {
       amount:     bill.totalAmount,
     });
 
-    return approved;
+    return bill;
   }
 
   async reject(id, user, note, ipAddress) {

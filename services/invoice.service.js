@@ -347,11 +347,17 @@ class InvoiceService {
   async submitForApproval(id, user, ipAddress, opts = {}) {
     const invoice = await this._loadOrThrow(id, user?.businessId);
     if (!invoice.approvalRequired) {
-      // Auto-promote to approved when approval is not required
-      return this._applyStateChange(invoice, INVOICE_STATES.APPROVED, user, {
+      // Auto-promote to approved when approval is not required.
+      // Landing in `approved` IS the recognition event, whichever door it came
+      // through — so this path must post AR exactly like approve() does. It
+      // previously returned here, which left every below-threshold invoice (the
+      // normal case under the 50,000 default) approved and sendable with no
+      // receivable, no revenue, no COGS and no stock relief in the books.
+      await this._applyStateChange(invoice, INVOICE_STATES.APPROVED, user, {
         reason: 'Below approval threshold — auto-approved',
         ipAddress,
       });
+      return this._recognizeApprovedInvoice(invoice, user, ipAddress);
     }
     invoice.approvalLog.push({
       action:    'submitted',
@@ -435,17 +441,27 @@ class InvoiceService {
     invoice.approvalStatus = APPROVAL_STATUS.APPROVED;
     invoice.approvedBy = user._id;
     invoice.approvedAt = new Date();
-    const approved = await this._applyStateChange(invoice, INVOICE_STATES.APPROVED, user, { reason: note, ipAddress });
+    await this._applyStateChange(invoice, INVOICE_STATES.APPROVED, user, { reason: note, ipAddress });
 
-    // ── ERP Step 4: recognize AR in the ledger + on the customer balance ─────
-    // Previously approve() posted NO ledger entry (despite the header comment) and
-    // never moved the customer's receivable — so an approved invoice-first invoice
-    // was invisible to the GL and to AR aging. postArJournal closes that gap.
-    // Post the AR recognition journal. Do NOT swallow a failure — the GL must
-    // reflect the receivable the moment an invoice is approved. The poster is
-    // atomic and idempotent (guards on arJournalId), so a surfaced error can be
-    // retried safely; a silent failure would leave AR understated (audit T3).
-    await this.postArJournal(approved, user, ipAddress);
+    return this._recognizeApprovedInvoice(invoice, user, ipAddress);
+  }
+
+  /**
+   * ERP Step 4 — recognize an invoice that has just landed in `approved`.
+   *
+   * Shared by BOTH doors into that state: the explicit approve() and
+   * submitForApproval()'s below-threshold auto-promote. Anything that makes an
+   * invoice approved belongs here, so the two paths can never drift apart on
+   * what "approved" means to the books.
+   *
+   * Post the AR recognition journal. Do NOT swallow a failure — the GL must
+   * reflect the receivable the moment an invoice is approved. The poster is
+   * atomic and idempotent (guards on arJournalId), so a surfaced error can be
+   * retried safely; a silent failure would leave AR understated (audit T3).
+   * @private
+   */
+  async _recognizeApprovedInvoice(invoice, user, ipAddress) {
+    await this.postArJournal(invoice, user, ipAddress);
 
     businessEvents.emit(EVENTS.INVOICE_APPROVED, {
       businessId:    invoice.businessId.toString(),
@@ -457,7 +473,7 @@ class InvoiceService {
       amount:        invoice.totalAmount,
     });
 
-    return approved;
+    return invoice;
   }
 
   async reject(id, user, note, ipAddress) {

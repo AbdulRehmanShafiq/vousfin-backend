@@ -197,6 +197,47 @@ describe('invoiceService approval workflow', () => {
     expect(updated.state).toBe('approved');
   });
 
+  // An auto-approved invoice is still an approved invoice: reaching `approved`
+  // IS the recognition event, whichever door it came through. The auto-promote
+  // branch used to return before postArJournal, so every invoice under the
+  // 50,000 threshold — the normal case for an SME — landed in approved/sent
+  // with no AR, no revenue, no COGS and no stock relief.
+  test('auto-approve below threshold posts the AR recognition journal', async () => {
+    const inv = await makeBelowThreshold();
+    const updated = await invoiceService.submitForApproval(inv._id, USER, '');
+    expect(updated.state).toBe('approved');
+    expect(postBalancedJournal).toHaveBeenCalled();
+    expect(updated.arJournalId).toBeDefined();
+  });
+
+  test('auto-approve surfaces (does not swallow) an AR posting failure', async () => {
+    const inv = await makeBelowThreshold();
+    postBalancedJournal.mockRejectedValueOnce(new Error('ledger down'));
+    await expect(invoiceService.submitForApproval(inv._id, USER, ''))
+      .rejects.toThrow('ledger down');
+  });
+
+  // The live symptom: a below-threshold invoice for a stocked item left
+  // currentStock untouched and the margin report showing a 100% margin.
+  test('auto-approve below threshold relieves stock and posts COGS', async () => {
+    const inventoryService = require('../../../services/inventory.service');
+    jest.spyOn(inventoryService, 'reduceStock').mockResolvedValue({ cogsAmount: 40000 });
+    jest.spyOn(inventoryService, 'resolveCostAccounts').mockResolvedValue({
+      cogsAccountId: new mongoose.Types.ObjectId(),
+      inventoryAccountId: new mongoose.Types.ObjectId(),
+    });
+    const itemId = new mongoose.Types.ObjectId();
+    const inv = await invoiceService.createDraft({
+      businessId: 'biz1', invoiceNumber: 'INV-BT-STOCK', issueDate: new Date(),
+      lineItems: [{ name: 'Infinix hot 60i', quantity: 1, unitPrice: 48000, inventoryItemId: itemId }],
+    }, USER, '');
+
+    await invoiceService.submitForApproval(inv._id, USER, '');
+
+    // 4th arg is the session — null here because withTransaction is mocked as fn(null).
+    expect(inventoryService.reduceStock).toHaveBeenCalledWith('biz1', itemId, 1, null);
+  });
+
   test('approve → state=approved, approvalStatus=approved', async () => {
     const inv = await makeAboveThreshold();
     await invoiceService.submitForApproval(inv._id, USER, '');

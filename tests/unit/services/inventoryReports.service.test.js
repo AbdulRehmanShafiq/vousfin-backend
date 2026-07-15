@@ -118,3 +118,48 @@ describe('inventory aging', () => {
     expect(res.totalValue).toBe(0);
   });
 });
+
+/**
+ * Margin by item — revenue and COGS must answer to the same authority.
+ *
+ * The regression this locks down: revenue was filtered on the invoice's
+ * workflow `state`, so an invoice that reached 'sent' WITHOUT ever posting its
+ * AR/revenue journal still contributed revenue, while COGS (read from the
+ * sub-ledger, which only moves when the invoice posts) found nothing behind it
+ * — reporting a bogus 100% margin that the income statement disagreed with.
+ * Per CLAUDE.md: reports derive from accounting records; a report may never
+ * disagree with them. So revenue counts an invoice only once it has posted.
+ */
+describe('margin by item', () => {
+  const Invoice = require('../../../models/Invoice.model');
+
+  /** The $match stage the revenue side runs against the invoices collection. */
+  async function revenueMatch() {
+    Invoice.aggregate.mockResolvedValueOnce([]);
+    mockMovement.aggregate.mockReset();
+    mockMovement.aggregate.mockResolvedValueOnce([]);
+    mockItem.find.mockReturnValue(leaned([]));
+    await reports.marginByItem(BIZ, {});
+    return Invoice.aggregate.mock.calls[0][0][0].$match;
+  }
+
+  it('counts revenue only from invoices that actually posted to the ledger', async () => {
+    const match = await revenueMatch();
+    // An unposted invoice has neither journal id; requiring one is what keeps
+    // this report tied to the income statement.
+    expect(match.$or).toEqual(
+      expect.arrayContaining([
+        { arJournalId: { $ne: null } },
+        { linkedJournalEntryId: { $ne: null } },
+      ])
+    );
+  });
+
+  it('excludes voided invoices by their real state name', async () => {
+    const match = await revenueMatch();
+    // The enum member is 'voided'. The filter used to exclude the string 'void',
+    // which is not a state any invoice can hold — so voided invoices, whose
+    // revenue is reversed out of the GL, were still counted as revenue here.
+    expect(match.state.$nin).toContain('voided');
+  });
+});

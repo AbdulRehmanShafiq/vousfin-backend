@@ -150,6 +150,29 @@ describe('billService approval workflow', () => {
     expect(r.state).toBe('draft');
     expect(r.approvalStatus).toBe('rejected');
   });
+
+  // Mirrors the invoice AR fix: an auto-approved bill is still an approved bill,
+  // so the AP liability must be recognized the moment it lands in `approved`.
+  // The auto-promote branch used to return before postApLiabilityJournal, so
+  // every bill under the 50,000 threshold was approved with no payable in the GL.
+  test('auto-approve below threshold posts the AP liability journal', async () => {
+    const bill = await billService.createDraft(
+      { businessId: 'biz1', billNumber: 'BILL-BT', amount: 5000, issueDate: new Date() }, USER, ''
+    );
+    const updated = await billService.submitForApproval(bill._id, USER, '');
+    expect(updated.state).toBe('approved');
+    expect(postCompoundJournal).toHaveBeenCalled();
+    expect(updated.apLiabilityJournalId).toBeDefined();
+  });
+
+  test('auto-approve surfaces (does not swallow) an AP posting failure', async () => {
+    const bill = await billService.createDraft(
+      { businessId: 'biz1', billNumber: 'BILL-BT2', amount: 5000, issueDate: new Date() }, USER, ''
+    );
+    postCompoundJournal.mockRejectedValueOnce(new Error('ledger down'));
+    await expect(billService.submitForApproval(bill._id, USER, ''))
+      .rejects.toThrow('ledger down');
+  });
 });
 
 describe('billService illegal transitions + lifecycle', () => {
