@@ -889,6 +889,16 @@ class InvoiceService {
     );
     if (productLines.length === 0) return null;
 
+    // INV-5 — resolve the accounts BEFORE touching stock, and fail CLOSED.
+    // The old order reduced stock first and then skipped the COGS journal when
+    // an account was missing — permanent Inventory-GL drift. Throwing here
+    // rolls the whole approval back (we run inside the caller's session).
+    const { cogsAccountId, inventoryAccountId } = await inventoryService.resolveCostAccounts(invoice.businessId);
+    if (!cogsAccountId || !inventoryAccountId) {
+      throw new ApiError(400,
+        `Cannot approve ${invoice.invoiceNumber}: your chart of accounts is missing the Inventory (1150) or Cost of Goods Sold (5110) account, so stock costs cannot be recorded. Open Chart of Accounts to restore the defaults, then approve again.`);
+    }
+
     let totalCogs = 0;
     for (const li of productLines) {
       const { cogsAmount } = await inventoryService.reduceStock(
@@ -897,12 +907,6 @@ class InvoiceService {
       totalCogs = r2(totalCogs + (cogsAmount || 0));
     }
     if (totalCogs <= 0) return null;
-
-    const { cogsAccountId, inventoryAccountId } = await inventoryService.resolveCostAccounts(invoice.businessId);
-    if (!cogsAccountId || !inventoryAccountId) {
-      logger.warn(`[invoice] COGS journal skipped for ${invoice.invoiceNumber} — COGS/Inventory account not found (stock already reduced)`);
-      return totalCogs;
-    }
 
     await postBalancedJournal({
       businessId:        invoice.businessId,

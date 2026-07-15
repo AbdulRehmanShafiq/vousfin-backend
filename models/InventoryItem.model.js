@@ -167,29 +167,20 @@ inventoryItemSchema.methods.reduceStock = async function (qty, session = null) {
   if (qty <= 0) throw new Error('Quantity must be positive');
   if (qty > this.currentStock) throw new Error(`Insufficient stock: ${this.currentStock} available`);
 
-  let cogsAmount;
-  let unitCostUsed;
-  if (this.valuationMethod === 'fifo') {
-    const { consumeFifo } = require('../utils/inventoryCosting.util');
-    // Migration-safe: if no layers recorded yet, seed one from current stock @ avg cost.
-    const seeded = this.costLayers && this.costLayers.length
-      ? this.costLayers.map((l) => ({ qty: l.qty, unitCost: l.unitCost, addedAt: l.addedAt }))
-      : (this.currentStock > 0 ? [{ qty: this.currentStock, unitCost: this.unitCostPrice }] : []);
-    const res = consumeFifo(seeded, qty);
-    cogsAmount = res.cogsAmount;
-    unitCostUsed = res.unitCostUsed || this.unitCostPrice;
-    this.costLayers = res.remainingLayers;
+  // INV-1 — quote and consume share ONE costing path (quoteConsumption), so the
+  // COGS a caller posted from a quote can never diverge from what we consume here.
+  const { quoteConsumption } = require('../utils/inventoryCosting.util');
+  const quote = quoteConsumption(this, qty);
+  if (quote.method === 'fifo') {
+    this.costLayers = quote.remainingLayers;
     const remQty = this.currentStock - qty;
-    const remVal = res.remainingLayers.reduce((s, l) => s + l.qty * l.unitCost, 0);
+    const remVal = quote.remainingLayers.reduce((s, l) => s + l.qty * l.unitCost, 0);
     if (remQty > 0) this.unitCostPrice = Math.round((remVal / remQty) * 100) / 100;
-  } else {
-    cogsAmount = Math.round(qty * this.unitCostPrice * 100) / 100;
-    unitCostUsed = this.unitCostPrice;
   }
 
   this.currentStock -= qty;
   await this.save({ session });
-  return { cogsAmount, unitCostUsed };
+  return { cogsAmount: quote.cogsAmount, unitCostUsed: quote.unitCostUsed };
 };
 
 inventoryItemSchema.statics.getLowStockItems = function (businessId) {

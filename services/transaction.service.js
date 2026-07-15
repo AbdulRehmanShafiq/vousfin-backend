@@ -656,48 +656,50 @@ class TransactionService {
         throw new ApiError(400, `Insufficient stock: ${item.currentStock} ${item.unit || 'units'} available`);
       }
 
-      // Find COGS + Inventory accounts for this business
-      const [cogsAcct, inventoryAcct] = await Promise.all([
-        ChartOfAccount.findOne({
-          businessId: data.businessId,
-          $or: [
-            { accountName: { $regex: /cost of goods/i } },
-            { accountSubtype: 'Direct Cost' },
-          ],
-        }).lean(),
-        ChartOfAccount.findOne({
-          businessId: data.businessId,
-          accountName: { $regex: /^inventory$/i },
-        }).lean(),
-      ]);
-
-      if (cogsAcct && inventoryAcct) {
-        const cogsAmount = Math.round(data.inventoryQty * item.unitCostPrice * 100) / 100;
-        // Reduce stock via inventoryService so reorder-email side-effect fires
-        // when the item crosses its reorder threshold. Deferred into the persist
-        // transaction (F6) so a failed insert never leaves stock reduced with no
-        // sale posted.
-        const inventoryService = require('./inventory.service');
-        deferredSideEffects.push((s) => inventoryService.reduceStock(data.businessId, item._id, data.inventoryQty, s));
-
-        // Build compound journal lines if not already provided
-        if (!entryData.journalLines || entryData.journalLines.length === 0) {
-          entryData.journalLines = [
-            { type: 'debit',  accountId: entryData.debitAccountId,  amount: entryData.amount },
-            { type: 'credit', accountId: entryData.creditAccountId, amount: entryData.amount },
-          ];
-        }
-        // Append the COGS pair
-        entryData.journalLines.push(
-          { type: 'debit',  accountId: cogsAcct._id,       amount: cogsAmount },
-          { type: 'credit', accountId: inventoryAcct._id,  amount: cogsAmount }
-        );
-        entryData.inventoryItemId = data.inventoryItemId;
-        entryData.inventoryQty    = data.inventoryQty;
-        logger.info(`COGS auto-generated: ${cogsAmount} for item "${item.name}" (qty ${data.inventoryQty})`);
-      } else {
-        logger.warn(`COGS auto-generation skipped — COGS or Inventory account not found for business ${data.businessId}`);
+      // INV-5 — resolve COGS + Inventory accounts fail-CLOSED. Silently skipping
+      // the COGS pair posted revenue without cost and left stock untouched — a
+      // sale that quietly wasn't a sale of goods. Same doctrine as tax fail-closed.
+      const inventoryService = require('./inventory.service');
+      const { cogsAccountId, inventoryAccountId } = await inventoryService.resolveCostAccounts(data.businessId);
+      if (!cogsAccountId || !inventoryAccountId) {
+        throw new ApiError(400,
+          'Your chart of accounts is missing the Inventory (1150) or Cost of Goods Sold (5110) account, so this sale cannot record stock costs. Open Chart of Accounts to restore the defaults, then try again.');
       }
+
+      // INV-1 — quote COGS through the SAME costing path reduceStock consumes
+      // with (FIFO layers or weighted average), so the posted journal always
+      // matches the physical subledger movement exactly.
+      const { quoteConsumption } = require('../utils/inventoryCosting.util');
+      const quotedCogs = quoteConsumption(item, data.inventoryQty).cogsAmount;
+
+      // Reduce stock via inventoryService so reorder-email side-effect fires
+      // when the item crosses its reorder threshold. Deferred into the persist
+      // transaction (F6) so a failed insert never leaves stock reduced with no
+      // sale posted. If a concurrent sale shifted the layers between quote and
+      // commit, surface the divergence loudly (INV-7).
+      deferredSideEffects.push(async (s) => {
+        const res = await inventoryService.reduceStock(data.businessId, item._id, data.inventoryQty, s);
+        if (res && Math.abs((res.cogsAmount ?? quotedCogs) - quotedCogs) >= 0.01) {
+          logger.error(`[inventory] COGS quote/consume divergence on item ${item._id}: quoted ${quotedCogs}, consumed ${res.cogsAmount} — run /inventory/:id/recalculate`);
+        }
+        return res;
+      });
+
+      // Build compound journal lines if not already provided
+      if (!entryData.journalLines || entryData.journalLines.length === 0) {
+        entryData.journalLines = [
+          { type: 'debit',  accountId: entryData.debitAccountId,  amount: entryData.amount },
+          { type: 'credit', accountId: entryData.creditAccountId, amount: entryData.amount },
+        ];
+      }
+      // Append the COGS pair
+      entryData.journalLines.push(
+        { type: 'debit',  accountId: cogsAccountId,     amount: quotedCogs },
+        { type: 'credit', accountId: inventoryAccountId, amount: quotedCogs }
+      );
+      entryData.inventoryItemId = data.inventoryItemId;
+      entryData.inventoryQty    = data.inventoryQty;
+      logger.info(`COGS auto-generated: ${quotedCogs} for item "${item.name}" (qty ${data.inventoryQty}, ${item.valuationMethod || 'weighted_average'})`);
     }
 
     // 7a. Inventory-touching purchase — auto-increment stock (ERP refactor Step 3)

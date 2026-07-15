@@ -17,6 +17,8 @@ router.route('/')
 
 router.get('/low-stock',    inventoryController.getLowStockAlerts);
 router.get('/valuation',    inventoryController.getInventoryValuation);
+router.get('/integrity',    inventoryController.getIntegrityReport); // Phase 1 — sub-ledger drift
+
 
 router.route('/:id')
   .get(inventoryController.getItemById)

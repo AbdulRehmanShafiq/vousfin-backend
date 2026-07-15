@@ -55,6 +55,14 @@ exports.getLowStockAlerts = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+// Phase 1 — inventory ↔ sub-ledger integrity report (drift must read 0)
+exports.getIntegrityReport = async (req, res, next) => {
+  try {
+    const report = await inventoryService.getIntegrityReport(req.user.businessId);
+    ApiResponse.success(res, report, 'Inventory integrity report');
+  } catch (e) { next(e); }
+};
+
 exports.getInventoryValuation = async (req, res, next) => {
   try {
     const valuation = await inventoryService.getInventoryValuation(req.user.businessId);

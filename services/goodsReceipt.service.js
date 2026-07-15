@@ -478,12 +478,18 @@ class GoodsReceiptService {
         );
 
         // 2. Reverse each stocked line so the subledger nets to zero.
+        // INV-3 — a receipt reversal must remove the received batch at its
+        // RECEIPT cost (matching the GL reversal amount), not consume stock
+        // like a sale at current WAC / oldest FIFO layers.
         if (grn.inventoryApplied) {
           for (const ri of (grn.receivedItems || [])) {
             if (!ri.inventoryItemId) continue; // service / untracked — no stock leg
             const acceptedQty = Math.max(0, Number(ri.quantityReceived || 0) - Number(ri.quantityRejected || 0));
             if (acceptedQty <= 0) continue;
-            await inventoryService.reduceStock(grn.businessId.toString(), ri.inventoryItemId, acceptedQty, s);
+            await inventoryService.applyReceiptReversal(
+              grn.businessId.toString(), ri.inventoryItemId, acceptedQty, Number(ri.unitCost) || 0,
+              { session: s, userId: user._id }
+            );
           }
         }
 

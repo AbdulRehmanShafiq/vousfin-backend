@@ -89,3 +89,43 @@ describe('recalculateItem()', () => {
     expect(report.adjustmentJournalId).toBe('adj-je');
   });
 });
+
+// INV-4 — FIFO items replay through cost layers and the heal rebuilds them,
+// so Σ(layers.qty) always equals currentStock after a recalculation.
+describe('replayItem() / recalculateItem() — FIFO (INV-4)', () => {
+  it('replays purchases as layers and consumes sales oldest-first', async () => {
+    const r = await recalc.replayItem(BIZ, ITEM, 'fifo');
+    // buy 10 @ 100, buy 10 @ 120, sell 5 → consumes the @100 layer first
+    expect(r.correctQty).toBe(15);
+    expect(r.replayedCogs).toBe(500);                 // 5 × 100 (NOT 5 × 110 WAC)
+    expect(r.correctValue).toBe(1700);                // 5×100 + 10×120
+    expect(r.correctLayers).toEqual([
+      { qty: 5,  unitCost: 100 },
+      { qty: 10, unitCost: 120 },
+    ]);
+    expect(r.correctWac).toBeCloseTo(113.33, 2);      // 1700 / 15 summary
+  });
+
+  it('healing a FIFO item rebuilds costLayers together with qty/WAC', async () => {
+    const save = jest.fn();
+    const item = {
+      _id: ITEM, name: 'Pen', businessId: BIZ, valuationMethod: 'fifo',
+      currentStock: 15, unitCostPrice: 90,
+      costLayers: [{ qty: 99, unitCost: 1 }], // stale garbage layers
+      save,
+    };
+    mockItem.findOne.mockResolvedValue(item);
+
+    const report = await recalc.recalculateItem(BIZ, ITEM, { post: true, user: { _id: 'u1' } });
+
+    expect(report.applied).toBe(true);
+    expect(item.currentStock).toBe(15);
+    expect(item.costLayers).toEqual([
+      { qty: 5,  unitCost: 100 },
+      { qty: 10, unitCost: 120 },
+    ]);
+    // Layer sum must equal the healed on-hand quantity
+    const layerQty = item.costLayers.reduce((s, l) => s + l.qty, 0);
+    expect(layerQty).toBe(item.currentStock);
+  });
+});

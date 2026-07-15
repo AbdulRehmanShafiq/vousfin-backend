@@ -80,6 +80,8 @@ beforeEach(() => {
   transactionRepository.createTransaction.mockResolvedValue(CREATED_TX);
   inventoryService.reduceStock.mockResolvedValue({});
   inventoryService.applyPurchaseStock.mockResolvedValue({});
+  // INV-5 — step 7 now resolves the COGS/Inventory pair fail-closed.
+  inventoryService.resolveCostAccounts.mockResolvedValue({ cogsAccountId: 'accCOGS', inventoryAccountId: 'accINVCTL' });
 });
 
 const CREDIT_SALE = {

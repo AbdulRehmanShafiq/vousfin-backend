@@ -14,6 +14,7 @@ jest.mock('../../../services/purchaseOrder.service', () => ({
 jest.mock('../../../services/inventory.service', () => ({
   applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
   reduceStock:        jest.fn().mockResolvedValue({ updatedStock: 0 }),
+  applyReceiptReversal: jest.fn().mockResolvedValue({ item: {}, removedValue: 0 }),
   resolveCostAccounts: jest.fn(),
 }));
 // A13 — stub the ledger poster so we can assert the GRNI accrual entry.
@@ -292,8 +293,10 @@ describe('grnService.cancel()', () => {
     jest.spyOn(grnService, '_loadOrThrow').mockResolvedValue(grn);
 
     const revSpy       = jest.spyOn(transactionService, 'reverseTransaction');
-    const reduceStockSpy = jest.spyOn(require('../../../services/inventory.service'), 'reduceStock')
-      .mockResolvedValue({ updatedStock: 0 });
+    // INV-3 — cancel reverses each receipt at its RECEIPT cost via
+    // applyReceiptReversal (not reduceStock, which costs like a sale).
+    const reversalSpy = jest.spyOn(require('../../../services/inventory.service'), 'applyReceiptReversal')
+      .mockResolvedValue({ item: {}, removedValue: 0 });
 
     await grnService.cancel(grn._id, { _id: 'u1', businessId: BIZ }, 'wrong delivery', '0.0.0.0');
 
@@ -307,12 +310,12 @@ describe('grnService.cancel()', () => {
       '0.0.0.0'
     );
 
-    // reduceStock called once per stocked line (2 lines) with accepted qty and the session
-    expect(reduceStockSpy).toHaveBeenCalledTimes(2);
-    // Line A: 3 accepted (3 received − 0 rejected)
-    expect(reduceStockSpy).toHaveBeenCalledWith(BIZ, ITEM_A, 3, expect.anything());
-    // Line B: 4 accepted (5 received − 1 rejected)
-    expect(reduceStockSpy).toHaveBeenCalledWith(BIZ, ITEM_B, 4, expect.anything());
+    // applyReceiptReversal called once per stocked line with accepted qty AND receipt cost
+    expect(reversalSpy).toHaveBeenCalledTimes(2);
+    // Line A: 3 accepted (3 received − 0 rejected) @ receipt cost 100
+    expect(reversalSpy).toHaveBeenCalledWith(BIZ, ITEM_A, 3, 100, expect.objectContaining({ session: expect.anything() }));
+    // Line B: 4 accepted (5 received − 1 rejected) @ receipt cost 200
+    expect(reversalSpy).toHaveBeenCalledWith(BIZ, ITEM_B, 4, 200, expect.objectContaining({ session: expect.anything() }));
 
     // Guard fields must be cleared inside the txn
     expect(grn.glJournalId).toBeNull();
@@ -357,7 +360,7 @@ describe('grnService.cancel()', () => {
     grn.inventoryApplied = true;
 
     jest.spyOn(grnService, '_loadOrThrow').mockResolvedValue(grn);
-    jest.spyOn(require('../../../services/inventory.service'), 'reduceStock')
+    jest.spyOn(require('../../../services/inventory.service'), 'applyReceiptReversal')
       .mockRejectedValueOnce(new Error('stock reduce failed'));
 
     await expect(

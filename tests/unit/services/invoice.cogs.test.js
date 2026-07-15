@@ -67,7 +67,9 @@ describe('invoiceService._applyCogsForInvoice() — ERP Step 5', () => {
     expect(postBalancedJournal).not.toHaveBeenCalled();
   });
 
-  test('still reduces stock but skips the journal when COGS/Inventory accounts are missing', async () => {
+  test('INV-5 fail-closed: missing COGS/Inventory account throws BEFORE any stock is touched', async () => {
+    // The old behavior reduced stock and then skipped the journal — permanent
+    // Inventory↔GL drift. Now the approval fails atomically instead.
     inventoryService.reduceStock.mockResolvedValue({ cogsAmount: 100 });
     inventoryService.resolveCostAccounts.mockResolvedValue({ cogsAccountId: null, inventoryAccountId: null });
 
@@ -75,11 +77,10 @@ describe('invoiceService._applyCogsForInvoice() — ERP Step 5', () => {
       businessId: BIZ, invoiceNumber: 'INV-3', issueDate: new Date(),
       lineItems: [{ inventoryItemId: 'item1', quantity: 1 }],
     };
-    const total = await invoiceService._applyCogsForInvoice(invoice, USER);
 
-    expect(inventoryService.reduceStock).toHaveBeenCalledTimes(1);
-    expect(inventoryService.reduceStock).toHaveBeenCalledWith(BIZ, 'item1', 1, null);
+    await expect(invoiceService._applyCogsForInvoice(invoice, USER))
+      .rejects.toThrow(/chart of accounts is missing/i);
+    expect(inventoryService.reduceStock).not.toHaveBeenCalled(); // stock untouched
     expect(postBalancedJournal).not.toHaveBeenCalled();
-    expect(total).toBe(100); // stock already reduced — caller still informed
   });
 });

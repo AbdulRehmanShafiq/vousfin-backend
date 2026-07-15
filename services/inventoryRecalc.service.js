@@ -45,12 +45,16 @@ const SALE_TYPES = new Set([
 class InventoryRecalcService {
   /**
    * Replay an item's stock movements (from the journal) to recompute the correct
-   * on-hand quantity and weighted-average cost. Pure read — no writes.
+   * on-hand quantity and unit cost. Pure read — no writes.
+   *
+   * INV-4 — method-aware: `method: 'fifo'` replays purchases as cost layers and
+   * consumes sales oldest-first (same `consumeFifo` the live path uses), so a
+   * heal can also rebuild `costLayers`. Default stays weighted-average.
    *
    * @returns {Promise<{correctQty:number, correctWac:number, correctValue:number,
-   *                     replayedCogs:number, movementCount:number}>}
+   *                     replayedCogs:number, movementCount:number, correctLayers:(Array|null)}>}
    */
-  async replayItem(businessId, itemId) {
+  async replayItem(businessId, itemId, method = 'weighted_average') {
     const entries = await JournalEntry.find({
       businessId: new mongoose.Types.ObjectId(String(businessId)),
       inventoryItemId: new mongoose.Types.ObjectId(String(itemId)),
@@ -61,9 +65,13 @@ class InventoryRecalcService {
       .select('transactionType inventoryQty amount transactionDate')
       .lean();
 
-    let qty = 0;     // running on-hand quantity
-    let wac = 0;     // running weighted-average unit cost
-    let cogs = 0;    // cumulative cost of goods sold (replayed)
+    const isFifo = method === 'fifo';
+    const { consumeFifo } = require('../utils/inventoryCosting.util');
+
+    let qty = 0;        // running on-hand quantity
+    let wac = 0;        // running weighted-average unit cost (summary for fifo)
+    let cogs = 0;       // cumulative cost of goods sold (replayed)
+    let layers = [];    // fifo cost layers (oldest first)
 
     for (const e of entries) {
       const moveQty = Number(e.inventoryQty) || 0;
@@ -75,20 +83,32 @@ class InventoryRecalcService {
         const newQty = qty + moveQty;
         wac = newQty > 0 ? (qty * wac + moveQty * unitCost) / newQty : unitCost;
         qty = newQty;
+        if (isFifo) layers.push({ qty: moveQty, unitCost: r2(unitCost) });
       } else if (SALE_TYPES.has(e.transactionType)) {
-        // Outflow: consume at the current WAC (can't go below zero).
+        // Outflow (can't go below zero).
         const out = Math.min(moveQty, qty);
-        cogs += out * wac;
+        if (isFifo) {
+          const res = consumeFifo(layers, out);
+          layers = res.remainingLayers;
+          cogs += res.cogsAmount;
+        } else {
+          cogs += out * wac;
+        }
         qty -= out;
       }
     }
 
+    const layerValue = isFifo ? layers.reduce((s, l) => s + l.qty * l.unitCost, 0) : null;
+    const correctValue = isFifo ? r2(layerValue) : r2(qty * wac);
+    const correctWac = isFifo ? (qty > 0 ? r2(layerValue / qty) : r2(wac)) : r2(wac);
+
     return {
       correctQty:    r2(qty),
-      correctWac:    r2(wac),
-      correctValue:  r2(qty * wac),
+      correctWac,
+      correctValue,
       replayedCogs:  r2(cogs),
       movementCount: entries.length,
+      correctLayers: isFifo ? layers : null,
     };
   }
 
@@ -107,7 +127,7 @@ class InventoryRecalcService {
     const item = await InventoryItem.findOne({ _id: itemId, businessId });
     if (!item) throw new ApiError(404, 'Inventory item not found');
 
-    const replay = await this.replayItem(businessId, itemId);
+    const replay = await this.replayItem(businessId, itemId, item.valuationMethod || 'weighted_average');
     const storedValue = r2(item.currentStock * item.unitCostPrice);
     const valueVariance = r2(replay.correctValue - storedValue);
     const qtyVariance = r2(replay.correctQty - item.currentStock);
@@ -135,6 +155,11 @@ class InventoryRecalcService {
     await withTransaction(async (session) => {
       item.currentStock  = replay.correctQty;
       item.unitCostPrice = replay.correctWac;
+      // INV-4 — a FIFO item's layers must be healed together with qty/WAC,
+      // otherwise Σ(layers.qty) ≠ currentStock and the next sale mis-costs.
+      if (item.valuationMethod === 'fifo' && replay.correctLayers) {
+        item.costLayers = replay.correctLayers;
+      }
       await item.save({ session });
 
       const delta = valueVariance;

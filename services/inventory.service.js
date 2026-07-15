@@ -173,19 +173,25 @@ class InventoryService {
    */
   async resolveCostAccounts(businessId) {
     const ChartOfAccount = require('../models/ChartOfAccount.model');
-    const [cogsAcct, inventoryAcct] = await Promise.all([
-      ChartOfAccount.findOne({
+    // INV-5 — resolve by the canonical DEFAULT_ACCOUNTS codes first (stable under
+    // renames), falling back to the legacy name/subtype heuristics for custom COAs.
+    const byCode = (code) => ChartOfAccount.findOne({ businessId, accountCode: code }).lean();
+    let [cogsAcct, inventoryAcct] = await Promise.all([byCode('5110'), byCode('1150')]);
+    if (!cogsAcct) {
+      cogsAcct = await ChartOfAccount.findOne({
         businessId,
         $or: [
           { accountName: { $regex: /cost of goods/i } },
           { accountSubtype: 'Direct Cost' },
         ],
-      }).lean(),
-      ChartOfAccount.findOne({
+      }).lean();
+    }
+    if (!inventoryAcct) {
+      inventoryAcct = await ChartOfAccount.findOne({
         businessId,
         accountName: { $regex: /^inventory$/i },
-      }).lean(),
-    ]);
+      }).lean();
+    }
     return {
       cogsAccountId:      cogsAcct ? cogsAcct._id : null,
       inventoryAccountId: inventoryAcct ? inventoryAcct._id : null,
@@ -206,6 +212,17 @@ class InventoryService {
     logger.info(`Stock added: ${qty} units of "${item.name}" (new stock: ${item.currentStock})`);
 
     const valuationAfter = Math.round(item.currentStock * item.unitCostPrice * 100) / 100;
+
+    // Phase 1 — sub-ledger entry in the SAME session as the item mutation.
+    const stockMovementService = require('./stockMovement.service');
+    await stockMovementService.record({
+      businessId, itemId: item._id, direction: 'in',
+      movementType: opts.movementType || 'purchase',
+      qty: Number(qty), unitCost: cost,
+      balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
+      source: opts.source || null, journalEntryId: opts.journalEntryId || null,
+      createdBy: opts.userId || null, notes: opts.notes || null,
+    }, { session: opts.session || null });
 
     // Fire-and-forget — inventory events must never block (or break) the purchase.
     businessEvents.emit(EVENTS.INVENTORY_RECEIVED, {
@@ -234,7 +251,7 @@ class InventoryService {
    *
    * @returns {{ cogsAmount: number, unitCostUsed: number, updatedStock: number }}
    */
-  async reduceStock(businessId, itemId, qty, session = null) {
+  async reduceStock(businessId, itemId, qty, session = null, opts = {}) {
     const item = await inventoryItemRepository.model.findOne({ _id: itemId, businessId }).session(session);
     if (!item) throw new ApiError(404, 'Inventory item not found');
 
@@ -244,6 +261,17 @@ class InventoryService {
     logger.info(`Stock reduced: ${qty} units of "${item.name}" → COGS ${cogsAmount}, remaining ${item.currentStock}`);
 
     const valuationAfter = Math.round(item.currentStock * item.unitCostPrice * 100) / 100;
+
+    // Phase 1 — sub-ledger entry in the SAME session; value = the exact COGS.
+    const stockMovementService = require('./stockMovement.service');
+    await stockMovementService.record({
+      businessId, itemId: item._id, direction: 'out',
+      movementType: opts.movementType || 'sale',
+      qty: Number(qty), unitCost: unitCostUsed, value: cogsAmount,
+      balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
+      source: opts.source || null, journalEntryId: opts.journalEntryId || null,
+      createdBy: opts.userId || null, notes: opts.notes || null,
+    }, { session });
 
     // ERP refactor Step 3 — broadcast the stock reduction + valuation change.
     // Fire-and-forget: inventory events must never block (or break) the sale.
@@ -276,6 +304,85 @@ class InventoryService {
     }
 
     return { cogsAmount, unitCostUsed, updatedStock: item.currentStock, itemName: item.name };
+  }
+
+  /**
+   * INV-3 — reverse a RECEIPT (GRN cancel, receipt correction) at the ORIGINAL
+   * receipt cost, not at current WAC / oldest FIFO layers like a sale would.
+   *
+   * The GL reversal restores exactly qty × receiptUnitCost, so the physical
+   * removal must take the same value out of the subledger or item valuation
+   * drifts from the Inventory account:
+   *   - FIFO: remove the received batch's layers (newest-first, cost-matched).
+   *   - WAC:  subtract qty × receiptUnitCost from total value and recompute WAC.
+   *
+   * No journal is posted here — the caller owns the GL reversal (mirror of
+   * applyPurchaseStock's contract).
+   *
+   * @param {string} businessId
+   * @param {string} itemId
+   * @param {number} qty              units to remove (> 0)
+   * @param {number} receiptUnitCost  the cost the receipt was booked at
+   * @param {Object} [opts]           { session, userId }
+   * @returns {Promise<{ item: Object, removedValue: number }>}
+   */
+  async applyReceiptReversal(businessId, itemId, qty, receiptUnitCost, opts = {}) {
+    if (!businessId) throw new ApiError(400, 'Business ID is required');
+    if (!(Number(qty) > 0)) throw new ApiError(400, 'Quantity must be a positive number');
+
+    const item = await inventoryItemRepository.model.findOne({ _id: itemId, businessId }).session(opts.session || null);
+    if (!item) throw new ApiError(404, 'Inventory item not found');
+    if (Number(qty) > item.currentStock) {
+      throw new ApiError(400, `Cannot reverse ${qty} ${item.unit || 'units'} of "${item.name}" — only ${item.currentStock} in stock (some may already be sold)`);
+    }
+
+    const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    const cost = Number(receiptUnitCost) > 0 ? Number(receiptUnitCost) : item.unitCostPrice;
+    const valuationBefore = r2(item.currentStock * item.unitCostPrice);
+    const newQty = r2(item.currentStock - Number(qty));
+    let removedValue;
+
+    if (item.valuationMethod === 'fifo') {
+      const { removeReceiptLayers } = require('../utils/inventoryCosting.util');
+      const seeded = (item.costLayers && item.costLayers.length)
+        ? item.costLayers
+        : (item.currentStock > 0 ? [{ qty: item.currentStock, unitCost: item.unitCostPrice }] : []);
+      const res = removeReceiptLayers(seeded, Number(qty), cost);
+      item.costLayers = res.remainingLayers;
+      removedValue = res.removedValue;
+      const remVal = res.remainingLayers.reduce((s, l) => s + l.qty * l.unitCost, 0);
+      if (newQty > 0) item.unitCostPrice = r2(remVal / newQty);
+    } else {
+      // WAC: take out exactly the receipt value; remaining value re-averages.
+      removedValue = r2(Number(qty) * cost);
+      const remVal = Math.max(0, r2(valuationBefore - removedValue));
+      if (newQty > 0) item.unitCostPrice = r2(remVal / newQty);
+    }
+
+    item.currentStock = newQty;
+    await item.save({ session: opts.session || null });
+    logger.info(`Receipt reversed: ${qty} units of "${item.name}" @ ${cost} (value ${removedValue}, remaining ${item.currentStock})`);
+
+    const valuationAfter = r2(item.currentStock * item.unitCostPrice);
+
+    // Phase 1 — sub-ledger entry in the SAME session; value = receipt value out.
+    const stockMovementService = require('./stockMovement.service');
+    await stockMovementService.record({
+      businessId, itemId: item._id, direction: 'out',
+      movementType: 'receipt_reversal',
+      qty: Number(qty), unitCost: cost, value: removedValue,
+      balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
+      source: opts.source || null, journalEntryId: opts.journalEntryId || null,
+      createdBy: opts.userId || null, notes: opts.notes || null,
+    }, { session: opts.session || null });
+    businessEvents.emit(EVENTS.INVENTORY_VALUATION_CHANGED, {
+      businessId, userId: opts.userId || null,
+      entityType: 'inventory_item', entityId: item._id,
+      itemName: item.name, valuationBefore, valuationAfter,
+      delta: r2(valuationAfter - valuationBefore),
+    });
+
+    return { item, removedValue };
   }
 
   /**
@@ -358,6 +465,41 @@ class InventoryService {
     const item = await inventoryItemRepository.findByBusinessAndId(businessId, itemId);
     if (!item) throw new ApiError(404, 'Inventory item not found');
 
+    // Phase 1 — items with recorded movements read the append-only sub-ledger
+    // (exact costs, every movement type). Items whose history predates the
+    // sub-ledger fall back to the legacy journal-entry inference below until
+    // the backfill script has run.
+    const stockMovementService = require('./stockMovement.service');
+    const movements = await stockMovementService.getLedger(businessId, itemId, { limit: 1000 });
+    if (movements.length > 0) {
+      const ordered = [...movements].reverse(); // getLedger returns newest-first
+      const lines = ordered.map((m) => ({
+        _id:         m._id,
+        date:        m.movementDate,
+        description: m.notes || (m.source?.docType ? `${m.source.docType}` : m.movementType.replace(/_/g, ' ')),
+        type:        m.movementType,
+        qtyIn:       m.direction === 'in' ? m.qty : 0,
+        qtyOut:      m.direction === 'out' ? m.qty : 0,
+        balance:     m.balanceQtyAfter,
+        amount:      m.value,
+        unitCost:    m.unitCost,
+      }));
+      return {
+        item: {
+          _id: item._id, name: item.name, sku: item.sku, barcode: item.barcode,
+          category: item.category, currentStock: item.currentStock,
+          unitCostPrice: item.unitCostPrice, unit: item.unit,
+        },
+        lines,
+        summary: {
+          totalIn:  lines.reduce((s, l) => s + l.qtyIn, 0),
+          totalOut: lines.reduce((s, l) => s + l.qtyOut, 0),
+          currentStock: item.currentStock,
+        },
+        ledgerSource: 'stock_movements',
+      };
+    }
+
     const JournalEntry = require('../models/JournalEntry.model');
     const mongoose = require('mongoose');
     const { TRANSACTION_TYPES } = require('../config/constants');
@@ -422,7 +564,17 @@ class InventoryService {
         totalOut:  lines.reduce((s, l) => s + l.qtyOut, 0),
         currentStock: item.currentStock,
       },
+      ledgerSource: 'journal_inference',
     };
+  }
+
+  /**
+   * Phase 1 — inventory↔sub-ledger integrity report for the whole business.
+   * Thin passthrough so the controller keeps one service dependency.
+   */
+  async getIntegrityReport(businessId) {
+    const stockMovementService = require('./stockMovement.service');
+    return stockMovementService.computeDrift(businessId);
   }
 }
 

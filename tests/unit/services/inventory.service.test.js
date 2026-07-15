@@ -26,6 +26,14 @@ jest.mock('../../../repositories/inventoryItem.repository', () => ({
   findByBusiness: jest.fn(),
 }));
 jest.mock('../../../models/JournalEntry.model', () => ({ find: jest.fn() }));
+// Phase 1 — the sub-ledger writer is unit-tested on its own; here we only
+// assert the physical mutation + events, so stub the movement recording.
+jest.mock('../../../services/stockMovement.service', () => ({
+  record: jest.fn().mockResolvedValue({}),
+  getLedger: jest.fn().mockResolvedValue([]),
+  hasMovements: jest.fn().mockResolvedValue(false),
+  computeDrift: jest.fn(),
+}));
 
 const inventoryService     = require('../../../services/inventory.service');
 const inventoryItemRepo    = require('../../../repositories/inventoryItem.repository');
