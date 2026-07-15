@@ -1,6 +1,9 @@
 // tests/unit/utils/inventoryCosting.test.js
 'use strict';
-const { consumeFifo, quoteConsumption, removeReceiptLayers } = require('../../../utils/inventoryCosting.util');
+const {
+  consumeFifo, quoteConsumption, quoteReceipt, removeReceiptLayers,
+  allocateByWeights, addValueToLayers,
+} = require('../../../utils/inventoryCosting.util');
 
 describe('consumeFifo', () => {
   test('consumes oldest layers first and blends COGS across layers', () => {
@@ -95,5 +98,98 @@ describe('removeReceiptLayers', () => {
     // newest-first: all 6 @ 9, then 2 @ 5 = 54 + 10
     expect(r.removedValue).toBe(64);
     expect(r.remainingLayers).toEqual([{ qty: 8, unitCost: 5 }]);
+  });
+});
+
+// Phase 8 — standard costing: stock enters at the standard, the gap is variance.
+describe('quoteReceipt', () => {
+  test('standard costing values stock at standard and splits out the variance', () => {
+    const item = { valuationMethod: 'standard', standardCost: 10, unitCostPrice: 10 };
+    const r = quoteReceipt(item, 100, 11.5);   // paid 11.50, standard is 10
+    expect(r.valueIn).toBe(1000);              // inventory takes only the standard
+    expect(r.unitCostIn).toBe(10);
+    expect(r.variance).toBe(150);              // 100 × 1.50 unfavourable → DR PPV
+  });
+
+  test('buying below standard yields a favourable (negative) variance', () => {
+    const r = quoteReceipt({ valuationMethod: 'standard', standardCost: 10 }, 50, 9);
+    expect(r.valueIn).toBe(500);
+    expect(r.variance).toBe(-50);              // → CR PPV
+  });
+
+  test('weighted-average and FIFO receipts have no variance — actual cost is the cost', () => {
+    expect(quoteReceipt({ valuationMethod: 'weighted_average' }, 10, 7).variance).toBe(0);
+    expect(quoteReceipt({ valuationMethod: 'fifo' }, 10, 7)).toMatchObject({ valueIn: 70, variance: 0 });
+  });
+
+  test('a standard-cost item with no standard set falls back to its current cost', () => {
+    const r = quoteReceipt({ valuationMethod: 'standard', standardCost: 0, unitCostPrice: 8 }, 5, 8);
+    expect(r.valueIn).toBe(40);
+    expect(r.variance).toBe(0);
+  });
+});
+
+describe('quoteConsumption — standard costing (Phase 8)', () => {
+  test('consumes at the standard cost, not the average', () => {
+    const q = quoteConsumption({ valuationMethod: 'standard', standardCost: 10, unitCostPrice: 12, currentStock: 50 }, 4);
+    expect(q.cogsAmount).toBe(40);   // 4 × 10 standard
+    expect(q.method).toBe('standard');
+  });
+});
+
+// Phase 4 — landed cost allocation must never lose or invent a cent.
+describe('allocateByWeights', () => {
+  test('splits in proportion to weights', () => {
+    expect(allocateByWeights([100, 300], 40)).toEqual([10, 30]);
+  });
+
+  test('reconciles rounding so the parts always sum to the whole', () => {
+    // 100/3 each = 33.333… → 33.33 × 3 = 99.99; the remainder must land somewhere
+    const out = allocateByWeights([1, 1, 1], 100);
+    expect(out.reduce((s, x) => s + x, 0)).toBe(100);
+  });
+
+  test('gives the rounding remainder to the largest share', () => {
+    const out = allocateByWeights([1, 1, 8], 100);
+    expect(out.reduce((s, x) => s + x, 0)).toBe(100);
+    expect(out[2]).toBeGreaterThan(out[0]);
+  });
+
+  test('splits evenly when there are no weights to go on', () => {
+    expect(allocateByWeights([0, 0], 50)).toEqual([25, 25]);
+  });
+
+  test('handles an empty line set', () => {
+    expect(allocateByWeights([], 10)).toEqual([]);
+  });
+});
+
+// Phase 4 — capitalizing freight into FIFO batches: value up, quantity flat.
+describe('addValueToLayers', () => {
+  test('adds cost to the newest layers covering the received quantity', () => {
+    const layers = [{ qty: 10, unitCost: 5 }, { qty: 10, unitCost: 8 }];
+    const r = addValueToLayers(layers, 10, 20);      // 20 freight over the newest 10 units
+    expect(r.appliedValue).toBe(20);
+    expect(r.layers[0]).toEqual({ qty: 10, unitCost: 5 });   // older batch untouched
+    expect(r.layers[1]).toEqual({ qty: 10, unitCost: 10 });  // 8 + 2/unit
+  });
+
+  test('spreads across several layers when the receipt spans them', () => {
+    const r = addValueToLayers([{ qty: 5, unitCost: 4 }, { qty: 5, unitCost: 6 }], 10, 20);
+    expect(r.appliedValue).toBe(20);
+    expect(r.layers[0].unitCost).toBe(6);   // 4 + 2
+    expect(r.layers[1].unitCost).toBe(8);   // 6 + 2
+  });
+
+  test('quantity never changes — only value', () => {
+    const r = addValueToLayers([{ qty: 7, unitCost: 3 }], 7, 14);
+    expect(r.layers[0].qty).toBe(7);
+    expect(r.layers[0].unitCost).toBe(5);
+  });
+
+  test('a zero charge is a no-op', () => {
+    const r = addValueToLayers([{ qty: 5, unitCost: 2 }], 5, 0);
+    expect(r.appliedValue).toBe(0);
+    expect(r.layers).toEqual([{ qty: 5, unitCost: 2 }]);
   });
 });

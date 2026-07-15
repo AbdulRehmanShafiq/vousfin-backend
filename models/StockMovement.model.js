@@ -26,6 +26,7 @@ const MOVEMENT_TYPES = [
   'write_off',         // stock written off (damaged/expired/lost)
   'count',             // physical count variance posting
   'revalue',           // value-only cost revaluation (NRV write-down etc.) — qty 0
+  'landed_cost',       // value-only capitalization of freight/duty — qty 0 (Phase 4)
   'transfer_in',       // warehouse transfer arrival   (Phase 5)
   'transfer_out',      // warehouse transfer dispatch  (Phase 5)
   'assembly_in',       // manufacturing output         (Phase 9)
@@ -71,8 +72,13 @@ const stockMovementSchema = new mongoose.Schema(
       ref: 'JournalEntry',
       default: null,
     },
-    /** Warehouse — null until Phase 5 introduces multi-warehouse. */
-    warehouseId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    /** Phase 5 — which warehouse this movement happened in (null = unassigned). */
+    warehouseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Warehouse', default: null },
+    /** Phase 7 — lot/batch traceability. Set on receipts and carried on issues. */
+    lot: {
+      code:       { type: String, default: null, trim: true, maxlength: 60 },
+      expiryDate: { type: Date, default: null },
+    },
     movementDate: { type: Date, required: true, default: Date.now },
     /** Structured reason code (adjustments/write-offs/NRV) — plain notes below. */
     reason: { type: String, default: null, trim: true, maxlength: 60 },

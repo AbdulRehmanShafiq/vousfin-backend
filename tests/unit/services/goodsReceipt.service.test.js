@@ -10,6 +10,13 @@ jest.mock('../../../services/transaction.service', () => ({
 jest.mock('../../../services/purchaseOrder.service', () => ({
   recordGrnReceipt: jest.fn().mockResolvedValue({}),
 }));
+// Phase 8 — confirm() reads each item's costing method to split out any
+// purchase price variance. These items are plain weighted-average (no PPV).
+jest.mock('../../../models/InventoryItem.model', () => ({
+  findOne: jest.fn(() => ({
+    select: () => ({ lean: () => Promise.resolve({ valuationMethod: 'weighted_average' }) }),
+  })),
+}));
 // ERP Step 5 — stub the inventory engine so we can assert receive→stock wiring.
 jest.mock('../../../services/inventory.service', () => ({
   applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),

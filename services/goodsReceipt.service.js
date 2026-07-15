@@ -350,8 +350,43 @@ class GoodsReceiptService {
       throw new ApiError(400, `Cannot receive ${grn.grnNumber}: Inventory (1150) or Goods Received Not Invoiced (2115) account is missing.`);
     }
 
+    // Phase 8 — standard-costed lines enter stock at their standard cost; the
+    // gap vs. the vendor's price is a Purchase Price Variance recognised now,
+    // never buried in inventory. GRNI still credits the full amount owed.
+    const InventoryItem = require('../models/InventoryItem.model');
+    const { quoteReceipt } = require('../utils/inventoryCosting.util');
+    let stockValue = 0;   // what actually lands in Inventory (1150)
+    let ppvTotal = 0;     // + = paid above standard (debit PPV)
+    for (const line of stockedLines) {
+      const item = await InventoryItem.findOne({
+        _id: line.ri.inventoryItemId, businessId: grn.businessId,
+      }).select('valuationMethod standardCost unitCostPrice').lean();
+      const rq = quoteReceipt(item || {}, line.acceptedQty, line.unitCost);
+      line.valueIn = rq.valueIn;
+      stockValue = Math.round((stockValue + rq.valueIn) * 100) / 100;
+      ppvTotal = Math.round((ppvTotal + rq.variance) * 100) / 100;
+    }
+
+    let ppvAcc = null;
+    if (Math.abs(ppvTotal) >= 0.01) {
+      ppvAcc = await this._ensureAccount(grn.businessId, '5115');
+      if (!ppvAcc) {
+        throw new ApiError(400, `Cannot receive ${grn.grnNumber}: some items are costed at a standard price, so the difference must go to Purchase Price Variance (5115) — that account is missing from your chart of accounts.`);
+      }
+    }
+
     const applied = [];
     await withTransaction(async (s) => {
+      const lines = [
+        { accountId: invAcc._id,  type: 'debit',  amount: stockValue, description: 'Inventory received' },
+        { accountId: grniAcc._id, type: 'credit', amount: inventoryValue, description: 'Goods received not invoiced' },
+      ];
+      if (ppvAcc) {
+        lines.push(ppvTotal > 0
+          ? { accountId: ppvAcc._id, type: 'debit',  amount: ppvTotal, description: 'Paid above standard cost' }
+          : { accountId: ppvAcc._id, type: 'credit', amount: Math.abs(ppvTotal), description: 'Paid below standard cost' });
+      }
+
       const je = await ledgerPosting.postCompoundJournal({
         businessId:        grn.businessId,
         transactionDate:   new Date(),
@@ -361,10 +396,7 @@ class GoodsReceiptService {
         createdBy:         user._id,
         lastModifiedBy:    user._id,
         idempotencyKey:    `grn:accrual:${grn._id}`,
-        lines: [
-          { accountId: invAcc._id,  type: 'debit',  amount: inventoryValue, description: 'Inventory received' },
-          { accountId: grniAcc._id, type: 'credit', amount: inventoryValue, description: 'Goods received not invoiced' },
-        ],
+        lines,
       }, { session: s });
 
       for (const { ri, acceptedQty, unitCost } of stockedLines) {

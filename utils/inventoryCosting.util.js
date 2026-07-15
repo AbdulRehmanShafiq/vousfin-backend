@@ -53,6 +53,15 @@ function consumeFifo(layers, qty) {
  */
 function quoteConsumption(item, qty) {
   const q = Number(qty) || 0;
+  // Phase 8 — standard costing consumes at the standard, never the actual.
+  if (item.valuationMethod === 'standard') {
+    const std = Number(item.standardCost) > 0 ? Number(item.standardCost) : (Number(item.unitCostPrice) || 0);
+    const avail = Number(item.currentStock) || 0;
+    return {
+      cogsAmount: r2(q * std), unitCostUsed: std, remainingLayers: null,
+      method: 'standard', shortfall: q > avail ? r2(q - avail) : 0,
+    };
+  }
   const method = item.valuationMethod === 'fifo' ? 'fifo' : 'weighted_average';
   if (q <= 0) {
     return { cogsAmount: 0, unitCostUsed: 0, remainingLayers: method === 'fifo' ? (item.costLayers || []) : null, method, shortfall: 0 };
@@ -80,6 +89,93 @@ function quoteConsumption(item, qty) {
     method,
     shortfall: q > available ? r2(q - available) : 0,
   };
+}
+
+/**
+ * Quote a stock RECEIPT — the mirror of quoteConsumption (Phase 8).
+ *
+ * Under standard costing, stock is carried at the standard cost and any
+ * difference from what the vendor actually charged is a Purchase Price
+ * Variance recognised immediately (never buried in inventory). The caller
+ * posts the PPV leg, so it must know the split BEFORE building the journal —
+ * exactly the quote-then-apply discipline that fixed INV-1.
+ *
+ * @returns {{ unitCostIn:number, valueIn:number, variance:number, method:string }}
+ *          variance > 0 = paid MORE than standard (unfavourable, DR PPV)
+ */
+function quoteReceipt(item, qty, actualUnitCost) {
+  const q = Number(qty) || 0;
+  const actual = Number(actualUnitCost) || 0;
+  const method = ['fifo', 'standard'].includes(item?.valuationMethod) ? item.valuationMethod : 'weighted_average';
+  if (method === 'standard') {
+    const std = Number(item.standardCost) > 0 ? Number(item.standardCost) : (Number(item.unitCostPrice) || 0);
+    return { unitCostIn: std, valueIn: r2(q * std), variance: r2(q * (actual - std)), method };
+  }
+  return { unitCostIn: actual, valueIn: r2(q * actual), variance: 0, method };
+}
+
+/**
+ * Allocate a total across weights, penny-perfect (Phase 4 — landed costs).
+ * Rounds each share to cents and gives the rounding remainder to the largest
+ * weight, so Σ(allocations) === total exactly. Zero/absent weights split evenly.
+ *
+ * @param {number[]} weights  e.g. line values, quantities or weights
+ * @param {number} total      amount to spread
+ * @returns {number[]} allocations aligned to `weights`
+ */
+function allocateByWeights(weights, total) {
+  const w = (weights || []).map((x) => Math.max(0, Number(x) || 0));
+  const t = r2(total);
+  if (w.length === 0) return [];
+  const sum = w.reduce((s, x) => s + x, 0);
+  const basis = sum > 0 ? w : w.map(() => 1); // no weights → split evenly
+  const basisSum = basis.reduce((s, x) => s + x, 0);
+
+  const out = basis.map((x) => r2((t * x) / basisSum));
+  const drift = r2(t - out.reduce((s, x) => s + x, 0));
+  if (Math.abs(drift) >= 0.01) {
+    // Hand the remainder to the biggest share — never lose or invent a cent.
+    let idx = 0;
+    basis.forEach((x, i) => { if (x > basis[idx]) idx = i; });
+    out[idx] = r2(out[idx] + drift);
+  }
+  return out;
+}
+
+/**
+ * Capitalize additional value into FIFO layers without moving quantity
+ * (Phase 4 — landed cost on a FIFO item). Targets the NEWEST layers up to the
+ * received quantity, since those are the batch the cost belongs to.
+ *
+ * @returns {{ layers:Array, appliedValue:number }}
+ */
+function addValueToLayers(layers, qty, addValue) {
+  const work = (layers || []).map((l) => ({
+    qty: Number(l.qty) || 0,
+    unitCost: Number(l.unitCost) || 0,
+    ...(l.addedAt ? { addedAt: l.addedAt } : {}),
+  }));
+  let remainingQty = Number(qty) || 0;
+  const value = r2(addValue);
+  if (remainingQty <= 0 || work.length === 0 || Math.abs(value) < 0.005) {
+    return { layers: work, appliedValue: 0 };
+  }
+
+  // Collect the newest layers covering `qty`, then spread the value across them
+  // in proportion to the quantity taken from each.
+  const targets = [];
+  for (let i = work.length - 1; i >= 0 && remainingQty > 0; i -= 1) {
+    if (work[i].qty <= 0) continue;
+    const take = Math.min(remainingQty, work[i].qty);
+    targets.push({ i, take });
+    remainingQty = r2(remainingQty - take);
+  }
+  const shares = allocateByWeights(targets.map((t) => t.take), value);
+  targets.forEach((t, k) => {
+    const perUnit = shares[k] / t.take;
+    work[t.i].unitCost = r2(work[t.i].unitCost + perUnit);
+  });
+  return { layers: work, appliedValue: r2(shares.reduce((s, x) => s + x, 0)) };
 }
 
 /**
@@ -126,4 +222,7 @@ function removeReceiptLayers(layers, qty, unitCost) {
   };
 }
 
-module.exports = { consumeFifo, quoteConsumption, removeReceiptLayers, r2 };
+module.exports = {
+  consumeFifo, quoteConsumption, quoteReceipt, removeReceiptLayers,
+  allocateByWeights, addValueToLayers, r2,
+};

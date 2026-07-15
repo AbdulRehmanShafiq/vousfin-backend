@@ -141,6 +141,8 @@ module.exports = {
     { accountCode: '1140', accountName: 'Other Receivables',             accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1150', accountName: 'Inventory',                     accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1156', accountName: 'Vendor Credit Clearing',        accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1157', accountName: 'Landed Cost Clearing',          accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1158', accountName: 'Stock in Transit',              accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1160', accountName: 'Advance Payments to Suppliers', accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1165', accountName: 'Employee Loans & Advances',     accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1167', accountName: 'Notes Receivable',              accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
@@ -226,6 +228,7 @@ module.exports = {
 
     // ─── 5000s — Direct Cost (COGS) ───────────────────────────────────────────
     { accountCode: '5110', accountName: 'Cost of Goods Sold',            accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '5115', accountName: 'Purchase Price Variance',       accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
     { accountCode: '5120', accountName: 'Direct Labour',                 accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
     { accountCode: '5130', accountName: 'Direct Materials',              accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },
     { accountCode: '5140', accountName: 'Subcontractor Costs',           accountType: 'Expense',   accountSubtype: 'Direct Cost',             normalBalance: 'Debit',  isDefault: true },

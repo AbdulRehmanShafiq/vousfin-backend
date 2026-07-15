@@ -131,9 +131,12 @@ describe('InventoryService.applyPurchaseStock()', () => {
     const item = makeItem();
     inventoryItemRepo.model.findOne.mockReturnValue(mockFindOneResult(item));
     // If applyPurchaseStock tried to post a journal it would require transaction.service;
-    // here we simply assert it resolves without one and returns only { item }.
+    // here we assert it resolves without one and returns only the item plus the
+    // Phase 8 receipt variance (zero for anything but standard costing).
     const res = await inventoryService.applyPurchaseStock(ID_BUSINESS, ID_ITEM, 1, 5);
-    expect(Object.keys(res)).toEqual(['item']);
+    expect(res.item).toBe(item);
+    expect(res.variance).toBe(0);
+    expect(Object.keys(res).sort()).toEqual(['item', 'variance']);
   });
 
   it('throws 400 for non-positive quantity', async () => {

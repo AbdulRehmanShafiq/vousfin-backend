@@ -90,11 +90,22 @@ const inventoryItemSchema = new mongoose.Schema(
       ref: 'Vendor',
       default: null,
     },
-    /** Valuation method for COGS — 'weighted_average' | 'fifo' */
+    /** Valuation method for COGS — 'weighted_average' | 'fifo' | 'standard' */
     valuationMethod: {
       type: String,
       default: 'weighted_average',
-      enum: ['weighted_average', 'fifo'],
+      enum: ['weighted_average', 'fifo', 'standard'],
+    },
+    /** Phase 8 — the planned cost stock is carried at under standard costing.
+     *  Differences vs. what a vendor actually charges post to PPV (5115). */
+    standardCost: { type: Number, default: null, min: 0 },
+    /** Phase 7 — require a lot/batch code (and optional expiry) on every receipt. */
+    trackLots: { type: Boolean, default: false },
+    /** Phase 5 — where new stock lands when no warehouse is named. */
+    defaultWarehouseId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Warehouse',
+      default: null,
     },
     /** FIFO cost layers (oldest first): each purchase batch's remaining qty + unit cost. */
     costLayers: {
@@ -144,6 +155,18 @@ inventoryItemSchema.index({ businessId: 1, category: 1 });
  */
 inventoryItemSchema.methods.addStock = async function (qty, costPerUnit, session = null) {
   if (qty <= 0) throw new Error('Quantity must be positive');
+
+  // Phase 8 — standard costing carries stock at the standard, always. The
+  // difference vs. what was actually paid is a PPV the caller posts (see
+  // quoteReceipt), so it must never drift into the item's cost here.
+  if (this.valuationMethod === 'standard') {
+    const std = this.standardCost > 0 ? this.standardCost : this.unitCostPrice;
+    this.unitCostPrice = std;
+    this.currentStock += qty;
+    await this.save({ session });
+    return this;
+  }
+
   const totalValue = this.currentStock * this.unitCostPrice + qty * costPerUnit;
   const newQty = this.currentStock + qty;
   this.unitCostPrice = newQty > 0 ? totalValue / newQty : costPerUnit;

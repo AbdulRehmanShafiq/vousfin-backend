@@ -74,6 +74,154 @@ exports.getIntegrityReport = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+// ── Phase 4 — landed costs ───────────────────────────────────────────────────
+exports.applyLandedCost = async (req, res, next) => {
+  try {
+    const landedCostService = require('../services/landedCost.service');
+    const r = await landedCostService.apply(req.user.businessId, req.body, req.user);
+    ApiResponse.success(res, r, 'Shipping and import costs added to stock');
+  } catch (e) { next(e); }
+};
+
+// ── Phase 5 — warehouses + transfers ─────────────────────────────────────────
+const warehouseService = require('../services/warehouse.service');
+
+exports.createWarehouse = async (req, res, next) => {
+  try {
+    const wh = await warehouseService.create(req.user.businessId, req.body, req.user);
+    ApiResponse.created(res, wh, 'Location added');
+  } catch (e) { next(e); }
+};
+exports.listWarehouses = async (req, res, next) => {
+  try {
+    const rows = await warehouseService.list(req.user.businessId, { includeInactive: req.query.includeInactive === 'true' });
+    ApiResponse.success(res, rows, 'Locations retrieved');
+  } catch (e) { next(e); }
+};
+exports.updateWarehouse = async (req, res, next) => {
+  try {
+    const wh = await warehouseService.update(req.user.businessId, req.params.id, req.body);
+    ApiResponse.success(res, wh, 'Location updated');
+  } catch (e) { next(e); }
+};
+exports.stockByLocation = async (req, res, next) => {
+  try {
+    const rows = await warehouseService.stockByLocation(req.user.businessId, req.query.itemId || null);
+    ApiResponse.success(res, rows, 'Stock by location');
+  } catch (e) { next(e); }
+};
+exports.transferStock = async (req, res, next) => {
+  try {
+    const r = await warehouseService.transfer(req.user.businessId, req.body, req.user);
+    ApiResponse.success(res, r, 'Stock moved');
+  } catch (e) { next(e); }
+};
+
+// ── Phase 6 — reservations / available to promise ────────────────────────────
+const stockReservationService = require('../services/stockReservation.service');
+
+exports.getAtp = async (req, res, next) => {
+  try {
+    const r = await stockReservationService.availableToPromise(req.user.businessId, req.params.id);
+    ApiResponse.success(res, r, 'Available to promise');
+  } catch (e) { next(e); }
+};
+exports.reserveStock = async (req, res, next) => {
+  try {
+    const r = await stockReservationService.reserve(req.user.businessId, { ...req.body, itemId: req.params.id }, req.user);
+    ApiResponse.success(res, r, r.backordered > 0 ? 'Set aside what we had — the rest is on backorder' : 'Stock set aside');
+  } catch (e) { next(e); }
+};
+exports.releaseReservation = async (req, res, next) => {
+  try {
+    const r = await stockReservationService.release(req.user.businessId, req.body, req.user);
+    ApiResponse.success(res, r, 'Reservation released');
+  } catch (e) { next(e); }
+};
+exports.getBackorders = async (req, res, next) => {
+  try {
+    const r = await stockReservationService.fillableBackorders(req.user.businessId);
+    ApiResponse.success(res, r, 'Backorders you can now fill');
+  } catch (e) { next(e); }
+};
+
+// ── Phase 7 — lots ───────────────────────────────────────────────────────────
+exports.getLots = async (req, res, next) => {
+  try {
+    const stockMovementService = require('../services/stockMovement.service');
+    const rows = await stockMovementService.lotBalances(req.user.businessId, req.params.id);
+    ApiResponse.success(res, rows, 'Batches in stock');
+  } catch (e) { next(e); }
+};
+
+// ── Phase 9 — recipes + builds ───────────────────────────────────────────────
+const assemblyService = require('../services/assembly.service');
+
+exports.createBom = async (req, res, next) => {
+  try {
+    const bom = await assemblyService.createBom(req.user.businessId, req.body, req.user);
+    ApiResponse.created(res, bom, 'Recipe saved');
+  } catch (e) { next(e); }
+};
+exports.listBoms = async (req, res, next) => {
+  try {
+    const rows = await assemblyService.listBoms(req.user.businessId, { itemId: req.query.itemId || null });
+    ApiResponse.success(res, rows, 'Recipes retrieved');
+  } catch (e) { next(e); }
+};
+exports.quoteBuild = async (req, res, next) => {
+  try {
+    const r = await assemblyService.quoteBuild(req.user.businessId, req.params.id, req.query.runs || 1);
+    ApiResponse.success(res, r, 'Build preview');
+  } catch (e) { next(e); }
+};
+exports.build = async (req, res, next) => {
+  try {
+    const r = await assemblyService.build(req.user.businessId, { ...req.body, bomId: req.params.id }, req.user);
+    ApiResponse.success(res, r, 'Built and added to stock');
+  } catch (e) { next(e); }
+};
+
+// ── Phase 10 — reports (all derived from the stock sub-ledger) ───────────────
+const inventoryReportsService = require('../services/inventoryReports.service');
+
+exports.reportValuation = async (req, res, next) => {
+  try {
+    const r = await inventoryReportsService.valuationAsOf(req.user.businessId, req.query.asOf || new Date());
+    ApiResponse.success(res, r, 'Stock valuation');
+  } catch (e) { next(e); }
+};
+exports.reportTurnover = async (req, res, next) => {
+  try {
+    const r = await inventoryReportsService.turnover(req.user.businessId, req.query);
+    ApiResponse.success(res, r, 'Stock turnover');
+  } catch (e) { next(e); }
+};
+exports.reportAging = async (req, res, next) => {
+  try {
+    const r = await inventoryReportsService.aging(req.user.businessId, {});
+    ApiResponse.success(res, r, 'Stock aging');
+  } catch (e) { next(e); }
+};
+exports.reportMargin = async (req, res, next) => {
+  try {
+    const r = await inventoryReportsService.marginByItem(req.user.businessId, req.query);
+    ApiResponse.success(res, r, 'Margin by item');
+  } catch (e) { next(e); }
+};
+exports.reportSlowMovers = async (req, res, next) => {
+  try {
+    const r = await inventoryReportsService.slowMovers(req.user.businessId, { days: req.query.days || 90 });
+    ApiResponse.success(res, r, 'Slow-moving stock');
+  } catch (e) { next(e); }
+};
+exports.reportExpiring = async (req, res, next) => {
+  try {
+    const r = await inventoryReportsService.expiringLots(req.user.businessId, { days: req.query.days || 60 });
+    ApiResponse.success(res, r, 'Batches expiring soon');
+  } catch (e) { next(e); }
+};
+
 exports.getInventoryValuation = async (req, res, next) => {
   try {
     const valuation = await inventoryService.getInventoryValuation(req.user.businessId);

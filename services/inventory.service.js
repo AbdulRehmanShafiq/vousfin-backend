@@ -208,6 +208,18 @@ class InventoryService {
     const valuationBefore = Math.round(item.currentStock * item.unitCostPrice * 100) / 100;
     const cost = Number(costPerUnit) > 0 ? Number(costPerUnit) : item.unitCostPrice;
 
+    // Phase 7 — a lot-tracked item may not take stock in anonymously, or its
+    // traceability is broken from the first receipt.
+    if (item.trackLots && !opts.lot?.code) {
+      throw new ApiError(400, `"${item.name}" is tracked by batch — record which batch or lot number this stock belongs to.`);
+    }
+
+    // Phase 8 — under standard costing, stock enters at the STANDARD and the
+    // difference vs. what was paid is a purchase price variance the caller
+    // posts. Quote it here so item, movement and journal all agree.
+    const { quoteReceipt } = require('../utils/inventoryCosting.util');
+    const receipt = quoteReceipt(item, qty, cost);
+
     await item.addStock(qty, cost, opts.session || null);
     logger.info(`Stock added: ${qty} units of "${item.name}" (new stock: ${item.currentStock})`);
 
@@ -218,10 +230,12 @@ class InventoryService {
     await stockMovementService.record({
       businessId, itemId: item._id, direction: 'in',
       movementType: opts.movementType || 'purchase',
-      qty: Number(qty), unitCost: cost,
+      qty: Number(qty), unitCost: receipt.unitCostIn, value: receipt.valueIn,
       balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
+      warehouseId: opts.warehouseId || item.defaultWarehouseId || null,
       source: opts.source || null, journalEntryId: opts.journalEntryId || null,
       reason: opts.reason || null,
+      warehouseId: opts.warehouseId || null, lot: opts.lot || null,
       createdBy: opts.userId || null, notes: opts.notes || null,
     }, { session: opts.session || null });
 
@@ -240,7 +254,9 @@ class InventoryService {
       delta: Math.round((valuationAfter - valuationBefore) * 100) / 100,
     });
 
-    return { item };
+    // `variance` is non-zero only for standard-cost items (Phase 8) — the
+    // caller owns posting it to Purchase Price Variance (5115).
+    return { item, variance: receipt.variance };
   }
 
   /**
@@ -272,6 +288,7 @@ class InventoryService {
       balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
       source: opts.source || null, journalEntryId: opts.journalEntryId || null,
       reason: opts.reason || null,
+      warehouseId: opts.warehouseId || null, lot: opts.lot || null,
       createdBy: opts.userId || null, notes: opts.notes || null,
     }, { session });
 
@@ -376,6 +393,7 @@ class InventoryService {
       balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
       source: opts.source || null, journalEntryId: opts.journalEntryId || null,
       reason: opts.reason || null,
+      warehouseId: opts.warehouseId || null, lot: opts.lot || null,
       createdBy: opts.userId || null, notes: opts.notes || null,
     }, { session: opts.session || null });
     businessEvents.emit(EVENTS.INVENTORY_VALUATION_CHANGED, {

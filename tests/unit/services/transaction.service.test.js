@@ -23,6 +23,11 @@ jest.mock('../../../models/AccountingPeriod.model', () => ({
 jest.mock('../../../models/InvoiceCounter.model', () => ({
   findOneAndUpdate: jest.fn().mockResolvedValue({ seq: 1 }),
 }));
+// Phase 8 — the purchase path reads the item to see whether it is standard-costed
+// (and therefore needs a purchase price variance leg). These fixtures are not.
+jest.mock('../../../repositories/inventoryItem.repository', () => ({
+  model: { findOne: jest.fn().mockResolvedValue(null), create: jest.fn() },
+}));
 
 const transactionService = require('../../../services/transaction.service');
 const transactionRepository = require('../../../repositories/transaction.repository');

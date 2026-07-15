@@ -730,9 +730,47 @@ class TransactionService {
         ? Number(data.unitCostPrice)
         : Math.round((entryData.amount / data.inventoryQty) * 100) / 100;
       const inventoryService = require('./inventory.service');
+
+      // Phase 8 — a standard-costed item enters stock at its standard, so the
+      // difference vs. what we paid must be split out to Purchase Price
+      // Variance (5115) or the journal would not match the sub-ledger. Quoted
+      // BEFORE the lines are built (same discipline as the COGS quote above).
+      const purchasedItem = await inventoryItemRepository.model.findOne({
+        _id: data.inventoryItemId, businessId: data.businessId,
+      });
+      if (purchasedItem?.valuationMethod === 'standard') {
+        const { quoteReceipt } = require('../utils/inventoryCosting.util');
+        const rq = quoteReceipt(purchasedItem, data.inventoryQty, costPerUnit);
+        if (Math.abs(rq.variance) >= 0.01) {
+          const ppv = await ChartOfAccount.findOne({ businessId: data.businessId, accountCode: '5115' }).lean();
+          if (!ppv) {
+            throw new ApiError(400,
+              `"${purchasedItem.name}" is costed at a standard price, so the difference from what you paid must go to Purchase Price Variance (5115) — that account is missing from your chart of accounts. Restore the defaults, then try again.`);
+          }
+          if (!entryData.journalLines || entryData.journalLines.length === 0) {
+            entryData.journalLines = [
+              { type: 'debit',  accountId: entryData.debitAccountId,  amount: entryData.amount },
+              { type: 'credit', accountId: entryData.creditAccountId, amount: entryData.amount },
+            ];
+          }
+          // Inventory takes only the standard; the variance takes the rest.
+          const invLine = entryData.journalLines.find(
+            (l) => l.type === 'debit' && String(l.accountId) === String(entryData.debitAccountId));
+          if (invLine) invLine.amount = rq.valueIn;
+          entryData.journalLines.push(
+            rq.variance > 0
+              ? { type: 'debit',  accountId: ppv._id, amount: rq.variance }   // paid more than standard
+              : { type: 'credit', accountId: ppv._id, amount: Math.abs(rq.variance) } // paid less
+          );
+          logger.info(`PPV recognized: ${rq.variance} on item ${data.inventoryItemId} (standard costing)`);
+        }
+      }
+
       // Deferred into the persist transaction (F6) — see deferredSideEffects.
       deferredSideEffects.push((s) => inventoryService.applyPurchaseStock(
-        data.businessId, data.inventoryItemId, data.inventoryQty, costPerUnit, { userId, session: s }
+        data.businessId, data.inventoryItemId, data.inventoryQty, costPerUnit, {
+          userId, session: s, warehouseId: data.warehouseId || null, lot: data.lot || null,
+        }
       ));
       entryData.inventoryItemId = data.inventoryItemId;
       entryData.inventoryQty    = data.inventoryQty;

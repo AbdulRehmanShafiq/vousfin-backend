@@ -50,6 +50,7 @@ class StockMovementService {
       source: m.source || { docType: null, docId: null },
       journalEntryId: m.journalEntryId || null,
       warehouseId: m.warehouseId || null,
+      lot: m.lot || { code: null, expiryDate: null },
       movementDate: m.movementDate || new Date(),
       reason: m.reason || null,
       notes: m.notes || null,
@@ -67,6 +68,56 @@ class StockMovementService {
       .sort({ movementDate: -1, _id: -1 })
       .limit(Math.min(Number(limit) || 200, 1000))
       .lean();
+  }
+
+  /**
+   * Phase 5 — per-warehouse balances, DERIVED from movements so a location
+   * total can never disagree with the item total or the ledger.
+   * @returns {Promise<Array<{warehouseId, qty, value}>>}
+   */
+  async balancesByWarehouse(businessId, itemId = null) {
+    const match = { businessId: new mongoose.Types.ObjectId(String(businessId)) };
+    if (itemId) match.itemId = new mongoose.Types.ObjectId(String(itemId));
+    const rows = await StockMovement.aggregate([
+      { $match: match },
+      { $group: {
+        _id: { warehouseId: '$warehouseId', itemId: '$itemId' },
+        qty:   { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$qty',   { $multiply: ['$qty', -1] }] } },
+        value: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$value', { $multiply: ['$value', -1] }] } },
+      } },
+    ]);
+    return rows.map((r) => ({
+      warehouseId: r._id.warehouseId, itemId: r._id.itemId,
+      qty: r2(r.qty), value: r2(r.value),
+    }));
+  }
+
+  /**
+   * Phase 7 — lot balances for an item, DERIVED from movements. Lots with no
+   * remaining quantity drop out. Sorted earliest-expiry-first (FEFO order).
+   */
+  async lotBalances(businessId, itemId) {
+    const rows = await StockMovement.aggregate([
+      { $match: {
+        businessId: new mongoose.Types.ObjectId(String(businessId)),
+        itemId: new mongoose.Types.ObjectId(String(itemId)),
+        'lot.code': { $ne: null },
+      } },
+      { $group: {
+        _id: '$lot.code',
+        expiryDate: { $first: '$lot.expiryDate' },
+        qty: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$qty', { $multiply: ['$qty', -1] }] } },
+      } },
+      { $match: { qty: { $gt: 0 } } },
+    ]);
+    return rows
+      .map((r) => ({ code: r._id, expiryDate: r.expiryDate, qty: r2(r.qty) }))
+      .sort((a, b) => {
+        if (!a.expiryDate && !b.expiryDate) return 0;
+        if (!a.expiryDate) return 1;   // undated lots consume last
+        if (!b.expiryDate) return -1;
+        return new Date(a.expiryDate) - new Date(b.expiryDate);
+      });
   }
 
   /** True when an item has at least one recorded movement (post-migration). */
