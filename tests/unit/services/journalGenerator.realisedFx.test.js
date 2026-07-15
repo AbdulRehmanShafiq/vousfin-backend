@@ -26,12 +26,19 @@ jest.mock('../../../services/ledgerPosting.service', () => ({
 }));
 jest.mock('../../../services/fx.service', () => ({ getBaseCurrency: jest.fn(), getRate: jest.fn(), round: (v) => v }));
 jest.mock('../../../models/ChartOfAccount.model', () => ({ find: jest.fn() }));
+// The realised-FX P&L account is resolved by code through the resolver, which
+// seeds 4140/6200 if a business lacks them instead of silently skipping the
+// journal. Its own behaviour is proved for real in tests/live.
+jest.mock('../../../services/accountResolver.service', () => ({
+  resolve: jest.fn(), resolveMany: jest.fn(), resolveId: jest.fn(),
+}));
 jest.mock('../../../models/JournalEntry.model', () => ({ create: jest.fn(), find: jest.fn(), findOne: jest.fn(), findByIdAndUpdate: jest.fn() }));
 
 const journalGenerator = require('../../../services/journalGenerator.service');
 const { computeRealisedFx } = journalGenerator;
 const { postCompoundJournal } = require('../../../services/ledgerPosting.service');
 const ChartOfAccount = require('../../../models/ChartOfAccount.model');
+const accountResolver = require('../../../services/accountResolver.service');
 
 const GAIN = 'gain-4140', LOSS = 'loss-6200', UNR = 'unr-6210';
 const AR = 'ar-acct', AP = 'ap-acct';
@@ -93,6 +100,8 @@ describe('generateRealizedFxEntry — atomic, idempotent posting (audit A5)', ()
         { accountCode: '6210', _id: UNR },
       ]),
     });
+    accountResolver.resolveId.mockImplementation(async (_biz, code) =>
+      ({ 4140: GAIN, 6200: LOSS, 6210: UNR }[code]));
     postCompoundJournal.mockResolvedValue({ _id: 'je1' });
   });
 

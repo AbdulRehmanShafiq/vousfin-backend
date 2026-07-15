@@ -6,6 +6,7 @@
 const JournalEntry   = require('../models/JournalEntry.model');
 const ChartOfAccount = require('../models/ChartOfAccount.model');
 const { applyRunningBalance, postCompoundJournal } = require('./ledgerPosting.service');
+const accountResolver = require('./accountResolver.service');
 const fxService      = require('./fx.service');
 const reportCache    = require('../utils/reportCache');
 const logger         = require('../config/logger');
@@ -129,13 +130,19 @@ class JournalGeneratorService {
   }, { session = null } = {}) {
     if (!fxAmount || fxAmount <= 0) return null;
 
-    const fxAccts = await this._getFxAccounts(businessId);
-    const fxPnlId = isGain ? fxAccts.gain?._id : fxAccts.loss?._id;
-
-    if (!fxPnlId) {
-      logger.warn(`[FX] Gain/Loss account missing for business ${businessId} — skipping realised FX journal`);
-      return null;
-    }
+    // Resolve through the self-healing resolver, and do NOT skip on a miss.
+    //
+    // This used to warn and return null, which meant a business missing FX Gain
+    // (4140) or FX Loss (6200) silently never recognised realised FX at all:
+    // the settlement posted, the monetary account was never corrected back to
+    // its booked carrying value, and AR/AP drifted from the ledger permanently
+    // — IAS 21 §28 quietly unimplemented, with only a log line to show for it.
+    // Both accounts are DEFAULT_ACCOUNTS, so the resolver seeds a missing one
+    // rather than failing; anything it genuinely cannot resolve now throws and
+    // rolls the settlement back instead of half-posting it.
+    const fxPnlId = await accountResolver.resolveId(
+      businessId, isGain ? '4140' : '6200', { session }
+    );
 
     // Direction depends ONLY on whether the realised difference is a gain or loss
     // (the AR-vs-AP distinction is already baked into `isGain` by computeRealisedFx).
