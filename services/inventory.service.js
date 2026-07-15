@@ -497,13 +497,21 @@ class InventoryService {
       const lines = ordered.map((m) => ({
         _id:         m._id,
         date:        m.movementDate,
-        description: m.notes || (m.source?.docType ? `${m.source.docType}` : m.movementType.replace(/_/g, ' ')),
+        description: m.notes || (m.source?.docType ? `${m.source.docType}` : null),
         type:        m.movementType,
+        // The authoritative direction — never make the client re-derive this by
+        // pattern-matching the type (that shipped a bug where every non-purchase
+        // inflow rendered as an outflow).
+        direction:   m.direction,
+        // Revaluations and landed costs move value, not quantity.
+        valueOnly:   !(m.qty > 0),
         qtyIn:       m.direction === 'in' ? m.qty : 0,
         qtyOut:      m.direction === 'out' ? m.qty : 0,
         balance:     m.balanceQtyAfter,
         amount:      m.value,
         unitCost:    m.unitCost,
+        lot:         m.lot?.code || null,
+        warehouseId: m.warehouseId || null,
       }));
       return {
         item: {

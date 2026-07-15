@@ -119,8 +119,6 @@ class InventoryReportsService {
    * the receipts that are still on hand (newest receipts are what remain).
    */
   async aging(businessId, { buckets = [30, 60, 90, 180] } = {}) {
-    const items = await InventoryItem.find({ businessId: oid(businessId), isActive: { $ne: false } })
-      .select('name sku unit currentStock unitCostPrice').lean();
     const now = Date.now();
     const edges = [...buckets].sort((a, b) => a - b);
     const labels = [
@@ -129,37 +127,82 @@ class InventoryReportsService {
       `${edges[edges.length - 1] + 1}+ days`,
     ];
 
-    const lines = [];
-    for (const item of items) {
-      if (!(item.currentStock > 0)) continue;
-      // Walk receipts newest-first: what's on hand is the most recent arrivals.
-      const receipts = await StockMovement.find({
-        businessId: oid(businessId), itemId: item._id, direction: 'in', qty: { $gt: 0 },
-      }).sort({ movementDate: -1, _id: -1 }).select('qty value movementDate').lean();
+    // What's on hand — and what it's worth — is replayed from the sub-ledger,
+    // exactly as valuationAsOf() does, so the two reports cannot disagree.
+    // item.currentStock/unitCostPrice is a cached projection: reading it here
+    // would put a second source of truth behind the same number.
+    const onHand = await StockMovement.aggregate([
+      { $match: { businessId: oid(businessId) } },
+      { $group: {
+        _id: '$itemId',
+        qty:   { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$qty',   { $multiply: ['$qty', -1] }] } },
+        value: { $sum: { $cond: [{ $eq: ['$direction', 'in'] }, '$value', { $multiply: ['$value', -1] }] } },
+      } },
+      { $match: { qty: { $gt: 0.0001 } } },
+    ]);
+    if (!onHand.length) return { labels, totals: labels.map(() => 0), totalValue: 0, lines: [] };
 
-      let remaining = item.currentStock;
-      const agedBuckets = new Array(labels.length).fill(0);
-      for (const rec of receipts) {
+    // Every item's receipts, newest-first, in one pass rather than per item.
+    const receiptRows = await StockMovement.aggregate([
+      { $match: { businessId: oid(businessId), direction: 'in', qty: { $gt: 0 } } },
+      { $sort: { movementDate: -1, _id: -1 } },
+      { $group: { _id: '$itemId', receipts: { $push: { qty: '$qty', movementDate: '$movementDate' } } } },
+    ]);
+    const receiptsById = new Map(receiptRows.map((r) => [String(r._id), r.receipts]));
+
+    const items = await InventoryItem.find({ businessId: oid(businessId) }).select('name sku unit').lean();
+    const byId = new Map(items.map((i) => [String(i._id), i]));
+
+    const bucketFor = (days) => {
+      const i = edges.findIndex((e) => days <= e);
+      return i === -1 ? labels.length - 1 : i;
+    };
+
+    const lines = [];
+    for (const row of onHand) {
+      const item = byId.get(String(row._id)) || {};
+      const qty = r2(row.qty);
+      const value = r2(row.value);
+
+      // Age comes from the receipts (newest arrivals are what's still here);
+      // value does NOT. Every unit on hand carries the same cost under
+      // weighted-average and standard costing, so the bands split the carrying
+      // value by quantity. Valuing each band at what that receipt originally
+      // cost — as this once did — makes the bands drift away from the balance
+      // sheet the moment a revaluation or landed cost re-marks the holding.
+      const unitCarrying = qty > 0 ? value / qty : 0;
+      const qtyBuckets = new Array(labels.length).fill(0);
+      let remaining = qty;
+      for (const rec of receiptsById.get(String(row._id)) || []) {
         if (remaining <= 0) break;
         const take = Math.min(remaining, rec.qty);
-        const days = Math.floor((now - new Date(rec.movementDate).getTime()) / 86400000);
-        let bi = edges.findIndex((e) => days <= e);
-        if (bi === -1) bi = labels.length - 1;
-        const unit = rec.qty > 0 ? rec.value / rec.qty : (item.unitCostPrice || 0);
-        agedBuckets[bi] = r2(agedBuckets[bi] + take * unit);
+        qtyBuckets[bucketFor(Math.floor((now - new Date(rec.movementDate).getTime()) / 86400000))] += take;
         remaining = r2(remaining - take);
       }
-      // Stock older than any recorded receipt (pre-ledger) lands in the oldest bucket.
-      if (remaining > 0) {
-        agedBuckets[labels.length - 1] = r2(agedBuckets[labels.length - 1] + remaining * (item.unitCostPrice || 0));
+      // Stock with no receipt behind it predates the sub-ledger: call it oldest.
+      if (remaining > 0) qtyBuckets[labels.length - 1] += remaining;
+
+      const valBuckets = qtyBuckets.map((q) => r2(q * unitCarrying));
+      // Pennies lost to rounding land on the largest band, so Σ bands == value.
+      const rounding = r2(value - valBuckets.reduce((s, v) => s + v, 0));
+      if (rounding !== 0) {
+        let bi = 0;
+        for (let i = 1; i < valBuckets.length; i += 1) if (valBuckets[i] > valBuckets[bi]) bi = i;
+        valBuckets[bi] = r2(valBuckets[bi] + rounding);
       }
+
       lines.push({
-        itemId: item._id, name: item.name, sku: item.sku,
-        qty: r2(item.currentStock),
-        value: r2(item.currentStock * (item.unitCostPrice || 0)),
-        buckets: agedBuckets,
+        itemId: row._id,
+        name: item.name || 'Unknown item',
+        sku: item.sku || null,
+        unit: item.unit || 'units',
+        qty,
+        value,
+        qtyBuckets: qtyBuckets.map(r2),
+        buckets: valBuckets,
       });
     }
+    lines.sort((a, b) => b.value - a.value);
 
     const totals = labels.map((_, i) => r2(lines.reduce((s, l) => s + l.buckets[i], 0)));
     return { labels, totals, totalValue: r2(totals.reduce((s, t) => s + t, 0)), lines };

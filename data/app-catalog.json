@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-14T15:09:44.583Z",
+  "generatedAt": "2026-07-15T13:28:24.204Z",
   "entries": [
     {
       "id": "home",
@@ -671,6 +671,60 @@
         "accounting",
         "stock",
         "stock on hand"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.stock-reports",
+      "type": "page",
+      "title": "Stock reports",
+      "path": [
+        "Accounting",
+        "Stock reports"
+      ],
+      "href": "/inventory/reports",
+      "desc": "What stock is worth, how fast it sells, what it earns",
+      "synonyms": [
+        "what",
+        "stock",
+        "is",
+        "worth",
+        "how",
+        "fast",
+        "it",
+        "sells",
+        "what",
+        "it",
+        "earns",
+        "general",
+        "ledger",
+        "accounting"
+      ],
+      "moduleKey": "accounting",
+      "enablementKey": null
+    },
+    {
+      "id": "accounting.stock-jobs",
+      "type": "page",
+      "title": "Stock jobs",
+      "path": [
+        "Accounting",
+        "Stock jobs"
+      ],
+      "href": "/inventory/stock-jobs",
+      "desc": "Locations, moving stock, and what you build",
+      "synonyms": [
+        "locations",
+        "moving",
+        "stock",
+        "and",
+        "what",
+        "you",
+        "build",
+        "general",
+        "ledger",
+        "accounting"
       ],
       "moduleKey": "accounting",
       "enablementKey": null
