@@ -98,9 +98,13 @@ const customerSchema = new mongoose.Schema(
 // Indexes
 // ===============================
 customerSchema.index({ businessId: 1, isActive: 1 });
+// $type rather than `$ne: null`: mongod refuses a negation in a partial index,
+// so the $ne form never built and duplicate customer emails were never actually
+// prevented. `$type: 'string'` selects exactly the same documents (a real email)
+// and is accepted.
 customerSchema.index({ businessId: 1, email: 1 }, {
   unique: true,
-  partialFilterExpression: { email: { $ne: null } },
+  partialFilterExpression: { email: { $type: 'string' } },
 });
 customerSchema.index({ businessId: 1, fullName: 1 });
 customerSchema.index({ businessId: 1, currentReceivableBalance: -1 });

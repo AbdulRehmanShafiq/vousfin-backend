@@ -136,14 +136,19 @@ const inventoryItemSchema = new mongoose.Schema(
 );
 
 inventoryItemSchema.index({ businessId: 1, isActive: 1 });
+// $type rather than `$ne: null` — a negation in a partial index is rejected by
+// mongod, so this uniqueness never actually existed and duplicate SKUs were
+// never prevented.
 inventoryItemSchema.index({ businessId: 1, sku: 1 }, {
   unique: true,
-  partialFilterExpression: { sku: { $ne: null } },
+  partialFilterExpression: { sku: { $type: 'string' } },
 });
+// This spec was doubly invalid: it mixed `sparse` with `partialFilterExpression`
+// AND used a negation inside it. mongod rejects both, so the index never built
+// and duplicate barcodes were never actually prevented.
 inventoryItemSchema.index({ businessId: 1, barcode: 1 }, {
   unique: true,
-  sparse: true,
-  partialFilterExpression: { barcode: { $ne: null } },
+  partialFilterExpression: { barcode: { $type: 'string' } },
 });
 inventoryItemSchema.index({ businessId: 1, name: 1 });
 inventoryItemSchema.index({ businessId: 1, currentStock: 1 });

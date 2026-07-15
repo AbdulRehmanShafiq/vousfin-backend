@@ -508,10 +508,16 @@ journalEntrySchema.index(
 // 5b. Tax queries (Phase 5.4.9 — optimised for tax ledger + WHT + filing reports)
 journalEntrySchema.index({ businessId: 1, taxType: 1, transactionDate: -1 },
   { sparse: true, name: 'idx_tax_type' });
-// Compound: filters posted entries with non-null taxAmount for tax reports
+// Compound: filters posted entries with non-null taxAmount for tax reports.
+// NOT sparse: mongod rejects an index that declares both `sparse` and
+// `partialFilterExpression` ("cannot mix"), so this index silently never
+// existed — in test OR production — and every tax report fell back to a
+// collection scan. partialFilterExpression already subsumes sparse (it is
+// strictly more selective), so the correct spec is the partial filter alone.
+// Found by tests/live the first time indexes were built against a real mongod.
 journalEntrySchema.index(
   { businessId: 1, status: 1, taxAmount: 1, transactionDate: -1 },
-  { sparse: true, name: 'idx_tax_report', partialFilterExpression: { taxAmount: { $gt: 0 } } }
+  { name: 'idx_tax_report', partialFilterExpression: { taxAmount: { $gt: 0 } } }
 );
 
 // 5c. Inventory stock-ledger (ERP Steps 3 & 5) — per-item movement history.
@@ -921,12 +927,17 @@ journalEntrySchema.post('insertMany', function (docs) {
 });
 
 // Prevent duplicate invoice numbers within the same business.
-// Sparse + partialFilterExpression: only entries with a string invoiceNumber are indexed.
+// Only entries with a string invoiceNumber are indexed.
+//
+// This spec previously ALSO declared `sparse: true`. mongod rejects an index
+// that mixes `sparse` with `partialFilterExpression`, so this unique index
+// never existed anywhere — duplicate invoice numbers were never actually
+// prevented at the database level, despite the constraint being declared.
+// partialFilterExpression alone gives the intended behaviour.
 journalEntrySchema.index(
   { businessId: 1, invoiceNumber: 1 },
   {
     unique: true,
-    sparse: true,
     name: 'idx_je_invoice_number',
     partialFilterExpression: { invoiceNumber: { $type: 'string' } },
   }

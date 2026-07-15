@@ -34,9 +34,21 @@ const payrollRunSchema = new mongoose.Schema({
 }, { timestamps: true, toJSON: { transform: (d, r) => { delete r.__v; return r; } } });
 
 // One live (non-reversed) run per period.
+//
+// Expressed as $in over the live statuses, NOT `$ne: REVERSED`: mongod refuses
+// a negation in a partialFilterExpression ("Expression not supported in partial
+// index: $not"), so the $ne form silently never built — meaning nothing ever
+// stopped a business from posting two payroll runs for the same period. $in is
+// accepted and says the same thing. Derived from the enum so a new status is
+// covered by construction rather than by remembering to edit this list.
 payrollRunSchema.index(
   { businessId: 1, period: 1 },
-  { unique: true, partialFilterExpression: { status: { $ne: PAYROLL_RUN_STATUS.REVERSED } } }
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: Object.values(PAYROLL_RUN_STATUS).filter((s) => s !== PAYROLL_RUN_STATUS.REVERSED) },
+    },
+  }
 );
 
 payrollRunSchema.statics.canTransition = (from, to) =>

@@ -113,9 +113,11 @@ const vendorSchema = new mongoose.Schema(
 // Indexes
 // ===============================
 vendorSchema.index({ businessId: 1, isActive: 1 });
+// $type rather than `$ne: null` — see Customer.model.js: a negation in a partial
+// index is rejected by mongod, so this uniqueness never actually existed.
 vendorSchema.index({ businessId: 1, email: 1 }, {
   unique: true,
-  partialFilterExpression: { email: { $ne: null } },
+  partialFilterExpression: { email: { $type: 'string' } },
 });
 vendorSchema.index({ businessId: 1, vendorName: 1 });
 vendorSchema.index({ businessId: 1, currentPayableBalance: -1 });
