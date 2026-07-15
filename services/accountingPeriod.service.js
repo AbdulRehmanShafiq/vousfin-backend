@@ -392,6 +392,8 @@ async function runClosingEntries(businessId, fiscalYearId, userId) {
       businessId:       bizId,
       transactionDate:  closingDate,
       description:      `Year-End Close: ${rev.accountName} → ${targetEquityAcc.accountName}`,
+      // One closing entry per revenue account per year.
+      idempotencyKey: `period-close-rev:${fiscalYearId}:${rev._id}`,
       transactionType:  TRANSACTION_TYPES.CLOSING_ENTRY,
       amount:           rev.total,
       debitAccountId:   rev._id,           // DR Revenue account (zeroes it out)
@@ -415,6 +417,8 @@ async function runClosingEntries(businessId, fiscalYearId, userId) {
       businessId:       bizId,
       transactionDate:  closingDate,
       description:      `Year-End Close: ${targetEquityAcc.accountName} → ${exp.accountName}`,
+      // One closing entry per expense account per year.
+      idempotencyKey: `period-close-exp:${fiscalYearId}:${exp._id}`,
       transactionType:  TRANSACTION_TYPES.CLOSING_ENTRY,
       amount:           exp.total,
       debitAccountId:   targetEquityAcc._id, // DR Income Summary
@@ -440,6 +444,8 @@ async function runClosingEntries(businessId, fiscalYearId, userId) {
         businessId:       bizId,
         transactionDate:  closingDate,
         description:      `Year-End Transfer: Net ${isProfit ? 'Income' : 'Loss'} to Retained Earnings`,
+        // One net-income transfer per year.
+        idempotencyKey: `period-close-net:${fiscalYearId}`,
         transactionType:  TRANSACTION_TYPES.CLOSING_ENTRY,
         amount:           absNet,
         debitAccountId:   isProfit ? incomeSummaryAcc._id  : retainedEarningsAcc._id,
@@ -578,6 +584,8 @@ async function createOpeningBalances(businessId, newFiscalYearId, userId) {
       businessId:       bizId,
       transactionDate:  openingDate,
       description:      `Opening Balance: ${acc.accountName}`,
+      // One opening balance per account per year.
+      idempotencyKey: `period-opening:${newFiscalYearId}:${acc._id}`,
       transactionType:  TRANSACTION_TYPES.OPENING_BALANCE,
       amount:           absBalance,
       debitAccountId:   debitAccId,

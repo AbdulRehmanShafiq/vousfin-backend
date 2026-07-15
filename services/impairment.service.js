@@ -70,6 +70,8 @@ class ImpairmentService {
       businessId,
       transactionDate: new Date(),
       description: `IAS-36 impairment loss — ${check.assetName}`,
+      // One impairment entry per check.
+      idempotencyKey: `impairment:${check._id}`,
       transactionType: 'journal_entry',
       transactionSource: 'system_generated',
       inputMethod: 'system',

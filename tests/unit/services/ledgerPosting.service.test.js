@@ -52,6 +52,7 @@ describe('ledgerPosting.postBalancedJournal()', () => {
   it('creates the JE and increases both a debit-normal debit and a credit-normal credit', async () => {
     const je = await postBalancedJournal({
       businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR,
+      idempotencyKey: null, // this suite is about balance signs, not idempotency
     });
 
     expect(JournalEntry.create).toHaveBeenCalledTimes(1);
@@ -67,7 +68,7 @@ describe('ledgerPosting.postBalancedJournal()', () => {
   it('decreases a credit-normal account when it is debited, and vice-versa', async () => {
     // DR the credit-normal account, CR the debit-normal account (a reversal-shaped entry).
     await postBalancedJournal({
-      businessId: 'b1', amount: 40, debitAccountId: ID_CR, creditAccountId: ID_DR,
+      businessId: 'b1', amount: 40, debitAccountId: ID_CR, creditAccountId: ID_DR, idempotencyKey: null,
     });
 
     // Debit on a Credit-normal account → -40
@@ -78,7 +79,7 @@ describe('ledgerPosting.postBalancedJournal()', () => {
 
   it('skips running-balance updates when updateBalances is false', async () => {
     await postBalancedJournal(
-      { businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR },
+      { businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR, idempotencyKey: null },
       { updateBalances: false }
     );
     expect(JournalEntry.create).toHaveBeenCalledTimes(1);
@@ -89,6 +90,7 @@ describe('ledgerPosting.postBalancedJournal()', () => {
     accountRepository.updateRunningBalance.mockRejectedValue(new Error('db down'));
     const je = await postBalancedJournal({
       businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR,
+      idempotencyKey: null, // this suite is about balance signs, not idempotency
     });
     expect(je._id).toBe('je-1'); // ledger write survived a balance-cache failure (Rule 3)
   });
@@ -97,7 +99,7 @@ describe('ledgerPosting.postBalancedJournal()', () => {
 describe('ledgerPosting.postBalancedJournal() — atomicity', () => {
   it('threads a caller-provided session into the JE insert and both balance updates', async () => {
     await postBalancedJournal(
-      { businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR },
+      { businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR, idempotencyKey: null },
       { session: 'SESSION' }
     );
     // JE created with the session (array form).
@@ -114,7 +116,7 @@ describe('ledgerPosting.postBalancedJournal() — atomicity', () => {
     accountRepository.updateRunningBalance.mockRejectedValue(new Error('write conflict'));
     await expect(
       postBalancedJournal(
-        { businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR },
+        { businessId: 'b1', amount: 100, debitAccountId: ID_DR, creditAccountId: ID_CR, idempotencyKey: null },
         { session: 'SESSION' }   // strict path
       )
     ).rejects.toThrow('write conflict');

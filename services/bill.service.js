@@ -575,6 +575,8 @@ class BillService {
       businessId,
       transactionDate:   new Date(),
       description:       `Bill Payment — ${bill.billNumber}${bill.vendorSnapshot?.vendorName ? ' (' + bill.vendorSnapshot.vendorName + ')' : ''}`,
+      // markPaid settles the whole bill in one entry.
+      idempotencyKey: `bill-markpaid:${bill._id}`,
       transactionType:   TRANSACTION_TYPES.PAYMENT_MADE,
       amount,
       debitAccountId:    apAccount._id,
@@ -763,6 +765,8 @@ class BillService {
           businessId,
           transactionDate:   bill.issueDate,
           description:       `AP Liability — ${bill.billNumber}${bill.vendorSnapshot?.vendorName ? ' (' + bill.vendorSnapshot.vendorName + ')' : ''}`,
+          // One payable per bill, forever — a retry must not owe twice.
+          idempotencyKey: `bill-ap:${bill._id}`,
           transactionType:   TRANSACTION_TYPES.CREDIT_PURCHASE,
           transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
           invoiceNumber:     bill.billNumber,

@@ -172,6 +172,9 @@ class InventoryRecalcService {
           businessId,
           transactionDate:   new Date(),
           description:       `Inventory valuation adjustment — ${item.name} (recalculation)`,
+          // Repeatable on purpose: a recalculation is a heal, and re-running it
+          // after new movements must be able to post a fresh correction.
+          idempotencyKey: null,
           transactionType:   TRANSACTION_TYPES.JOURNAL_ENTRY,
           amount:            Math.abs(delta),
           debitAccountId,

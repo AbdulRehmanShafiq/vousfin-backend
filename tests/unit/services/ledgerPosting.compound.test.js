@@ -32,6 +32,10 @@ beforeEach(() => {
 const base = (lines) => ({
   businessId: BIZ, transactionDate: new Date('2026-06-28'), description: 'Payroll June',
   transactionType: 'Salary', inputMethod: 'batch', createdBy: 'u1', lines,
+  // The poster requires every caller to DECIDE about idempotency: a stable key,
+  // or an explicit null for a deliberately repeatable posting. These tests are
+  // about line/balance mechanics, so null keeps them focused.
+  idempotencyKey: null,
 });
 
 describe('postCompoundJournal', () => {

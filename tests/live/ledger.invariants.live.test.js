@@ -148,21 +148,38 @@ describe('idempotency, enforced by the real unique index', () => {
     await expectGoldenInvariants(ctx.businessId);
   });
 
-  it('does NOT protect a posting that supplies no key', async () => {
-    // Documents today's real exposure rather than asserting the ideal: the
-    // partial index only binds when a key exists, so keyless callers can
-    // double-post freely. Phase 3 makes the key mandatory; when it lands this
-    // test flips to expecting a rejection.
+  it('refuses a posting that never declared a key', async () => {
+    // This test used to assert the opposite — that a keyless posting double-posts
+    // freely — because it did, and 14 of 22 services shipped that way. The key is
+    // now a required decision at the poster, so forgetting it is an error rather
+    // than a silent exposure.
     const payload = () => base({
       amount: 700,
       debitAccountId: ctx.acct('1110')._id,
       creditAccountId: ctx.acct('4110')._id,
+    });
+    await expect(postBalancedJournal(payload())).rejects.toThrow(/must declare its idempotencyKey/i);
+
+    const JournalEntry = require('../../models/JournalEntry.model');
+    expect(await JournalEntry.countDocuments({ businessId: ctx.business._id })).toBe(0);
+  });
+
+  it('allows a deliberately repeatable posting to opt out with an explicit null', async () => {
+    // Builds, stock adjustments and recalcs are legitimately repeatable — doing
+    // one twice is a real thing an owner does, and a key derived from the entity
+    // would block the second valid one. `null` says "I decided", not "I forgot".
+    const payload = () => base({
+      amount: 700,
+      debitAccountId: ctx.acct('1110')._id,
+      creditAccountId: ctx.acct('4110')._id,
+      idempotencyKey: null,
     });
     await postBalancedJournal(payload());
     await postBalancedJournal(payload());
 
     const JournalEntry = require('../../models/JournalEntry.model');
     expect(await JournalEntry.countDocuments({ businessId: ctx.business._id })).toBe(2);
+    await expectGoldenInvariants(ctx.businessId);
   });
 });
 

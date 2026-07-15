@@ -99,6 +99,8 @@ async function completeJob(businessId, jobId, user) {
   const je = await ledger.postBalancedJournal({
     businessId, transactionDate: new Date(),
     description: `Job ${job.code} completed — cost to finished goods`,
+    // A job completes once.
+    idempotencyKey: `job-complete:${job._id}`,
     transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
     amount: actuals.total, debitAccountId: fg._id, creditAccountId: wip._id,
     inputMethod: 'form', createdBy: user.id, entryType: 'normal',

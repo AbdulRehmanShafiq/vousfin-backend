@@ -29,7 +29,12 @@ jest.mock('../../../repositories/account.repository',  () => ({
 }));
 jest.mock('../../../repositories/auditLog.repository', () => ({ getByBusiness: jest.fn(), getForEntity: jest.fn() }));
 jest.mock('../../../repositories/user.repository',     () => ({ findById: jest.fn() }));
-jest.mock('../../../models/JournalEntry.model',        () => ({ create: jest.fn() }));
+// findOne is the poster's idempotency pre-check — every once-ever posting now
+// carries a key, so it runs on the real paths this suite drives.
+jest.mock('../../../models/JournalEntry.model', () => ({
+  create: jest.fn(),
+  findOne: jest.fn(() => ({ lean: () => Promise.resolve(null) })), // no prior twin
+}));
 jest.mock('../../../models/ChartOfAccount.model',      () => ({ findOne: jest.fn(), create: jest.fn() }));
 jest.mock('../../../models/Business.model',            () => ({ findById: jest.fn() }));
 // Inventory engine is mocked at its boundary; the procurement/sales SERVICES that
@@ -159,6 +164,9 @@ describe('Scenario 5 — Balanced journal posts AND moves both running balances'
 
     const je = await ledgerPosting.postBalancedJournal({
       businessId: BIZ_A, amount: 1000, debitAccountId: 'AR', creditAccountId: 'SALES',
+      // The poster requires an explicit idempotency decision; this scenario is
+      // about balance signs, so null keeps it focused.
+      idempotencyKey: null,
     });
 
     expect(je._id).toBe('je1');

@@ -78,13 +78,16 @@ describe('F7 — DB-enforced idempotency', () => {
     expect(accountRepository.updateRunningBalance).not.toHaveBeenCalled();
   });
 
-  test('an E11000 from a DIFFERENT unique index (no idempotency key) still throws', async () => {
+  test('an E11000 from a DIFFERENT unique index still throws on a repeatable posting', async () => {
     JournalEntry.findOne.mockReturnValue(chainableFindOne(null));
     const dup = Object.assign(new Error('E11000 duplicate key error idx_je_invoice_number'), { code: 11000 });
     JournalEntry.create.mockRejectedValue(dup);
 
-    const p = { ...payload() };
-    delete p.idempotencyKey;
+    // An explicit null — "this posting is deliberately repeatable" — not a
+    // missing key, which the poster now rejects outright. A duplicate-key error
+    // from some OTHER index is a real error either way and must not be
+    // swallowed as "already posted".
+    const p = { ...payload(), idempotencyKey: null };
 
     await expect(postCompoundJournal(p)).rejects.toThrow(/E11000/);
   });

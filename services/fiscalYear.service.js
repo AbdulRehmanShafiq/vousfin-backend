@@ -482,6 +482,10 @@ async function postAdjustingEntry(businessId, {
     businessId:      bizId,
     transactionDate: new Date(period.endDate), // adjustments dated at period end
     description:     description || `${adjustingType} adjusting entry`,
+    // Repeatable on purpose: a period can take many adjusting entries, and
+      // two identical ones are a legitimate thing to record. Retry-safety for
+      // these belongs at the API boundary, not in a key derived from the period.
+    idempotencyKey: null,
     transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
     amount,
     debitAccountId:  new mongoose.Types.ObjectId(String(debitAccountId)),
@@ -675,6 +679,8 @@ async function createOpeningBalances(businessId, fiscalYearId, userId) {
       businessId:      bizId,
       transactionDate: new Date(fy.startDate),
       description:     `Opening balance — ${acc.accountName} (${fy.name})`,
+      // One opening balance per account per year.
+      idempotencyKey: `fy-opening:${fy._id}:${acc._id}`,
       transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
       amount:          Math.abs(balance),
       debitAccountId,

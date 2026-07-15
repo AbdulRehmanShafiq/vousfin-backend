@@ -583,6 +583,8 @@ class InvoiceService {
           businessId:         invoice.businessId,
           transactionDate:    new Date(),
           description:        `Write-off: Invoice ${invoice.invoiceNumber} — ${reason || 'bad debt'}`,
+          // An invoice is written off once.
+          idempotencyKey: `invoice-writeoff:${invoice._id}`,
           transactionType:    TRANSACTION_TYPES.ADJUSTING_ENTRY,
           amount:             outstandingBase,
           debitAccountId:     badDebtAcct._id,
@@ -808,6 +810,8 @@ class InvoiceService {
           businessId,
           transactionDate:   invoice.issueDate,
           description:       `AR Recognition — ${invoice.invoiceNumber}${invoice.customerSnapshot?.fullName ? ' (' + invoice.customerSnapshot.fullName + ')' : ''}`,
+          // One receivable per invoice, forever — a retry must not bill twice.
+          idempotencyKey: `invoice-ar:${invoice._id}`,
           transactionType:   TRANSACTION_TYPES.CREDIT_SALE,
           amount:            primaryBase,          // BASE currency (F2)
           baseCurrencyAmount: primaryBase,         // pinned so the model hook can't re-multiply
@@ -846,6 +850,8 @@ class InvoiceService {
             businessId,
             transactionDate:   invoice.issueDate,
             description:       `AR Output Tax — ${invoice.invoiceNumber}`,
+            // The output-tax leg of the same recognition event.
+            idempotencyKey: `invoice-tax:${invoice._id}`,
             transactionType:   TRANSACTION_TYPES.CREDIT_SALE,
             amount:            taxBase,            // BASE currency (F2)
             baseCurrencyAmount: taxBase,
@@ -938,6 +944,8 @@ class InvoiceService {
       businessId:        invoice.businessId,
       transactionDate:   invoice.issueDate,
       description:       `COGS — ${invoice.invoiceNumber}`,
+      // Stock is relieved once for an invoice.
+      idempotencyKey: `invoice-cogs:${invoice._id}`,
       transactionType:   TRANSACTION_TYPES.EXPENSE,
       amount:            totalCogs,
       debitAccountId:    cogsAccountId,        // DR Cost of Goods Sold
@@ -988,6 +996,8 @@ class InvoiceService {
       businessId,
       transactionDate:   new Date(),
       description:       `Invoice Payment — ${invoice.invoiceNumber}${invoice.customerSnapshot?.fullName ? ' (' + invoice.customerSnapshot.fullName + ')' : ''}`,
+      // markPaid settles the whole invoice in one entry.
+      idempotencyKey: `invoice-markpaid:${invoice._id}`,
       transactionType:   TRANSACTION_TYPES.PAYMENT_RECEIVED,
       amount:            settleBase,
       baseCurrencyAmount: settleBase,

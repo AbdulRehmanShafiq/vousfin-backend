@@ -151,6 +151,9 @@ class AssemblyService {
           businessId,
           transactionDate: when,
           description: `Labour built into stock — ${quote.outputQty} × ${bom.name || 'assembly'}`,
+          // Repeatable on purpose: the same BOM is built again and again. A key
+          // derived from the BOM would block the second legitimate build.
+          idempotencyKey: null,
           transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
           amount: labour,
           debitAccountId: inventoryAccountId, // value into the finished good

@@ -115,21 +115,28 @@ describe('a keyed posting', () => {
   });
 });
 
-describe('an unkeyed posting', () => {
-  it('is NOT protected — this is the remaining exposure, not the design', async () => {
-    // Documents today's truth rather than the ideal. The partial index only
-    // binds when a key exists, so a keyless caller double-posts freely and the
-    // balance doubles with it. Every posting that represents a once-ever event
-    // now carries a key; what is left are the genuinely repeatable operations
-    // (stock adjustments, builds, recalcs), where retry-safety has to come from
-    // a caller-supplied request key at the API boundary.
-    await post();
-    await post();
+describe('a posting that never declared a key', () => {
+  it('is refused — forgetting is no longer possible', async () => {
+    // This test used to assert the opposite, documenting the exposure: the
+    // partial index only binds when a key exists, so a keyless caller
+    // double-posted freely and the balance doubled with it. The poster now
+    // demands the decision, so the exposure is closed at the chokepoint rather
+    // than left to each of 22 callers to remember.
+    await expect(post()).rejects.toThrow(/must declare its idempotencyKey/i);
+    expect(await count()).toBe(0);
+  });
+
+  it('still allows a genuinely repeatable posting via an explicit null', async () => {
+    // Stock adjustments, builds and recalcs are repeatable on purpose: doing one
+    // twice is a real thing an owner does, and a key derived from the entity
+    // would block the second valid one. `null` says "I decided", not "I forgot".
+    await post({ idempotencyKey: null });
+    await post({ idempotencyKey: null });
 
     expect(await count()).toBe(2);
     expect(await balanceOf('1110')).toBe(2000);
-    // Note the books are still INTERNALLY consistent — double-posting is not
-    // corruption, it is duplication. That is exactly why nothing caught it.
+    // Note the books stay INTERNALLY consistent either way — duplication is not
+    // corruption, which is exactly why nothing caught it for so long.
     await expectGoldenInvariants(ctx.businessId);
   });
 });

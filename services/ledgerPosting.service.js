@@ -124,6 +124,34 @@ async function applyRunningBalance(accountId, amount, side, { session = null, st
 async function postCompoundJournal(payload, { updateBalances = true, session = null } = {}) {
   const { lines, idempotencyKey, metadata, ...rest } = payload;
 
+  // Idempotency is a DECISION, not an afterthought.
+  //
+  // F7 built the mechanism — a unique partial index, E11000 translated into
+  // "already posted" — but it was opt-in, and 14 of 22 posting services opted
+  // out. `if (idempotencyKey)` meant no key = no protection at all, and the
+  // partial index only binds when a key exists. Any retry double-posted.
+  //
+  // So the key is required, with the two cases distinguished:
+  //   • a string  → this event happens once; the DB enforces it
+  //   • null      → deliberately repeatable (a build, a stock adjustment, a
+  //                 recalc: doing it twice is a real thing an owner does, and a
+  //                 key derived from the entity would block the second valid one)
+  //   • undefined → you forgot. Throw.
+  //
+  // Enforcing here is the same move as the balance rule: a rule inside the
+  // chokepoint cannot be forgotten by the next caller.
+  if (idempotencyKey === undefined) {
+    throw new ApiError(
+      500,
+      'A journal posting must declare its idempotencyKey: pass a stable key for a '
+      + 'once-ever event (e.g. `invoice-ar:<id>`), or an explicit null if this '
+      + 'posting is legitimately repeatable.'
+    );
+  }
+  if (idempotencyKey !== null && typeof idempotencyKey !== 'string') {
+    throw new ApiError(500, 'idempotencyKey must be a string or null.');
+  }
+
   // `inputMethod` is REQUIRED by the schema, and seven system posting sites in
   // invoice/bill omitted it — every one of them would have thrown a
   // ValidationError. It stayed invisible because those paths were unreachable

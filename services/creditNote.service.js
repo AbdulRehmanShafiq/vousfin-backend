@@ -227,6 +227,8 @@ class CreditNoteService {
           businessId:         cn.businessId,
           transactionDate:    new Date(),
           description:        `Credit Note ${cn.creditNoteNumber} applied to ${cn.invoiceNumber || invoice.invoiceNumber}`,
+          // A credit note applies to a given invoice once.
+          idempotencyKey: `credit-note-apply:${cn._id}:${invoice._id}`,
           transactionType:    TRANSACTION_TYPES.REFUND,
           amount:             creditBase,
           debitAccountId:     salesReturnsAcct._id,
@@ -304,6 +306,8 @@ class CreditNoteService {
               businessId:        cn.businessId,
               transactionDate:   new Date(),
               description:       `Returned goods restocked — Credit Note ${cn.creditNoteNumber}`,
+              // Returned goods go back on the shelf once.
+              idempotencyKey: `credit-note-restock:${cn._id}`,
               transactionType:   TRANSACTION_TYPES.REFUND,
               amount:            restockValue,
               debitAccountId:    inventoryAccountId,  // DR Inventory — goods are back
@@ -355,6 +359,8 @@ class CreditNoteService {
           businessId:         cn.businessId,
           transactionDate:    new Date(),
           description:        `Debit Note ${cn.creditNoteNumber} applied to ${cn.invoiceNumber || invoice.invoiceNumber}`,
+          // A debit note applies to a given invoice once.
+          idempotencyKey: `debit-note-apply:${cn._id}:${invoice._id}`,
           transactionType:    TRANSACTION_TYPES.CREDIT_SALE || 'Credit Sale',
           amount:             debitBase,
           debitAccountId:     arAcct._id,

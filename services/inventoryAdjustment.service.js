@@ -123,6 +123,9 @@ class InventoryAdjustmentService {
           businessId,
           transactionDate: when,
           description: `Stock increased — ${item.name}: ${qty} ${item.unit || 'units'} (${REASON_LABELS[reason]})`,
+          // Repeatable on purpose: two identical write-offs/top-ups on the same
+          // day are a real thing an owner does. Retry-safety belongs at the API.
+          idempotencyKey: null,
           transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
           amount: value,
           debitAccountId: accounts.inventoryAccountId,
@@ -155,6 +158,8 @@ class InventoryAdjustmentService {
         businessId,
         transactionDate: when,
         description: `Stock ${type === 'write_off' ? 'written off' : 'decreased'} — ${item.name}: ${qty} ${item.unit || 'units'} (${REASON_LABELS[reason]})`,
+        // Repeatable on purpose — see above.
+        idempotencyKey: null,
         transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
         amount: quote.cogsAmount,
         debitAccountId: accounts.writeOffAccountId,
@@ -234,6 +239,8 @@ class InventoryAdjustmentService {
       businessId: item.businessId,
       transactionDate: when,
       description: `Inventory revalued — ${item.name}: ${item.unitCostPrice} → ${newUnitCost} per ${item.unit || 'unit'} (${REASON_LABELS[reason]})`,
+      // Repeatable on purpose: stock can be re-marked more than once.
+      idempotencyKey: null,
       transactionType: TRANSACTION_TYPES.JOURNAL_ENTRY,
       amount: Math.abs(delta),
       debitAccountId: down ? accounts.writeOffAccountId : accounts.inventoryAccountId,

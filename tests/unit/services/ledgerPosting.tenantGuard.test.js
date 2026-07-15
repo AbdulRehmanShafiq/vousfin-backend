@@ -39,6 +39,9 @@ const payload = () => ({
     { accountId: 'a1', type: 'debit', amount: 100 },
     { accountId: 'a2', type: 'credit', amount: 100 },
   ],
+  // The poster requires an explicit idempotency decision; this suite is about
+  // the tenant guard.
+  idempotencyKey: null,
 });
 
 beforeEach(() => jest.clearAllMocks());

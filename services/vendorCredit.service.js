@@ -167,6 +167,8 @@ class VendorCreditService {
           businessId:        data.businessId,
           transactionDate:   vc.creditDate || new Date(),
           description:       `Goods returned to vendor — ${vc.creditNumber}`,
+          // Stock leaves for a return once.
+          idempotencyKey: `vendor-credit-return:${vc._id}`,
           transactionType:   TRANSACTION_TYPES.JOURNAL_ENTRY,
           amount:            creditBase,
           debitAccountId:    clearingAcct._id,
@@ -378,6 +380,8 @@ class VendorCreditService {
       businessId,
       transactionDate:  new Date(),
       description:      `Vendor Credit Applied — ${vc.creditNumber} → Bill ${bill.billNumber}`,
+      // A vendor credit applies to a given bill once.
+      idempotencyKey: `vendor-credit-apply:${vc._id}:${bill._id}`,
       transactionType:  TRANSACTION_TYPES.PAYMENT_MADE,
       amount:           appliedBase,
       baseCurrencyAmount: appliedBase,
