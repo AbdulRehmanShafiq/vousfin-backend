@@ -7,6 +7,11 @@ jest.mock('../../../services/audit.service');
 // AP-liability posting dependencies — previously UNMOCKED, which let the
 // silent swallow in approve() hide postApLiabilityJournal throwing without a DB.
 jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() }));
+// AP recognition resolves 2110 / 6390 by code through the resolver, which seeds a
+// missing default rather than skipping the payable. Proved for real in tests/live.
+jest.mock('../../../services/accountResolver.service', () => ({
+  resolve: jest.fn(), resolveId: jest.fn(), resolveMany: jest.fn(),
+}));
 jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn(), postCompoundJournal: jest.fn() }));
 jest.mock('../../../services/partyBalance.service', () => ({ adjustPayable: jest.fn() }));
 jest.mock('../../../services/billMatching.service', () => ({ runFullMatch: jest.fn() }));
@@ -67,6 +72,7 @@ const billService = require('../../../services/bill.service');
 const auditService = require('../../../services/audit.service');
 const vendorRepository = require('../../../repositories/vendor.repository');
 const ChartOfAccount = require('../../../models/ChartOfAccount.model');
+const accountResolver = require('../../../services/accountResolver.service');
 const { postBalancedJournal, postCompoundJournal } = require('../../../services/ledgerPosting.service');
 const partyBalanceService = require('../../../services/partyBalance.service');
 const billMatchingService = require('../../../services/billMatching.service');
@@ -94,6 +100,13 @@ beforeEach(() => {
       return null;
     },
   }));
+  // Delegate to whatever ChartOfAccount.findOne is currently stubbed to return,
+  // so a test that overrides the accounts drives the resolver too and keeps its
+  // own intent — rather than every such test needing to stub both.
+  accountResolver.resolve.mockImplementation((biz, code) =>
+    ChartOfAccount.findOne({ businessId: biz, accountCode: code }).lean());
+  accountResolver.resolveId.mockImplementation(async (biz, code) =>
+    (await ChartOfAccount.findOne({ businessId: biz, accountCode: code }).lean())?._id);
   postBalancedJournal.mockResolvedValue({ _id: new mongoose.Types.ObjectId() });
   postCompoundJournal.mockResolvedValue({ _id: new mongoose.Types.ObjectId() });
   partyBalanceService.adjustPayable.mockResolvedValue(undefined);

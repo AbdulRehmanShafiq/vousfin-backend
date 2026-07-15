@@ -15,6 +15,11 @@
 'use strict';
 
 jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() }));
+// AR/AP recognition resolves its control + income/expense accounts by code through
+// the resolver, which seeds a missing default instead of skipping the posting.
+jest.mock('../../../services/accountResolver.service', () => ({
+  resolve: jest.fn(), resolveId: jest.fn(), resolveMany: jest.fn(),
+}));
 jest.mock('../../../services/ledgerPosting.service', () => ({
   postBalancedJournal: jest.fn(),
   postCompoundJournal: jest.fn(),
@@ -34,6 +39,7 @@ jest.mock('../../../config/logger', () => ({ info: jest.fn(), warn: jest.fn(), e
 
 const mongoose = require('mongoose');
 const ChartOfAccount = require('../../../models/ChartOfAccount.model');
+const accountResolver = require('../../../services/accountResolver.service');
 const { postBalancedJournal, postCompoundJournal } = require('../../../services/ledgerPosting.service');
 const partyBalanceService = require('../../../services/partyBalance.service');
 const invoiceService = require('../../../services/invoice.service');
@@ -53,6 +59,11 @@ beforeEach(() => {
   jest.clearAllMocks();
   postBalancedJournal.mockResolvedValue({ _id: 'je1' });
   postCompoundJournal.mockResolvedValue({ _id: 'je2' });
+  // The control account (1110/2110) and the income/expense account are resolved
+  // by code; each test's ChartOfAccount stub still supplies everything else.
+  const byCode = { 1110: AR_ID, 4110: REV_ID, 2110: AP_ID, 6390: EXP_ID };
+  accountResolver.resolve.mockImplementation(async (_biz, code) => ({ _id: byCode[code], accountCode: code }));
+  accountResolver.resolveId.mockImplementation(async (_biz, code) => byCode[code]);
 });
 
 describe('invoice.postArJournal — foreign invoice posts base amounts', () => {

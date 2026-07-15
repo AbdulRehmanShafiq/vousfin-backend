@@ -15,6 +15,7 @@ const auditService = require('./audit.service');
 const billMatchingService = require('./billMatching.service');
 const partyBalanceService = require('./partyBalance.service');     // ERP Step 4 — centralized AP balance
 const { postBalancedJournal, postCompoundJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync; A13 — compound GRNI-clearing AP entry
+const accountResolver = require('./accountResolver.service');       // resolve-or-seed; never skip a posting
 const accountRepo = require('../repositories/account.repository');  // A13 — resolve / back-fill GRNI (2115)
 const { withTransaction } = require('../utils/withTransaction');   // R-01 — atomic recognition unit
 const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // ERP Step 4 — event broadcasts
@@ -682,22 +683,32 @@ class BillService {
     const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
     const businessId = bill.businessId;
 
-    // ── Find Accounts Payable account (code 2110) ────────────────────────────
-    const apAccount = await ChartOfAccount.findOne({ businessId, accountCode: '2110' }).lean();
-    if (!apAccount) {
-      logger.warn(`[bill] AP journal skipped for ${bill.billNumber} — Accounts Payable (2110) not found`);
-      return null;
-    }
+    // ── Accounts Payable (2110) ──────────────────────────────────────────────
+    // Resolved, never skipped. This used to warn and `return null` when 2110 was
+    // absent, so the bill became approved while the payable was silently never
+    // recognised — the AP mirror of the invoice fail-open. 2110 is a default, so
+    // the resolver seeds it rather than failing.
+    const apAccount = await accountResolver.resolve(businessId, '2110');
 
-    // Resolve the expense/inventory debit account (line account → purchases → fallback).
+    // Expense/inventory debit account (line account → Purchases 5100).
     let expenseAccountId = null;
     if (bill.lineItems && bill.lineItems.length > 0) {
       const firstWithAccount = bill.lineItems.find((li) => li.accountId);
       if (firstWithAccount) expenseAccountId = firstWithAccount.accountId;
     }
     if (!expenseAccountId) {
-      const purchasesAcc = await ChartOfAccount.findOne({ businessId, accountCode: { $in: ['5100', '5000', '6100'] } }).lean();
-      if (purchasesAcc) expenseAccountId = purchasesAcc._id;
+      // Falls back to Miscellaneous Expenses (6390).
+      //
+      // The old fallback asked for 5100 → 5000 → 6100, and NONE of those exist in
+      // DEFAULT_ACCOUNTS — so for any standard business the chain always resolved
+      // to null, warned, and skipped the AP journal entirely. It stayed hidden
+      // only because bill lines normally carry an explicit account.
+      //
+      // 6390 is the honest answer to "an expense whose category we were not told":
+      // it says we do not know, rather than guessing a category and being
+      // confidently wrong, and the owner can recategorise it. Booking the payable
+      // to Miscellaneous is strictly better than not booking it at all.
+      expenseAccountId = await accountResolver.resolveId(businessId, '6390');
     }
 
     // F2 (residual) — the ledger is BASE currency; the bill keeps its foreign
@@ -726,10 +737,9 @@ class BillService {
       lines.push({ accountId: grniAcc._id, type: 'debit', amount: grniDebit, description: 'Clear goods received not invoiced' });
     }
     if (expenseDebit > 0.0001) {
-      if (!expenseAccountId) {
-        logger.warn(`[bill] AP journal skipped for ${bill.billNumber} — no expense account for the non-GRNI remainder`);
-        return null;
-      }
+      // No `if (!expenseAccountId) return null` guard: the resolver above either
+      // returns an account or throws, so this can no longer be unset. Skipping
+      // here was the fail-open — it dropped the whole payable on the floor.
       lines.push({ accountId: expenseAccountId, type: 'debit', amount: expenseDebit, description: 'Purchase / expense' });
     }
     if (taxAmount > 0) {

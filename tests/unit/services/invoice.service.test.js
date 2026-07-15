@@ -13,6 +13,13 @@ jest.mock('../../../services/fx.service', () => ({
 // AR-recognition posting deps — previously UNMOCKED, so the silent swallow in
 // approve() hid postArJournal throwing without a DB.
 jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() }));
+// AR recognition resolves 1110/4110 by code through the resolver, which seeds a
+// missing default rather than skipping the posting. Its own behaviour is proved
+// for real in tests/live/accountResolver.live.test.js; here it just has to hand
+// back the same accounts this suite already stubs.
+jest.mock('../../../services/accountResolver.service', () => ({
+  resolve: jest.fn(), resolveId: jest.fn(), resolveMany: jest.fn(),
+}));
 jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn() }));
 jest.mock('../../../services/partyBalance.service', () => ({ adjustReceivable: jest.fn() }));
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
@@ -98,6 +105,7 @@ const invoiceService = require('../../../services/invoice.service');
 const auditService   = require('../../../services/audit.service');
 const customerRepository = require('../../../repositories/customer.repository');
 const ChartOfAccount = require('../../../models/ChartOfAccount.model');
+const accountResolver = require('../../../services/accountResolver.service');
 const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
 const partyBalanceService = require('../../../services/partyBalance.service');
 
@@ -124,6 +132,16 @@ beforeEach(() => {
       return null;
     },
   }));
+  // Delegate to whatever ChartOfAccount.findOne is currently stubbed to return, so
+  // a test that overrides the accounts drives the resolver too and keeps its own
+  // intent. The revenue lookup used to be an $in over hopefuls and is now the code
+  // '4110', so map that onto the same stub.
+  accountResolver.resolve.mockImplementation(async (biz, code) =>
+    (code === '1110'
+      ? { _id: AR_ID, accountCode: '1110' }
+      : { _id: REV_ID, accountCode: code }));
+  accountResolver.resolveId.mockImplementation(async (biz, code) =>
+    (code === '1110' ? AR_ID : REV_ID));
   postBalancedJournal.mockResolvedValue({ _id: new mongoose.Types.ObjectId() });
   partyBalanceService.adjustReceivable.mockResolvedValue(undefined);
 });

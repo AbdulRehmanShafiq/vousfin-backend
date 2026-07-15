@@ -44,6 +44,7 @@ const JournalEntry = require('../models/JournalEntry.model');
 const accountRepository = require('../repositories/account.repository');
 const { withTransaction } = require('../utils/withTransaction');
 const { ApiError } = require('../utils/ApiError');
+const { INPUT_METHODS } = require('../config/constants');
 const logger = require('../config/logger');
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
@@ -122,6 +123,19 @@ async function applyRunningBalance(accountId, amount, side, { session = null, st
  */
 async function postCompoundJournal(payload, { updateBalances = true, session = null } = {}) {
   const { lines, idempotencyKey, metadata, ...rest } = payload;
+
+  // `inputMethod` is REQUIRED by the schema, and seven system posting sites in
+  // invoice/bill omitted it — every one of them would have thrown a
+  // ValidationError. It stayed invisible because those paths were unreachable
+  // (the below-threshold early return) and because the unit tests mock this
+  // poster, so no schema ever ran.
+  //
+  // Defaulting it here rather than at seven call sites is the same reasoning as
+  // the balance rule: enforce in the chokepoint and the next caller cannot get
+  // it wrong either. A system-generated posting is never a user input method —
+  // the human paths (transaction.service: excel/nlp/batch) pass their own and
+  // are untouched.
+  if (!rest.inputMethod) rest.inputMethod = INPUT_METHODS.FORM;
 
   if (!Array.isArray(lines) || lines.length < 2) {
     throw new ApiError(400, 'A journal needs at least two lines.');

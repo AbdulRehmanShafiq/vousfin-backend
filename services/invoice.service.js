@@ -31,6 +31,7 @@ const auditService = require('./audit.service');
 const fxService = require('./fx.service');
 const partyBalanceService = require('./partyBalance.service');     // ERP Step 4 — centralized AR balance
 const { postBalancedJournal } = require('./ledgerPosting.service'); // ERP Step 4 — JE + running-balance sync
+const accountResolver = require('./accountResolver.service');       // resolve-or-seed; never skip a posting
 const { withTransaction } = require('../utils/withTransaction');   // R-01 — atomic recognition unit
 const { businessEvents, EVENTS } = require('./businessEventEngine.service'); // ERP Step 4 — event broadcasts
 const { ApiError } = require('../utils/ApiError');
@@ -46,6 +47,7 @@ const {
   DEFAULT_APPROVAL_THRESHOLD,
   TRANSACTION_TYPES,
   TRANSACTION_SOURCES,
+  INPUT_METHODS,
   JOURNAL_STATUS,
 } = require('../config/constants');
 
@@ -739,32 +741,35 @@ class InvoiceService {
     const businessId = invoice.businessId;
 
     // ── AR control account (1110) ────────────────────────────────────────────
-    const arAccount = await ChartOfAccount.findOne({ businessId, accountCode: '1110' }).lean();
-    if (!arAccount) {
-      logger.warn(`[invoice] AR journal skipped for ${invoice.invoiceNumber} — Accounts Receivable (1110) not found`);
-      return null;
-    }
+    // Resolved, never skipped. This used to warn and `return null` when 1110 was
+    // absent — so the invoice still became approved while the receivable and the
+    // revenue were silently never recognised. Meanwhile _applyCogsForInvoice, in
+    // this very file, was fixed to fail CLOSED (INV-5): one half of an invoice
+    // relieved stock and posted COGS while the other half posted nothing.
+    // 1110 is a default, so the resolver seeds it rather than failing.
+    const arAccount = await accountResolver.resolve(businessId, '1110');
 
-    // ── Revenue (credit) account: line-item account → Sales (4110) → fallbacks ──
+    // ── Revenue (credit) account: line-item account → Sales (4110) ────────────
     let revenueAccountId = null;
     if (invoice.lineItems && invoice.lineItems.length > 0) {
       const firstWithAccount = invoice.lineItems.find((li) => li.accountId);
       if (firstWithAccount) revenueAccountId = firstWithAccount.accountId;
     }
     if (!revenueAccountId) {
-      const revenueAcc = await ChartOfAccount.findOne({
-        businessId,
-        accountCode: { $in: ['4110', '4150', '4120', '4100'] },
-      }).lean();
-      if (revenueAcc) revenueAccountId = revenueAcc._id;
-    }
-    if (!revenueAccountId) {
-      logger.warn(`[invoice] AR journal skipped for ${invoice.invoiceNumber} — no revenue account found`);
-      return null;
+      // The old $in fallback list existed because any one of these might be
+      // missing. The resolver makes that moot: 4110 is a default, so it is
+      // either there or seeded — no list of hopefuls needed.
+      revenueAccountId = await accountResolver.resolveId(businessId, '4110');
     }
     if (revenueAccountId.toString() === arAccount._id.toString()) {
-      logger.warn(`[invoice] AR journal skipped — debit and credit are the same account`);
-      return null;
+      // Not healable — a line item is pointing revenue at the AR control
+      // account. Refuse rather than post a journal that says nothing.
+      throw new ApiError(
+        400,
+        `${invoice.invoiceNumber} can't be recorded: its income is pointed at the `
+        + 'Accounts Receivable account, so the entry would cancel itself out. '
+        + 'Pick an income account on the invoice line, then try again.'
+      );
     }
 
     const netAmount = r2(invoice.amount || (invoice.totalAmount - (invoice.taxAmount || 0)));
@@ -809,6 +814,11 @@ class InvoiceService {
           debitAccountId:    arAccount._id,
           creditAccountId:   revenueAccountId,
           status:            JOURNAL_STATUS.POSTED,
+          // REQUIRED by the JournalEntry schema. Its absence threw a
+          // ValidationError on every AR recognition — invisible until now
+          // because the below-threshold early return meant this path was never
+          // reached, and the unit tests mock the poster, so no schema ever ran.
+          inputMethod:       INPUT_METHODS.FORM,
           transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
           invoiceNumber:     invoice.invoiceNumber,
           customerId:        invoice.customerId || null,

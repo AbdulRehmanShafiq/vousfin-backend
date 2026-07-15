@@ -34,6 +34,17 @@ jest.mock('../../services/audit.service');
 jest.mock('../../services/purchaseOrder.service', () => ({
   recordGrnReceipt: jest.fn().mockResolvedValue({}),
 }));
+// AP recognition resolves 2110 / 6390 by code through the resolver, which seeds a
+// missing default instead of skipping the payable. This suite's ChartOfAccount
+// mock already defines those accounts; hand back the same ones.
+jest.mock('../../services/accountResolver.service', () => {
+  const coa = require('../../models/ChartOfAccount.model');
+  return {
+    resolve:   jest.fn(async (biz, code) => coa.findOne({ businessId: biz, accountCode: code }).lean()),
+    resolveId: jest.fn(async (biz, code) => (await coa.findOne({ businessId: biz, accountCode: code }).lean())?._id),
+    resolveMany: jest.fn(),
+  };
+});
 jest.mock('../../services/inventory.service', () => ({
   applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
   reduceStock:        jest.fn().mockResolvedValue({ updatedStock: 0 }),
