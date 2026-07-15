@@ -1,5 +1,6 @@
 // controllers/report.controller.js
 const reportService      = require('../services/report.service');
+const booksAssurance     = require('../services/booksAssurance.service');
 const ApiResponse        = require('../utils/ApiResponse');
 const { ApiError }       = require('../utils/ApiError');
 const pdfExport          = require('../utils/pdfExport.utils');
@@ -97,6 +98,26 @@ const getCashFlowStatement = async (req, res, next) => {
 };
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
+
+/**
+ * GET /reports/books-assurance — do the books still add up?
+ *
+ * The standing check behind the product's claim: not "we hope so", but four
+ * invariants re-derived from the accounting records on every request. Nothing is
+ * stored or cached — a verdict with a shelf life would be the very thing this
+ * exists to disprove.
+ */
+const getBooksAssurance = async (req, res, next) => {
+  try {
+    const { asOfDate } = resolveReportDates(req.query);
+    const data = await booksAssurance.verify(req.user.businessId, { asOf: toEndOfDay(asOfDate) });
+    ApiResponse.success(
+      res,
+      data,
+      data.correct ? 'Your books add up' : data.summary
+    );
+  } catch (err) { next(err); }
+};
 
 const getTrialBalance = async (req, res, next) => {
   try {
@@ -373,6 +394,7 @@ const getNarrative = async (req, res, next) => {
 };
 
 module.exports = {
+  getBooksAssurance,
   getIncomeStatement,
   getBalanceSheet,
   getCashFlowStatement,

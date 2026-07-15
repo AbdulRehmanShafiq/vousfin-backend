@@ -24,6 +24,10 @@ const { attachMembership, requirePermission } = require('../../middleware/rbac.m
 const { PERMISSIONS } = require('../../config/constants');
 router.use(authMiddleware, requireBusiness, attachMembership);
 
+// ── Books assurance ──────────────────────────────────────────────────────────
+// Deliberately unvalidated on query: asOfDate is optional and defaults to now.
+router.get('/books-assurance',     ctrl.getBooksAssurance);
+
 // ── Core financial statements ────────────────────────────────────────────────
 router.get('/income-statement',    validate(incomeStatementSchema,    'query'), ctrl.getIncomeStatement);
 // Common aliases — both resolve to the same income-statement handler
