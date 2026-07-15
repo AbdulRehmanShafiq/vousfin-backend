@@ -85,10 +85,15 @@ jest.mock('../../../models/VendorCredit.model', () => {
 
 // GL deps for applyToBill() — vendor credits now post atomically (audit A9), so the
 // application must resolve accounts, a poster, the party-balance service and a txn wrapper.
+// Account lookups resolve to a stable id PER ACCOUNT CODE so the Phase 3 tests
+// can assert which account each journal leg actually hit.
 jest.mock('../../../models/ChartOfAccount.model', () => ({
-  findOne: jest.fn(() => ({
-    lean: () => Promise.resolve({ _id: new (require('mongoose').Types.ObjectId)() }),
-  })),
+  findOne: jest.fn((q) => {
+    const code = typeof q?.accountCode === 'string'
+      ? q.accountCode
+      : (q?.accountCode?.$in ? q.accountCode.$in[0] : 'GENERIC');
+    return { lean: () => Promise.resolve({ _id: `acct-${code}` }) };
+  }),
 }));
 jest.mock('../../../services/ledgerPosting.service', () => ({
   postBalancedJournal: jest.fn().mockResolvedValue({ _id: 'je-vc' }),
@@ -100,11 +105,22 @@ jest.mock('../../../services/partyBalance.service', () => ({
 jest.mock('../../../utils/withTransaction', () => ({
   withTransaction: (fn) => fn(null),
 }));
+// Phase 3 (INV-2) — goods physically returning to the vendor.
+jest.mock('../../../services/inventory.service', () => ({
+  resolveCostAccounts: jest.fn().mockResolvedValue({ cogsAccountId: 'acct-5110', inventoryAccountId: 'acct-1150' }),
+  reduceStock: jest.fn().mockResolvedValue({ cogsAmount: 0, unitCostUsed: 0 }),
+  applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
+}));
+jest.mock('../../../services/transaction.service', () => ({
+  reverseTransaction: jest.fn().mockResolvedValue({ _id: 'rev-je' }),
+}));
 
 const VendorCredit = require('../../../models/VendorCredit.model');
 const Bill         = require('../../../models/Bill.model');
 const vcService    = require('../../../services/vendorCredit.service');
 const auditService = require('../../../services/audit.service');
+const inventoryService = require('../../../services/inventory.service');
+const transactionService = require('../../../services/transaction.service');
 const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
 
 const USER = { _id: 'u1', fullName: 'Carol AP', email: 'carol@x', role: 'accountant' };
@@ -116,6 +132,8 @@ beforeEach(() => {
   auditService.log       = jest.fn().mockResolvedValue(undefined);
   auditService.logCreate = jest.fn().mockResolvedValue(undefined);
   auditService.logDelete = jest.fn().mockResolvedValue(undefined);
+  auditService.logUpdate = jest.fn().mockResolvedValue(undefined);
+  inventoryService.resolveCostAccounts.mockResolvedValue({ cogsAccountId: 'acct-5110', inventoryAccountId: 'acct-1150' });
 
   // Default bill mock: approved, Rs 5000 outstanding
   const mockBill = Bill.__makeBill({ totalAmount: 5000, state: 'approved', businessId: BIZ });
@@ -151,6 +169,102 @@ describe('vcService.create()', () => {
     await expect(
       vcService.create({ ...baseData, amount: 0 }, USER)
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  // ── Phase 3 (INV-2): goods physically returned to the vendor ──────────────
+  // A money-only credit is unchanged; a credit WITH returnItems must take the
+  // stock out and park the credit's value in Vendor Credit Clearing (1156)
+  // until it is applied against a bill.
+  describe('goods return (returnItems)', () => {
+    const ITEM = 'item-A';
+    const returnData = (over = {}) => ({
+      ...baseData, amount: 2000,
+      returnItems: [{ inventoryItemId: ITEM, quantity: 4 }],
+      ...over,
+    });
+
+    test('money-only credit never touches stock (unchanged behavior)', async () => {
+      const vc = await vcService.create(baseData, USER);
+      expect(inventoryService.reduceStock).not.toHaveBeenCalled();
+      expect(vc.inventoryJournalId).toBeUndefined();
+      expect(postBalancedJournal).not.toHaveBeenCalled();
+    });
+
+    test('takes stock out at cost and posts DR 1156 clearing / CR 1150 inventory', async () => {
+      // 4 units leaving at cost 400 total; vendor credits 2000 → 1600 above cost.
+      inventoryService.reduceStock.mockResolvedValue({ cogsAmount: 400, unitCostUsed: 100 });
+      const vc = await vcService.create(returnData(), USER);
+
+      expect(inventoryService.reduceStock).toHaveBeenCalledWith(
+        BIZ, ITEM, 4, null, expect.objectContaining({ movementType: 'purchase_return' })
+      );
+      expect(vc.returnItems[0].unitCostAtReturn).toBe(100); // remembered for cancel
+
+      const [je] = postBalancedJournal.mock.calls[0];
+      expect(je.amount).toBe(2000);
+      const dr = je.journalLines.filter((l) => l.type === 'debit');
+      const cr = je.journalLines.filter((l) => l.type === 'credit');
+      expect(dr).toEqual([expect.objectContaining({ accountId: 'acct-1156', amount: 2000 })]);
+      expect(cr).toEqual(expect.arrayContaining([
+        expect.objectContaining({ accountId: 'acct-1150', amount: 400 }),   // inventory out at cost
+        expect.objectContaining({ accountId: 'acct-4180', amount: 1600 }),  // credited above cost
+      ]));
+      // Balanced: 2000 DR == 400 + 1600 CR
+      expect(dr.reduce((s, l) => s + l.amount, 0)).toBe(cr.reduce((s, l) => s + l.amount, 0));
+      expect(vc.inventoryJournalId).toBe('je-vc');
+    });
+
+    test('credit below cost books the shortfall to Inventory Write-off (6495)', async () => {
+      // 4 units leaving at cost 2500; vendor credits only 2000 → 500 loss.
+      inventoryService.reduceStock.mockResolvedValue({ cogsAmount: 2500, unitCostUsed: 625 });
+      await vcService.create(returnData(), USER);
+
+      const [je] = postBalancedJournal.mock.calls[0];
+      const dr = je.journalLines.filter((l) => l.type === 'debit');
+      expect(dr).toEqual(expect.arrayContaining([
+        expect.objectContaining({ accountId: 'acct-1156', amount: 2000 }),
+        expect.objectContaining({ accountId: 'acct-6495', amount: 500 }),
+      ]));
+      expect(dr.reduce((s, l) => s + l.amount, 0)).toBe(2500); // == CR inventory 2500
+    });
+
+    test('applying a goods-return credit drains the clearing account, not income', async () => {
+      inventoryService.reduceStock.mockResolvedValue({ cogsAmount: 400, unitCostUsed: 100 });
+      const vc = await vcService.create(returnData(), USER);
+      postBalancedJournal.mockClear();
+
+      await vcService.applyToBill(vc._id, String(Bill.__mockBill._id), 1000, USER, null, '0.0.0.0');
+
+      const [je] = postBalancedJournal.mock.calls[0];
+      expect(je.debitAccountId).toBe('acct-2110');  // DR Accounts Payable
+      expect(je.creditAccountId).toBe('acct-1156'); // CR clearing — value already booked at creation
+    });
+
+    test('applying a money-only credit still books income (legacy treatment kept)', async () => {
+      const vc = await vcService.create(baseData, USER);
+      await vcService.applyToBill(vc._id, String(Bill.__mockBill._id), 1000, USER, null, '0.0.0.0');
+
+      const [je] = postBalancedJournal.mock.calls[0];
+      expect(je.debitAccountId).toBe('acct-2110');
+      expect(je.creditAccountId).toBe('acct-4180'); // Discount Received
+    });
+
+    test('cancelling a goods-return credit reverses the journal and restocks the goods', async () => {
+      inventoryService.reduceStock.mockResolvedValue({ cogsAmount: 400, unitCostUsed: 100 });
+      const vc = await vcService.create(returnData(), USER);
+
+      await vcService.cancel(vc._id, USER, 'vendor refused the return', '0.0.0.0');
+
+      expect(transactionService.reverseTransaction).toHaveBeenCalledWith(
+        'je-vc', BIZ, expect.objectContaining({ reason: expect.stringMatching(/cancelled/i) }), USER._id, '0.0.0.0'
+      );
+      // Goods come back at the SAME cost they left with
+      expect(inventoryService.applyPurchaseStock).toHaveBeenCalledWith(
+        BIZ, ITEM, 4, 100, expect.objectContaining({ movementType: 'adjustment_in' })
+      );
+      expect(vc.state).toBe('cancelled');
+      expect(vc.inventoryJournalId).toBeNull();
+    });
   });
 
   test('throws 400 for missing required fields', async () => {

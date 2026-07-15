@@ -24,6 +24,10 @@ const cnLineItemSchema = new mongoose.Schema(
     taxAmount:   { type: Number, default: 0, min: 0 },
     lineTotal:   { type: Number, default: 0, min: 0 },
     accountId:   { type: mongoose.Schema.Types.ObjectId, ref: 'ChartOfAccount', default: null },
+    // Inventory Engine Phase 3 — goods returns: link the returned line to the
+    // stock item and opt into restocking (goods came back in sellable state).
+    inventoryItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'InventoryItem', default: null },
+    restock:         { type: Boolean, default: false },
   },
   { _id: true }
 );
@@ -66,6 +70,14 @@ const creditNoteSchema = new mongoose.Schema(
     invoiceNumber: { type: String, default: null },
 
     linkedJournalEntryId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'JournalEntry',
+      default: null,
+    },
+
+    // Phase 3 — the DR Inventory / CR COGS journal posted when returned goods
+    // were restocked at apply time (null when nothing was restocked).
+    restockJournalEntryId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'JournalEntry',
       default: null,

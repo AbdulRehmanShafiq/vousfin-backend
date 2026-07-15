@@ -140,6 +140,7 @@ module.exports = {
     { accountCode: '1130', accountName: 'Short-term Deposits',           accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1140', accountName: 'Other Receivables',             accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1150', accountName: 'Inventory',                     accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
+    { accountCode: '1156', accountName: 'Vendor Credit Clearing',        accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1160', accountName: 'Advance Payments to Suppliers', accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1165', accountName: 'Employee Loans & Advances',     accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },
     { accountCode: '1167', accountName: 'Notes Receivable',              accountType: 'Asset',     accountSubtype: 'Current Assets',          normalBalance: 'Debit',  isDefault: true },

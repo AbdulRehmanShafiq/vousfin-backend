@@ -99,6 +99,25 @@ const vendorCreditSchema = new mongoose.Schema(
     // Track every partial application against bills
     appliedTransactions: { type: [applicationSchema], default: [] },
 
+    // Inventory Engine Phase 3 — physical goods being returned to the vendor.
+    // When present, creating the credit takes the stock OUT and posts
+    // DR Vendor Credit Clearing (1156) / CR Inventory (cost) ± the price
+    // difference; applications then clear 1156 instead of booking income.
+    returnItems: {
+      type: [
+        {
+          _id: false,
+          inventoryItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'InventoryItem', required: true },
+          quantity: { type: Number, required: true, min: 0.0001 },
+          /** Cost each unit left stock at (set at creation; used to restock on cancel). */
+          unitCostAtReturn: { type: Number, default: null, min: 0 },
+        },
+      ],
+      default: [],
+    },
+    // The compound journal posted at creation for the inventory leg.
+    inventoryJournalId: { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry', default: null },
+
     notes:    { type: String, default: null, maxlength: 1000, trim: true },
     tags:     [{ type: String, trim: true }],
 

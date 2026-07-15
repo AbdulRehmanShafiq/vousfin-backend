@@ -55,6 +55,17 @@ exports.getLowStockAlerts = async (req, res, next) => {
   } catch (e) { next(e); }
 };
 
+// Phase 2 — stock adjustment (increase/decrease/write_off/count/revalue)
+exports.adjustStock = async (req, res, next) => {
+  try {
+    const inventoryAdjustmentService = require('../services/inventoryAdjustment.service');
+    const result = await inventoryAdjustmentService.adjustStock(
+      req.user.businessId, req.params.id, req.body, req.user
+    );
+    ApiResponse.success(res, result, result?.noChange ? 'No change needed' : 'Stock adjusted');
+  } catch (e) { next(e); }
+};
+
 // Phase 1 — inventory ↔ sub-ledger integrity report (drift must read 0)
 exports.getIntegrityReport = async (req, res, next) => {
   try {

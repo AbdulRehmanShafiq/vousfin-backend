@@ -13,6 +13,8 @@
 const mongoose = require('mongoose');
 
 const MOVEMENT_TYPES = [
+  'opening',           // seeded opening balance — stock that predates the sub-ledger.
+                       // Carries NO journal: the GL already booked it when it was bought.
   'purchase',          // goods received (GRN confirm, direct purchase, add-stock)
   'sale',              // goods sold (invoice approval, direct sale transaction)
   'sale_return',       // customer returned goods → back into stock
@@ -20,8 +22,10 @@ const MOVEMENT_TYPES = [
   'receipt_reversal',  // a receipt undone (GRN cancel) at its receipt cost
   'sale_reversal',     // a sale undone (transaction reversal) → back into stock
   'adjustment_in',     // manual increase (found stock, correction)
-  'adjustment_out',    // manual decrease (shrinkage, damage, write-off)
+  'adjustment_out',    // manual decrease (shrinkage, damage)
+  'write_off',         // stock written off (damaged/expired/lost)
   'count',             // physical count variance posting
+  'revalue',           // value-only cost revaluation (NRV write-down etc.) — qty 0
   'transfer_in',       // warehouse transfer arrival   (Phase 5)
   'transfer_out',      // warehouse transfer dispatch  (Phase 5)
   'assembly_in',       // manufacturing output         (Phase 9)
@@ -46,8 +50,9 @@ const stockMovementSchema = new mongoose.Schema(
     direction: { type: String, enum: ['in', 'out'], required: true },
     /** Business meaning — every type maps to one fixed JE recipe (spec §2.3). */
     movementType: { type: String, enum: MOVEMENT_TYPES, required: true },
-    /** Units moved — always positive; direction carries the sign. */
-    qty: { type: Number, required: true, min: 0.000001 },
+    /** Units moved — positive; direction carries the sign. Revaluations are
+     *  value-only events and carry qty 0 (Σqty untouched, Σvalue adjusted). */
+    qty: { type: Number, required: true, min: 0 },
     /** Cost per unit this movement was valued at (receipt cost / COGS unit cost). */
     unitCost: { type: Number, required: true, min: 0 },
     /** qty × unitCost, rounded to cents — the exact GL impact of this movement. */
@@ -69,6 +74,8 @@ const stockMovementSchema = new mongoose.Schema(
     /** Warehouse — null until Phase 5 introduces multi-warehouse. */
     warehouseId: { type: mongoose.Schema.Types.ObjectId, default: null },
     movementDate: { type: Date, required: true, default: Date.now },
+    /** Structured reason code (adjustments/write-offs/NRV) — plain notes below. */
+    reason: { type: String, default: null, trim: true, maxlength: 60 },
     notes: { type: String, default: null, trim: true, maxlength: 500 },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   },
@@ -93,9 +100,10 @@ for (const op of ['updateOne', 'updateMany', 'findOneAndUpdate', 'findOneAndRepl
 for (const op of ['deleteOne', 'deleteMany', 'findOneAndDelete']) {
   stockMovementSchema.pre(op, { document: false, query: true }, function () { throw new Error(APPEND_ONLY_MSG); });
 }
-stockMovementSchema.pre('save', function (next) {
-  if (!this.isNew) return next(new Error(APPEND_ONLY_MSG));
-  return next();
+// Promise-style (zero-arity) to match the hooks above — a `next` callback is
+// not passed here, and asking for one silently breaks every insert.
+stockMovementSchema.pre('save', function () {
+  if (!this.isNew) throw new Error(APPEND_ONLY_MSG);
 });
 
 const StockMovement = mongoose.model('StockMovement', stockMovementSchema);

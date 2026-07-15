@@ -104,8 +104,21 @@ jest.mock('../../../utils/withTransaction', () => ({
 jest.mock('../../../services/transaction.service', () => ({
   reverseTransaction: jest.fn().mockResolvedValue({ _id: 'rev-je' }),
 }));
+// Phase 3 (INV-2) — returned goods restock through the inventory engine.
+jest.mock('../../../services/inventory.service', () => ({
+  resolveCostAccounts: jest.fn().mockResolvedValue({ cogsAccountId: 'COGS', inventoryAccountId: 'INV' }),
+  applyPurchaseStock: jest.fn().mockResolvedValue({ item: {} }),
+  reduceStock: jest.fn().mockResolvedValue({ cogsAmount: 0, unitCostUsed: 0 }),
+}));
+global.__mockInvItemStore = new Map();
+jest.mock('../../../models/InventoryItem.model', () => ({
+  findOne: jest.fn((q) => ({
+    session: () => Promise.resolve(global.__mockInvItemStore.get(String(q._id)) || null),
+  })),
+}));
 
 const creditNoteService = require('../../../services/creditNote.service');
+const inventoryService = require('../../../services/inventory.service');
 const { postBalancedJournal } = require('../../../services/ledgerPosting.service');
 
 const user = { _id: new mongoose.Types.ObjectId(), fullName: 'Tester', email: 'test@test.com', role: 'owner' };
@@ -113,7 +126,9 @@ const user = { _id: new mongoose.Types.ObjectId(), fullName: 'Tester', email: 't
 beforeEach(() => {
   global.__mockCnStore.clear();
   global.__mockInvoiceStoreForCN.clear();
+  global.__mockInvItemStore.clear();
   jest.clearAllMocks();
+  inventoryService.resolveCostAccounts.mockResolvedValue({ cogsAccountId: 'COGS', inventoryAccountId: 'INV' });
 });
 
 function seedInvoice(overrides = {}) {
@@ -260,6 +275,95 @@ describe('CreditNote — approve + apply', () => {
     expect(applied.state).toBe('applied');
     // The poster is invoked with the session arg from withTransaction (null here).
     expect(postBalancedJournal).toHaveBeenCalledWith(expect.any(Object), { session: null });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Inventory Engine Phase 3 (INV-2) — returned goods go back into stock.
+// Before this, applying a credit note for returned goods adjusted AR but left
+// inventory (and COGS) untouched: stock silently drifted from the books.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('CreditNote — restock on apply (INV-2)', () => {
+  const ITEM_A = new mongoose.Types.ObjectId();
+
+  const seedItem = (id = ITEM_A, unitCostPrice = 40, name = 'Widget') =>
+    global.__mockInvItemStore.set(String(id), { _id: id, name, unitCostPrice, unit: 'pcs' });
+
+  const mkApplied = async (lineItems, invOverrides = {}) => {
+    const inv = seedInvoice({ totalAmount: 10000, remainingBalance: 10000, ...invOverrides });
+    const cn = await creditNoteService.create({
+      businessId: inv.businessId, invoiceId: inv._id,
+      creditNoteNumber: 'CN-RS', issueDate: new Date(), lineItems,
+    }, user, '127.0.0.1');
+    await creditNoteService.approve(cn._id, user);
+    await creditNoteService.apply(cn._id, user);
+    return cn;
+  };
+
+  test('restock lines put goods back at cost and reverse COGS (DR Inventory / CR COGS)', async () => {
+    seedItem(ITEM_A, 40);
+    const cn = await mkApplied([
+      { name: 'Widget', quantity: 3, unitPrice: 100, inventoryItemId: ITEM_A, restock: true },
+    ]);
+
+    // Stock back in at the item's cost, tagged as a sale return
+    expect(inventoryService.applyPurchaseStock).toHaveBeenCalledTimes(1);
+    expect(inventoryService.applyPurchaseStock).toHaveBeenCalledWith(
+      expect.anything(), ITEM_A, 3, 40,
+      expect.objectContaining({ movementType: 'sale_return' })
+    );
+
+    // One restock journal: DR Inventory / CR COGS for 3 × 40 = 120
+    const restockJe = postBalancedJournal.mock.calls
+      .map(([e]) => e).find((e) => /restocked/i.test(e.description || ''));
+    expect(restockJe).toBeDefined();
+    expect(restockJe.amount).toBe(120);
+    expect(restockJe.debitAccountId).toBe('INV');
+    expect(restockJe.creditAccountId).toBe('COGS');
+    expect(cn.restockJournalEntryId).toBe('je-cn');
+  });
+
+  test('lines not flagged restock (scrapped goods) never touch stock', async () => {
+    seedItem(ITEM_A, 40);
+    await mkApplied([
+      { name: 'Widget', quantity: 3, unitPrice: 100, inventoryItemId: ITEM_A, restock: false },
+    ]);
+
+    expect(inventoryService.applyPurchaseStock).not.toHaveBeenCalled();
+    const restockJe = postBalancedJournal.mock.calls
+      .map(([e]) => e).find((e) => /restocked/i.test(e.description || ''));
+    expect(restockJe).toBeUndefined();
+  });
+
+  test('service-only credit notes (no inventory link) are unaffected', async () => {
+    await mkApplied([{ name: 'Consulting hours', quantity: 2, unitPrice: 500 }]);
+    expect(inventoryService.applyPurchaseStock).not.toHaveBeenCalled();
+  });
+
+  test('fails closed when the Inventory/COGS accounts are missing — nothing restocked', async () => {
+    seedItem(ITEM_A, 40);
+    inventoryService.resolveCostAccounts.mockResolvedValue({ cogsAccountId: null, inventoryAccountId: null });
+
+    await expect(mkApplied([
+      { name: 'Widget', quantity: 1, unitPrice: 100, inventoryItemId: ITEM_A, restock: true },
+    ])).rejects.toThrow(/chart of accounts is missing/i);
+    expect(inventoryService.applyPurchaseStock).not.toHaveBeenCalled();
+  });
+
+  test('cancelling a restocked credit note takes the goods back out of stock', async () => {
+    seedItem(ITEM_A, 40);
+    const cn = await mkApplied([
+      { name: 'Widget', quantity: 3, unitPrice: 100, inventoryItemId: ITEM_A, restock: true },
+    ], { customerId: new mongoose.Types.ObjectId() });
+
+    await creditNoteService.cancel(cn._id, user, 'customer changed mind', '127.0.0.1');
+
+    expect(inventoryService.reduceStock).toHaveBeenCalledWith(
+      expect.anything(), ITEM_A, 3, null,
+      expect.objectContaining({ movementType: 'adjustment_out' })
+    );
+    expect(cn.restockJournalEntryId).toBeNull();
+    expect(cn.state).toBe('cancelled');
   });
 });
 

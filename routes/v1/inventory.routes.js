@@ -26,6 +26,7 @@ router.route('/:id')
 
 router.patch('/:id/toggle-active', inventoryController.toggleActive);
 router.post('/:id/add-stock',      inventoryController.addStock);
+router.post('/:id/adjust',         inventoryController.adjustStock); // Phase 2 — adjustments/counts/NRV
 router.get('/:id/ledger',          inventoryController.getStockLedger);
 router.post('/:id/recalculate',    inventoryController.recalculate); // R-04 — replay & heal WAC
 

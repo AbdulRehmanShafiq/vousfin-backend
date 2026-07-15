@@ -269,6 +269,66 @@ class CreditNoteService {
           -creditBase,
           { session: s }
         );
+
+        // ── Inventory Engine Phase 3 (INV-2) — restock returned goods ──────
+        // Lines flagged `restock` put the goods back into stock at the item's
+        // current cost and reverse COGS by the same value (matching principle
+        // mirror of the sale): DR Inventory 1150 / CR COGS 5110. One journal,
+        // per-line movements, all inside THIS session.
+        const restockLines = (cn.lineItems || []).filter(
+          (li) => li.restock && li.inventoryItemId && Number(li.quantity) > 0
+        );
+        if (restockLines.length > 0) {
+          const inventoryService = require('./inventory.service');
+          const InventoryItem = require('../models/InventoryItem.model');
+          const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+          const { cogsAccountId, inventoryAccountId } = await inventoryService.resolveCostAccounts(cn.businessId);
+          if (!cogsAccountId || !inventoryAccountId) {
+            throw new ApiError(400,
+              'Cannot restock the returned goods: your chart of accounts is missing the Inventory (1150) or Cost of Goods Sold (5110) account. Restore the defaults in Chart of Accounts, then apply again.');
+          }
+
+          let restockValue = 0;
+          const lineCosts = [];
+          for (const li of restockLines) {
+            const item = await InventoryItem.findOne({ _id: li.inventoryItemId, businessId: cn.businessId }).session(s);
+            if (!item) throw new ApiError(404, `Returned item "${li.name}" was not found in your inventory`);
+            const unitCost = Number(item.unitCostPrice) || 0;
+            lineCosts.push({ li, unitCost });
+            restockValue = r2(restockValue + Number(li.quantity) * unitCost);
+          }
+
+          if (restockValue > 0) {
+            const restockJe = await postBalancedJournal({
+              businessId:        cn.businessId,
+              transactionDate:   new Date(),
+              description:       `Returned goods restocked — Credit Note ${cn.creditNoteNumber}`,
+              transactionType:   TRANSACTION_TYPES.REFUND,
+              amount:            restockValue,
+              debitAccountId:    inventoryAccountId,  // DR Inventory — goods are back
+              creditAccountId:   cogsAccountId,       // CR COGS — cost reversed
+              transactionSource: 'system_generated',
+              status:            'posted',
+              entryType:         'adjusting',
+              createdBy:         user._id,
+              lastModifiedBy:    user._id,
+            }, { session: s });
+            cn.restockJournalEntryId = restockJe._id;
+
+            for (const { li, unitCost } of lineCosts) {
+              await inventoryService.applyPurchaseStock(
+                cn.businessId, li.inventoryItemId, Number(li.quantity), unitCost, {
+                  session: s, userId: user._id,
+                  movementType: 'sale_return',
+                  source: { docType: 'CreditNote', docId: cn._id },
+                  journalEntryId: restockJe._id,
+                  notes: `Credit Note ${cn.creditNoteNumber}`,
+                }
+              );
+            }
+          }
+        }
       } else if (cn.noteType === 'debit_note') {
         // Debit note = an additional charge to the customer. It was previously
         // document-only (remainingBalance += amount) with NO GL entry and no AR
@@ -402,6 +462,35 @@ class CreditNoteService {
               creditBase,
               { session: s }
             );
+
+            // Phase 3 — undo the restock: reverse the DR Inventory / CR COGS
+            // journal and take the goods back OUT of stock. If some of the
+            // restocked units were already sold, the cancel is refused (the
+            // reduceStock guard throws) — never force stock negative.
+            if (cn.restockJournalEntryId) {
+              const inventoryService = require('./inventory.service');
+              const transactionService2 = require('./transaction.service');
+              await transactionService2.reverseTransaction(
+                cn.restockJournalEntryId.toString(),
+                cn.businessId.toString(),
+                { reason: `Credit note ${cn.creditNoteNumber} cancelled — restock undone`, session: s },
+                user._id,
+                ipAddress
+              );
+              const restockLines = (cn.lineItems || []).filter(
+                (li) => li.restock && li.inventoryItemId && Number(li.quantity) > 0
+              );
+              for (const li of restockLines) {
+                await inventoryService.reduceStock(cn.businessId, li.inventoryItemId, Number(li.quantity), s, {
+                  movementType: 'adjustment_out',
+                  reason: 'count_correction',
+                  source: { docType: 'CreditNote', docId: cn._id },
+                  notes: `Credit Note ${cn.creditNoteNumber} cancelled — restock undone`,
+                  userId: user._id,
+                });
+              }
+              cn.restockJournalEntryId = null;
+            }
           } else if (cn.noteType === 'debit_note') {
             // Apply added the extra charge to the open item; cancel removes it.
             await openItemService.adjustOpenItem(

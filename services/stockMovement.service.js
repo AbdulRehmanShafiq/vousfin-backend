@@ -30,7 +30,10 @@ class StockMovementService {
    */
   async record(m, opts = {}) {
     if (!m.businessId || !m.itemId) throw new ApiError(400, 'businessId and itemId are required');
-    if (!(Number(m.qty) > 0)) throw new ApiError(400, 'Movement qty must be positive');
+    // Revaluations are value-only (qty 0); every physical movement needs qty > 0.
+    if (m.movementType !== 'revalue' && !(Number(m.qty) > 0)) {
+      throw new ApiError(400, 'Movement qty must be positive');
+    }
 
     const doc = {
       businessId: m.businessId,
@@ -48,6 +51,7 @@ class StockMovementService {
       journalEntryId: m.journalEntryId || null,
       warehouseId: m.warehouseId || null,
       movementDate: m.movementDate || new Date(),
+      reason: m.reason || null,
       notes: m.notes || null,
       createdBy: m.createdBy || null,
     };

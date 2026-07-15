@@ -78,6 +78,11 @@ class VendorCreditService {
 
     const creditNumber = data.creditNumber || await this._nextCreditNumber(data.businessId);
 
+    // Inventory Engine Phase 3 (INV-2) — physical goods going back to the vendor.
+    const returnItems = Array.isArray(data.returnItems)
+      ? data.returnItems.filter((ri) => ri && ri.inventoryItemId && Number(ri.quantity) > 0)
+      : [];
+
     const vc = new VendorCredit({
       businessId:        data.businessId,
       creditNumber,
@@ -93,11 +98,93 @@ class VendorCreditService {
       reasonDescription: data.reasonDescription || null,
       notes:             data.notes || null,
       tags:              data.tags  || [],
+      returnItems,
       state:             VENDOR_CREDIT_STATES.OPEN,
       createdBy:         user._id,
       lastModifiedBy:    user._id,
     });
-    await vc.save();
+
+    if (returnItems.length === 0) {
+      await vc.save();
+    } else {
+      // Goods return: the stock leaves NOW, in one atomic unit with the credit.
+      //   DR 1156 Vendor Credit Clearing (credit amount, base)
+      //   CR 1150 Inventory              (cost of the goods, FIFO/WAC aware)
+      //   ± the price difference: CR Discount Received (4180/4100) when the
+      //     vendor credits more than cost, DR Inventory Write-off (6495) when less.
+      // Applications later clear 1156 (see postCreditApplicationJournal), so AP
+      // is only relieved when the credit is actually netted against a bill.
+      const inventoryService = require('./inventory.service');
+      const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+      await withTransaction(async (s) => {
+        await vc.save({ session: s });
+
+        const [clearingAcct, { inventoryAccountId }] = await Promise.all([
+          ChartOfAccount.findOne({ businessId: data.businessId, accountCode: '1156' }).lean(),
+          inventoryService.resolveCostAccounts(data.businessId),
+        ]);
+        if (!clearingAcct || !inventoryAccountId) {
+          throw new ApiError(400,
+            'Cannot record this goods return: your chart of accounts is missing the Vendor Credit Clearing (1156) or Inventory (1150) account. Open Chart of Accounts once to add the defaults, then try again.');
+        }
+
+        let costValue = 0;
+        for (const ri of vc.returnItems) {
+          const res = await inventoryService.reduceStock(
+            data.businessId, ri.inventoryItemId, Number(ri.quantity), s, {
+              movementType: 'purchase_return',
+              source: { docType: 'VendorCredit', docId: vc._id },
+              notes: `Returned to vendor — ${vc.creditNumber}`,
+              userId: user._id,
+            }
+          );
+          ri.unitCostAtReturn = res.unitCostUsed;
+          costValue = r2(costValue + (res.cogsAmount || 0));
+        }
+
+        const creditBase = toBaseAmount(vc.amount, Number(vc.exchangeRate) > 0 ? Number(vc.exchangeRate) : 1);
+        const journalLines = [
+          { type: 'debit',  accountId: clearingAcct._id,   amount: creditBase, description: 'Vendor credit for returned goods' },
+          { type: 'credit', accountId: inventoryAccountId, amount: costValue,  description: 'Goods returned to vendor' },
+        ];
+        const diff = r2(creditBase - costValue);
+        if (diff >= 0.01) {
+          const gainAcct = await ChartOfAccount.findOne({
+            businessId: data.businessId, accountCode: { $in: ['4180', '4100', '4000'] },
+          }).lean();
+          if (!gainAcct) throw new ApiError(400, 'Cannot record this goods return: a Discount Received / Other Income account (4180/4100) is not set up.');
+          journalLines.push({ type: 'credit', accountId: gainAcct._id, amount: diff, description: 'Credited above cost' });
+        } else if (diff <= -0.01) {
+          const lossAcct = await ChartOfAccount.findOne({
+            businessId: data.businessId, accountCode: '6495',
+          }).lean();
+          if (!lossAcct) throw new ApiError(400, 'Cannot record this goods return: the Inventory Write-off (6495) account is not set up.');
+          journalLines.push({ type: 'debit', accountId: lossAcct._id, amount: Math.abs(diff), description: 'Credited below cost' });
+        }
+
+        const je = await postBalancedJournal({
+          businessId:        data.businessId,
+          transactionDate:   vc.creditDate || new Date(),
+          description:       `Goods returned to vendor — ${vc.creditNumber}`,
+          transactionType:   TRANSACTION_TYPES.JOURNAL_ENTRY,
+          amount:            creditBase,
+          debitAccountId:    clearingAcct._id,
+          creditAccountId:   inventoryAccountId,
+          journalLines,
+          status:            JOURNAL_STATUS.POSTED,
+          transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
+          vendorId:          vc.vendorId || null,
+          currencyCode:      vc.currencyCode || 'PKR',
+          exchangeRate:      Number(vc.exchangeRate) > 0 ? Number(vc.exchangeRate) : 1,
+          createdBy:         user._id,
+          lastModifiedBy:    user._id,
+        }, { session: s });
+
+        vc.inventoryJournalId = je._id;
+        await vc.save({ session: s });
+      });
+    }
 
     try {
       await auditService.logCreate(
@@ -257,11 +344,13 @@ class VendorCreditService {
       accountCode: '2110',
     }).lean();
 
-    // CR side: "Discount Received" (4180) or "Other Income" (4100) as fallback
-    const crAccount = await ChartOfAccount.findOne({
-      businessId,
-      accountCode: { $in: ['4180', '4100', '4000'] },
-    }).lean();
+    // CR side (Phase 3): a goods-return credit already booked its value into
+    // Vendor Credit Clearing (1156) at creation — applying it must DRAIN the
+    // clearing account, not book income a second time. Money-only credits
+    // keep the legacy income treatment (Discount Received 4180 / fallbacks).
+    const crAccount = vc.inventoryJournalId
+      ? await ChartOfAccount.findOne({ businessId, accountCode: '1156' }).lean()
+      : await ChartOfAccount.findOne({ businessId, accountCode: { $in: ['4180', '4100', '4000'] } }).lean();
 
     // Can't post without both legs → fail the application (the caller's transaction
     // rolls back) rather than silently marking the bill paid-down with no journal.
@@ -269,7 +358,9 @@ class VendorCreditService {
       throw new ApiError(500, 'Cannot apply vendor credit: Accounts Payable (2110) account is not set up.');
     }
     if (!crAccount) {
-      throw new ApiError(500, 'Cannot apply vendor credit: a credit account (Discount Received 4180 / Other Income 4100) is not set up.');
+      throw new ApiError(500, vc.inventoryJournalId
+        ? 'Cannot apply vendor credit: the Vendor Credit Clearing (1156) account is not set up.'
+        : 'Cannot apply vendor credit: a credit account (Discount Received 4180 / Other Income 4100) is not set up.');
     }
     if (apAccount._id.toString() === crAccount._id.toString()) {
       throw new ApiError(500, 'Cannot apply vendor credit: AP and credit accounts resolve to the same account.');
@@ -326,6 +417,50 @@ class VendorCreditService {
         'This credit has partial applications. Reverse those applications before cancelling.'
       );
     }
+
+    // Phase 3 — a cancelled goods-return credit brings the goods BACK: reverse
+    // the clearing/inventory journal and restock each line at the cost it left
+    // with, atomically with the state flip.
+    if (vc.inventoryJournalId) {
+      const inventoryService = require('./inventory.service');
+      const transactionService = require('./transaction.service');
+      const jeId = vc.inventoryJournalId.toString();
+      await withTransaction(async (s) => {
+        await transactionService.reverseTransaction(
+          jeId,
+          vc.businessId.toString(),
+          { reason: `Vendor credit ${vc.creditNumber} cancelled — return undone`, session: s },
+          user._id,
+          ipAddress,
+        );
+        for (const ri of (vc.returnItems || [])) {
+          await inventoryService.applyPurchaseStock(
+            vc.businessId, ri.inventoryItemId, Number(ri.quantity),
+            Number(ri.unitCostAtReturn) || 0, {
+              session: s, userId: user._id,
+              movementType: 'adjustment_in',
+              source: { docType: 'VendorCredit', docId: vc._id },
+              notes: `Vendor credit ${vc.creditNumber} cancelled — goods back in stock`,
+            }
+          );
+        }
+        vc.inventoryJournalId = null;
+        vc.state = VENDOR_CREDIT_STATES.CANCELLED;
+        vc.lastModifiedBy = user._id;
+        if (reason) vc.notes = vc.notes ? `${vc.notes}\nCancelled: ${reason}` : `Cancelled: ${reason}`;
+        await vc.save({ session: s });
+      });
+      try {
+        await auditService.logUpdate(
+          ENTITY_TYPES.VENDOR_CREDIT, vc._id, vc.businessId, user._id,
+          { state: 'open' }, { state: 'cancelled', reason }, ipAddress
+        );
+      } catch (e) {
+        logger.warn(`[vc] audit cancel failed: ${e.message}`);
+      }
+      return vc;
+    }
+
     vc.state = VENDOR_CREDIT_STATES.CANCELLED;
     vc.lastModifiedBy = user._id;
     await vc.save();

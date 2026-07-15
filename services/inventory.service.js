@@ -221,6 +221,7 @@ class InventoryService {
       qty: Number(qty), unitCost: cost,
       balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
       source: opts.source || null, journalEntryId: opts.journalEntryId || null,
+      reason: opts.reason || null,
       createdBy: opts.userId || null, notes: opts.notes || null,
     }, { session: opts.session || null });
 
@@ -270,6 +271,7 @@ class InventoryService {
       qty: Number(qty), unitCost: unitCostUsed, value: cogsAmount,
       balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
       source: opts.source || null, journalEntryId: opts.journalEntryId || null,
+      reason: opts.reason || null,
       createdBy: opts.userId || null, notes: opts.notes || null,
     }, { session });
 
@@ -373,6 +375,7 @@ class InventoryService {
       qty: Number(qty), unitCost: cost, value: removedValue,
       balanceQtyAfter: item.currentStock, balanceValueAfter: valuationAfter,
       source: opts.source || null, journalEntryId: opts.journalEntryId || null,
+      reason: opts.reason || null,
       createdBy: opts.userId || null, notes: opts.notes || null,
     }, { session: opts.session || null });
     businessEvents.emit(EVENTS.INVENTORY_VALUATION_CHANGED, {
