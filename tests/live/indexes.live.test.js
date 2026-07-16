@@ -98,6 +98,33 @@ describe('the unique constraints that were never real', () => {
     await expect(col.insertOne(doc())).resolves.toBeTruthy();
   });
 
+  it('freezes the DATE of a posted entry at the model layer (spec 2026-07-16 I-7)', async () => {
+    // Moving a posted entry between open months rewrites both months'
+    // statements with no reversal — the model hook is the last line of defense
+    // no service path can go around.
+    const JournalEntry = require('../../models/JournalEntry.model');
+    const businessId = new mongoose.Types.ObjectId();
+    await mongoose.connection.db.collection('journalentries').insertOne({
+      businessId,
+      transactionDate: new Date('2026-05-10'),
+      description: 'date-freeze test',
+      transactionType: 'Expense',
+      amount: 10,
+      debitAccountId: new mongoose.Types.ObjectId(),
+      creditAccountId: new mongoose.Types.ObjectId(),
+      status: 'posted',
+      inputMethod: 'form',
+      createdBy: new mongoose.Types.ObjectId(),
+    });
+
+    await expect(
+      JournalEntry.updateOne(
+        { businessId, description: 'date-freeze test' },
+        { transactionDate: new Date('2026-06-10') }
+      )
+    ).rejects.toThrow(/cannot mutate financial fields/i);
+  });
+
   it('rejects a duplicate invoice number where the invariant belongs — on the DOCUMENT', async () => {
     const Invoice = require('../../models/Invoice.model');
     await Invoice.createIndexes();

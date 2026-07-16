@@ -105,4 +105,29 @@ describe('editTransaction — financial immutability of posted entries (F13)', (
     ).resolves.toBeDefined();
     expect(transactionRepository.updateTransaction).toHaveBeenCalled();
   });
+
+  // ── Spec 2026-07-16 I-7 — the DATE of a posted entry is financial state ────
+  test('rejects a transactionDate change — moving an entry between months rewrites both months', async () => {
+    transactionRepository.findByIdWithDetails.mockResolvedValue(
+      buildPosted({ transactionDate: new Date('2026-05-10') })
+    );
+    await expect(
+      transactionService.editTransaction('je1', 'biz1', { transactionDate: '2026-06-10' }, 'u1', '127.0.0.1')
+    ).rejects.toThrow(/date of a posted entry/i);
+    expect(transactionRepository.updateTransaction).not.toHaveBeenCalled();
+  });
+
+  test('an unchanged date resubmitted by the form is NOT treated as a date move', async () => {
+    transactionRepository.findByIdWithDetails.mockResolvedValue(
+      buildPosted({ transactionDate: new Date('2026-05-10') })
+    );
+    await expect(
+      transactionService.editTransaction(
+        'je1', 'biz1', { transactionDate: '2026-05-10', description: 'memo' }, 'u1', '127.0.0.1'
+      )
+    ).resolves.toBeDefined();
+    // and the no-op date is stripped so the model hook stays quiet
+    const update = transactionRepository.updateTransaction.mock.calls[0][2];
+    expect(update.transactionDate).toBeUndefined();
+  });
 });

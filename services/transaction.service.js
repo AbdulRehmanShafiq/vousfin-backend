@@ -1403,6 +1403,20 @@ class TransactionService {
       );
     }
 
+    // I-7 (spec 2026-07-16): the DATE of a posted entry is financial state too —
+    // moving it between open months silently rewrites both months' statements
+    // with no reversal and no audit annotation. Same rule, same remedy.
+    const dateChanged = updateData.transactionDate != null
+      && new Date(updateData.transactionDate).getTime() !== new Date(original.transactionDate).getTime();
+    if (dateChanged) {
+      throw new ApiError(
+        400,
+        'The date of a posted entry cannot be changed. ' +
+        'Reverse this transaction and record a corrected one — the reversal keeps your history complete.'
+      );
+    }
+    delete updateData.transactionDate; // same-date resubmits: strip the no-op
+
     const updated = await transactionRepository.updateTransaction(transactionId, businessId, {
       ...updateData,
       lastModifiedBy: userId,

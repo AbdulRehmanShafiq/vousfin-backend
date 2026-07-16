@@ -837,8 +837,13 @@ async function checkImmutability() {
 
   const immutableStatuses = [JOURNAL_STATUS.POSTED, JOURNAL_STATUS.PARTIALLY_SETTLED, JOURNAL_STATUS.SETTLED, JOURNAL_STATUS.REVERSED];
   if (immutableStatuses.includes(docToUpdate.status)) {
-    // Check if any financial fields are being mutated
-    const restrictedFields = ['amount', 'debitAccountId', 'creditAccountId', 'journalLines', 'baseCurrencyAmount', 'exchangeRate', 'taxAmount', 'taxRate'];
+    // Check if any financial fields are being mutated.
+    // transactionDate included (spec 2026-07-16 I-7): the DATE of a posted
+    // entry is financial state — moving it between open months silently
+    // rewrites both months' statements with no reversal and no audit
+    // annotation. Corrections move through reversals, like every other
+    // financial mutation.
+    const restrictedFields = ['amount', 'debitAccountId', 'creditAccountId', 'journalLines', 'baseCurrencyAmount', 'exchangeRate', 'taxAmount', 'taxRate', 'transactionDate'];
     const mutated = restrictedFields.some(field => 
       (update[field] !== undefined) || (update.$set && update.$set[field] !== undefined)
     );
