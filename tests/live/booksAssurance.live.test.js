@@ -65,7 +65,10 @@ describe('books that add up', () => {
 
     const res = await booksAssurance.verify(ctx.businessId);
     expect(res.correct).toBe(true);
-    expect(res.checks).toHaveLength(4);
+    // Five: the four ledger-internal invariants, plus "everything you sold and
+    // bought is recorded" — which reads from the documents back, because an
+    // absent entry breaks no balance and the other four cannot see it.
+    expect(res.checks).toHaveLength(5);
     expect(res.checks.every((c) => c.ok && c.verified)).toBe(true);
   });
 
@@ -134,5 +137,72 @@ describe('tenant isolation', () => {
 
     expect((await booksAssurance.verify(ctx.businessId)).correct).toBe(false);
     expect((await booksAssurance.verify(other.businessId)).correct).toBe(true);
+  });
+});
+
+/**
+ * The invariant the other four are blind to.
+ *
+ * Two approved invoices worth 88,500 sat outside the live books for weeks while
+ * every other check was GREEN — the trial balance balanced, drift was 0, A still
+ * equalled L + E, the sub-ledgers reconciled. All true. A missing document is not
+ * an inconsistency, it is an ABSENCE, and no check that only reads the ledger can
+ * see what never reached it. This one reads from the documents back.
+ */
+describe('documents that never reached the books', () => {
+  const anInvoice = async (over = {}) => {
+    const Invoice = require('../../models/Invoice.model');
+    return Invoice.create({
+      businessId: ctx.business._id,
+      invoiceNumber: `INV-A-${Math.random().toString(36).slice(2, 8)}`,
+      customerSnapshot: { fullName: 'Live Customer' },
+      lineItems: [{ name: 'Work', description: 'work', quantity: 1, unitPrice: 5000 }],
+      amount: 5000, taxAmount: 0, totalAmount: 5000, remainingBalance: 5000,
+      issueDate: new Date('2026-05-01'), dueDate: new Date('2026-06-01'),
+      state: 'approved', currencyCode: 'PKR', exchangeRate: 1,
+      createdBy: ctx.user._id,
+      ...over,
+    });
+  };
+
+  it('flags an approved invoice with no journal behind it', async () => {
+    await anInvoice();
+
+    const res = await booksAssurance.verify(ctx.businessId);
+    const check = res.checks.find((c) => c.key === 'everything_recorded');
+
+    expect(check.ok).toBe(false);
+    expect(res.correct).toBe(false);
+    expect(check.detail).toMatch(/1 invoice worth 5,000/);
+    // Plain language, and it says what to do — an owner reads this.
+    expect(check.detail).toMatch(/approve it again/i);
+    expect(check.offenders[0]).toMatchObject({ kind: 'invoice', totalAmount: 5000 });
+  });
+
+  it('proves the other four cannot see it — they all pass on the same books', async () => {
+    // This is the whole reason the check exists. An absent entry breaks no
+    // balance, so every ledger-internal invariant stays green.
+    await anInvoice();
+
+    const res = await booksAssurance.verify(ctx.businessId);
+    const others = res.checks.filter((c) => c.key !== 'everything_recorded');
+    expect(others.every((c) => c.ok)).toBe(true);
+    expect(res.breaks).toHaveLength(1);
+  });
+
+  it('ignores drafts and cancelled invoices — they claim nothing happened', async () => {
+    await anInvoice({ state: 'draft' });
+    await anInvoice({ state: 'cancelled' });
+
+    const res = await booksAssurance.verify(ctx.businessId);
+    expect(res.checks.find((c) => c.key === 'everything_recorded').ok).toBe(true);
+  });
+
+  it('passes once the invoice carries its journal', async () => {
+    const je = await post({ idempotencyKey: 'doc-recorded' });
+    await anInvoice({ arJournalId: je._id });
+
+    const res = await booksAssurance.verify(ctx.businessId);
+    expect(res.checks.find((c) => c.key === 'everything_recorded').ok).toBe(true);
   });
 });

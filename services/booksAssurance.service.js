@@ -27,12 +27,68 @@
 // or caches a verdict.
 'use strict';
 
+const mongoose = require('mongoose');
 const { computeDrift, computeArApSubledgerDrift } = require('./ledgerIntegrity.service');
 const reportService = require('./report.service');
 const logger = require('../config/logger');
 
 const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
 const TOLERANCE = 0.01; // one cent — below this is rounding, not a break
+
+/**
+ * Documents that say a sale or purchase happened, which the ledger never heard of.
+ *
+ * WHY THIS IS A SEPARATE INVARIANT
+ * --------------------------------
+ * The other four ask "is the ledger self-consistent?" — and they were ALL GREEN
+ * while two approved invoices worth 88,500 sat outside the books entirely
+ * (submitForApproval auto-promoted below-threshold documents and returned before
+ * posting). Nothing caught it, because an absent entry breaks no balance: the
+ * trial balance still balanced, drift was still 0, A still equalled L + E. A
+ * missing document is not an inconsistency, it is an ABSENCE — invisible to
+ * every check that only reads the ledger.
+ *
+ * So this one reads the other way: from the authoritative DOCUMENTS back to the
+ * ledger, and asks whether each one arrived. A document in a recognised state
+ * with no journal behind it is revenue or a liability the books are silently
+ * missing.
+ *
+ * Drafts and cancelled/voided documents are excluded — they are not claims that
+ * anything happened.
+ */
+async function unpostedDocuments(businessId) {
+  const Invoice = require('../models/Invoice.model');
+  const Bill = require('../models/Bill.model');
+  const bizId = new mongoose.Types.ObjectId(String(businessId));
+
+  const [invoices, bills] = await Promise.all([
+    Invoice.find({
+      businessId: bizId,
+      isArchived: { $ne: true },
+      state: { $in: ['approved', 'sent', 'partially_paid', 'paid', 'overdue'] },
+      arJournalId: null,
+      linkedJournalEntryId: null,
+    }).select('invoiceNumber state totalAmount issueDate').lean(),
+    Bill.find({
+      businessId: bizId,
+      isArchived: { $ne: true },
+      state: { $in: ['approved', 'partially_paid', 'paid', 'overdue'] },
+      apLiabilityJournalId: null,
+      linkedJournalEntryId: null,
+    }).select('billNumber state totalAmount issueDate').lean(),
+  ]);
+
+  return [
+    ...invoices.map((i) => ({
+      kind: 'invoice', id: i._id, number: i.invoiceNumber,
+      state: i.state, totalAmount: i.totalAmount, date: i.issueDate,
+    })),
+    ...bills.map((b) => ({
+      kind: 'bill', id: b._id, number: b.billNumber,
+      state: b.state, totalAmount: b.totalAmount, date: b.issueDate,
+    })),
+  ];
+}
 
 /**
  * A source failure must read as "couldn't verify", NEVER as "all clear".
@@ -67,7 +123,7 @@ async function verify(businessId, { asOf = new Date() } = {}) {
   // "do the cached balances match it".
   const driftPromise = computeDrift(businessId);
 
-  const [entriesBalance, balancesMatch, equationHolds, subLedgerAgrees] = await Promise.all([
+  const [entriesBalance, balancesMatch, equationHolds, subLedgerAgrees, everythingRecorded] = await Promise.all([
     safeCheck('entries_balance', 'Every entry balances', async () => {
       const d = await driftPromise;
       return {
@@ -136,9 +192,32 @@ async function verify(businessId, { asOf = new Date() } = {}) {
           : `What the books say and what the list says disagree: ${notes.join(' and ')}.`,
       };
     }),
+
+    safeCheck('everything_recorded', 'Everything you sold and bought is recorded', async () => {
+      const missing = await unpostedDocuments(businessId);
+      const total = r2(missing.reduce((s, d) => s + (d.totalAmount || 0), 0));
+      const inv = missing.filter((d) => d.kind === 'invoice').length;
+      const bil = missing.filter((d) => d.kind === 'bill').length;
+      const parts = [];
+      if (inv) parts.push(`${inv} invoice${inv === 1 ? '' : 's'}`);
+      if (bil) parts.push(`${bil} bill${bil === 1 ? '' : 's'}`);
+      return {
+        key: 'everything_recorded',
+        title: 'Everything you sold and bought is recorded',
+        ok: missing.length === 0,
+        verified: true,
+        detail: missing.length === 0
+          ? 'Every invoice and bill you have approved is in the books.'
+          // toLocaleString so it reads as money (88,500) rather than a bare
+          // 88500 — this line is read by an owner, not a developer.
+          : `${parts.join(' and ')} worth ${total.toLocaleString()} ${missing.length === 1 ? 'is' : 'are'} `
+            + 'approved but missing from your books. Open each one and approve it again to record it.',
+        offenders: missing.slice(0, 10),
+      };
+    }),
   ]);
 
-  const checks = [entriesBalance, balancesMatch, equationHolds, subLedgerAgrees];
+  const checks = [entriesBalance, balancesMatch, equationHolds, subLedgerAgrees, everythingRecorded];
   const breaks = checks.filter((c) => !c.ok);
   const verified = checks.every((c) => c.verified);
   const correct = verified && breaks.length === 0;
