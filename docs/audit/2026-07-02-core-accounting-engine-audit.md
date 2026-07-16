@@ -223,18 +223,34 @@ distinct accountIds).
   override never allowed on LOCKED, allowed on CLOSED with role gate).
 - `transactionRepository.bulkCreate` (raw `insertMany`, skips pre-save hooks and
   balances) has no callers — remove it before someone finds it.
-- `checkImmutability` doesn't restrict `transactionDate` moves within open
-  periods on posted entries (report-period drift without audit annotation).
+- ~~`checkImmutability` doesn't restrict `transactionDate` moves within open
+  periods on posted entries (report-period drift without audit annotation).~~
+  **CLOSED 2026-07-16** (open-item authority closeout I-7): `transactionDate`
+  added to the model's restricted fields; `editTransaction` rejects date
+  changes up front with reverse-and-recreate guidance.
 - Party-balance repo updates (`updateReceivableBalance`) are keyed by `_id` only
   — add businessId scoping for defense-in-depth.
-- Dual-write invoice/bill mirror failures are warn-only (doc/GL divergence is
-  reconciled later by M1, but only after a payment event).
-- `markPaid` on a transaction-first invoice flips the document without touching
-  the JE (doc/JE divergence until next sync).
+- ~~Dual-write invoice/bill mirror failures are warn-only (doc/GL divergence is
+  reconciled later by M1, but only after a payment event).~~ **CLOSED
+  2026-07-16** (I-6): the mirror commits inside createTransaction's unit — a
+  credit sale that cannot write its document does not post.
+- ~~`markPaid` on a transaction-first invoice flips the document without touching
+  the JE (doc/JE divergence until next sync).~~ **CLOSED 2026-07-16** (I-4/I-5):
+  markPaid records a real Payment for the full remaining balance through
+  payment.service — one settlement engine for both conventions; raw
+  `/transition` flips to paid/cancelled/voided/written_off route through their
+  proper flows.
 - `getAccountTurnover` (model static) still reads top-level pairs only.
-- `settlements[]` unbounded growth on hot AR/AP entries.
-- No live-DB test exercises the real aggregation pipelines (all "integration"
-  tests mock persistence) — F1 was invisible to 1,786 green tests.
+- `settlements[]` unbounded growth on hot AR/AP entries. **DEFERRED with
+  design 2026-07-16** (spec §8.3): the array is load-bearing (detail UI,
+  settlements endpoint, M9 rebuild, reversal cleanup, installments) — the
+  follow-up is an append-only Settlement collection with dual-source reads,
+  parity-checked backfill, then freeze.
+- ~~No live-DB test exercises the real aggregation pipelines (all "integration"
+  tests mock persistence) — F1 was invisible to 1,786 green tests.~~ **CLOSED**
+  (accounting-correctness Phase 0): `tests/live/` real-mongod replica-set tier;
+  it has since caught the unmocked-model GRN hangs, 7 phantom indexes, the
+  invoice-first settlement fork, and the unique-JE-number E11000 landmine.
 
 ---
 

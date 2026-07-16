@@ -56,6 +56,11 @@ class ConsistencyVerificationService {
         continue;
       }
       checked += 1;
+      // Spec 2026-07-16: a PROJECTION deliberately carries no balance — the
+      // DOCUMENT is the authority, so there is nothing to cross-check against
+      // (comparing doc remaining to a null-as-0 projection would flag every
+      // open invoice-first document as a false discrepancy forever).
+      if (je.isProjection === true) continue;
       const docRem = r2(d.remainingBalance);
       const jeRem = r2(je.remainingBalance);
       if (Math.abs(docRem - jeRem) > EPSILON) {

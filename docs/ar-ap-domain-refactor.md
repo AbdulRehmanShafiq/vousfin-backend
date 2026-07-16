@@ -345,4 +345,26 @@ push · UI/UX touch · backward-compatible.
 
 ---
 
-*End of Phase 1 audit & plan. Implementation deferred to subsequent phases.*
+## 13. Status update — 2026-07-16 (open-item authority closeout)
+
+The settlement half of the target architecture is now REAL. See
+`docs/superpowers/specs/2026-07-16-ar-ap-open-item-authority-closeout.md` for
+the full design; the load-bearing decisions:
+
+- **Authority-per-item, decided in ONE place.** `JE.isProjection === true` ⟺
+  the document owns the money (this plan's §3); otherwise the JE does
+  (transaction-first, installments, manual journals — populations that have no
+  document, which is why "documents own everything" could not simply be
+  switched on). `openItem.resolveOpenItem` is the only place that decision is
+  made; the payment engine, `recordPartialPayment`, reversal restore, aging,
+  `/transactions/outstanding`, the M7 reconciliation view and the VE-5/6
+  sub-ledger reconcile all resolve through it.
+- **§3's payment flow is implemented as drawn**: Payment allocations settle the
+  document (guarded, base-currency, realised FX) while the projection JE stays
+  the immutable GL projection. `markPaid` = a real Payment for the full
+  remaining balance — one settlement engine, both conventions.
+- **The dual-write mirror commits WITH the ledger entry** (a credit sale that
+  cannot write its document does not post), which also lets the documents'
+  unique number indexes protect the ledger path atomically.
+- **Full M9 dual-write retirement remains deferred** until every open-item
+  population flows document-first.

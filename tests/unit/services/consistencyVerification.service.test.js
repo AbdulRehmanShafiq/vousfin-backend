@@ -29,10 +29,14 @@ beforeEach(() => {
 });
 
 describe('verify', () => {
-  it('reports inSync when document remaining matches the ledger projection', async () => {
-    Invoice.find.mockReturnValue(findChain([{ _id: 'i1', invoiceNumber: 'INV-1', remainingBalance: 50, arJournalId: 'je1' }]));
+  // Spec 2026-07-16: the doc↔JE remaining cross-check governs the
+  // TRANSACTION-FIRST population (the JE owns the balance, the doc mirrors
+  // it). A projection deliberately carries NO balance — the document is the
+  // authority, so there is nothing to cross-check (fourth test below).
+  it('reports inSync when a mirrored document matches the JE that owns its balance', async () => {
+    Invoice.find.mockReturnValue(findChain([{ _id: 'i1', invoiceNumber: 'INV-1', remainingBalance: 50, linkedJournalEntryId: 'je1' }]));
     Bill.find.mockReturnValue(findChain([]));
-    JournalEntry.findById.mockReturnValue(jeChain({ remainingBalance: 50, isProjection: true }));
+    JournalEntry.findById.mockReturnValue(jeChain({ remainingBalance: 50, isProjection: false }));
 
     const res = await svc.verify(BIZ);
     expect(res.inSync).toBe(true);
@@ -40,16 +44,26 @@ describe('verify', () => {
     expect(res.receivable.documentCrossCheck.discrepancies).toHaveLength(0);
   });
 
-  it('flags a document↔ledger remaining mismatch', async () => {
-    Invoice.find.mockReturnValue(findChain([{ _id: 'i1', invoiceNumber: 'INV-1', remainingBalance: 80, arJournalId: 'je1' }]));
+  it('flags a mirrored document that drifted from the JE that owns its balance', async () => {
+    Invoice.find.mockReturnValue(findChain([{ _id: 'i1', invoiceNumber: 'INV-1', remainingBalance: 80, linkedJournalEntryId: 'je1' }]));
     Bill.find.mockReturnValue(findChain([]));
-    JournalEntry.findById.mockReturnValue(jeChain({ remainingBalance: 50, isProjection: true }));
+    JournalEntry.findById.mockReturnValue(jeChain({ remainingBalance: 50, isProjection: false }));
 
     const res = await svc.verify(BIZ);
     expect(res.inSync).toBe(false);
     const d = res.receivable.documentCrossCheck.discrepancies[0];
     expect(d.issue).toBe('remaining_mismatch');
     expect(d.delta).toBe(30);
+  });
+
+  it('does NOT flag an invoice-first document — its projection carries no balance by design', async () => {
+    Invoice.find.mockReturnValue(findChain([{ _id: 'i1', invoiceNumber: 'INV-1', remainingBalance: 2500, arJournalId: 'je1' }]));
+    Bill.find.mockReturnValue(findChain([]));
+    JournalEntry.findById.mockReturnValue(jeChain({ remainingBalance: null, isProjection: true }));
+
+    const res = await svc.verify(BIZ);
+    expect(res.inSync).toBe(true);
+    expect(res.receivable.documentCrossCheck.discrepancies).toHaveLength(0);
   });
 
   it('flags an open document with no recognition journal', async () => {

@@ -10,10 +10,15 @@ jest.mock('../../../models/Invoice.model', () => ({ find: jest.fn(), aggregate: 
 jest.mock('../../../models/Bill.model', () => ({ find: jest.fn(), aggregate: jest.fn() }));
 jest.mock('../../../models/JournalEntry.model', () => ({ aggregate: jest.fn() }));
 jest.mock('../../../models/ChartOfAccount.model', () => ({ findOne: jest.fn() }));
+// The ledger side of the reconcile is THE open-items union now (spec
+// 2026-07-16) — getReconciliation delegates to openItem.sumOpenLedger instead
+// of its own JE aggregate, so the union is stubbed here and proven for real
+// on the live tier (openItemAuthority.live.test.js).
+jest.mock('../../../services/openItem.service', () => ({ sumOpenLedger: jest.fn() }));
 
 const reporting = require('../../../services/arApReporting.service');
 const Invoice = require('../../../models/Invoice.model');
-const JournalEntry = require('../../../models/JournalEntry.model');
+const openItemService = require('../../../services/openItem.service');
 const ChartOfAccount = require('../../../models/ChartOfAccount.model');
 
 const BIZ = '507f1f77bcf86cd799439060';
@@ -68,7 +73,7 @@ describe('getAging — buckets + per-party (receivable)', () => {
 describe('getReconciliation — document vs ledger', () => {
   it('reports in-sync when document = ledger entries = control', async () => {
     Invoice.aggregate.mockResolvedValue([{ total: 1000 }]);
-    JournalEntry.aggregate.mockResolvedValue([{ total: 1000 }]);
+    openItemService.sumOpenLedger.mockResolvedValue({ journalSide: 1000, documentSide: 0, total: 1000 });
     ChartOfAccount.findOne.mockReturnValue({ lean: () => Promise.resolve({ runningBalance: 1000 }) });
 
     const r = await reporting.getReconciliation(BIZ, 'receivable');
@@ -81,7 +86,7 @@ describe('getReconciliation — document vs ledger', () => {
 
   it('flags a discrepancy when the document total diverges from the ledger', async () => {
     Invoice.aggregate.mockResolvedValue([{ total: 1000 }]);
-    JournalEntry.aggregate.mockResolvedValue([{ total: 950 }]);
+    openItemService.sumOpenLedger.mockResolvedValue({ journalSide: 950, documentSide: 0, total: 950 });
     ChartOfAccount.findOne.mockReturnValue({ lean: () => Promise.resolve({ runningBalance: 950 }) });
 
     const r = await reporting.getReconciliation(BIZ, 'receivable');
@@ -91,7 +96,7 @@ describe('getReconciliation — document vs ledger', () => {
 
   it('handles empty results (no open documents)', async () => {
     Invoice.aggregate.mockResolvedValue([]);
-    JournalEntry.aggregate.mockResolvedValue([]);
+    openItemService.sumOpenLedger.mockResolvedValue({ journalSide: 0, documentSide: 0, total: 0 });
     ChartOfAccount.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
 
     const r = await reporting.getReconciliation(BIZ, 'receivable');
