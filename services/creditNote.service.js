@@ -21,6 +21,7 @@ const auditService = require('./audit.service');
 const partyBalanceService = require('./partyBalance.service');
 const openItemService = require('./openItem.service');
 const { toBaseAmount } = require('../utils/currency.util'); // F2 — ledger is base currency
+const accountResolver = require('./accountResolver.service'); // I-9 — heal-or-refuse, never regex-guess
 const { postBalancedJournal } = require('./ledgerPosting.service');
 const { withTransaction } = require('../utils/withTransaction');
 const { ApiError } = require('../utils/ApiError');
@@ -180,6 +181,27 @@ class CreditNoteService {
       }
     }
 
+    // Resolve GL accounts BEFORE the transaction (I-9, heal-or-refuse): the
+    // resolver may SEED a missing default, and a document created outside the
+    // session is not visible to reads inside it — so resolution happens first,
+    // posting second. All four codes are seeded defaults, so this either
+    // returns an account or throws in plain language; the old name-regex
+    // fallbacks re-modelled the exact scatter accountResolver exists to close.
+    let salesReturnsAcct = null;
+    let arAcct = null;
+    let salesAcct = null;
+    if (cn.noteType === 'credit_note') {
+      [salesReturnsAcct, arAcct] = await Promise.all([
+        accountResolver.resolve(cn.businessId, '4115'),
+        accountResolver.resolve(cn.businessId, '1110'),
+      ]);
+    } else {
+      [arAcct, salesAcct] = await Promise.all([
+        accountResolver.resolve(cn.businessId, '1110'),
+        accountResolver.resolve(cn.businessId, '4110'),
+      ]);
+    }
+
     // All-or-nothing (audit A9): the invoice update, the GL posting, the AR
     // adjustment and marking the note APPLIED must commit together. Previously the
     // GL post sat in a try/catch that swallowed failures, so an invoice could be
@@ -206,23 +228,7 @@ class CreditNoteService {
           ? Number(invoice.exchangeRate)
           : (Number(cn.exchangeRate) > 0 ? Number(cn.exchangeRate) : 1);
         const creditBase = toBaseAmount(cn.totalAmount, bookingRate);
-        const [salesReturnsAcct, arAcct] = await Promise.all([
-          ChartOfAccount.findOne({
-            businessId: cn.businessId,
-            $or: [{ accountCode: '4115' }, { accountName: /sales returns/i }],
-          }).lean(),
-          ChartOfAccount.findOne({
-            businessId: cn.businessId,
-            $or: [{ accountCode: '1110' }, { accountName: /accounts receivable/i }],
-          }).lean(),
-        ]);
-
-        if (!salesReturnsAcct || !arAcct) {
-          // Can't post → fail the whole apply (rolls back) rather than silently
-          // marking the invoice credited with no journal entry.
-          throw new ApiError(500, 'Cannot apply credit note: Sales Returns (4115) or Accounts Receivable (1110) account is not set up.');
-        }
-
+        // Accounts resolved before the transaction opened (see above).
         const je = await postBalancedJournal({
           businessId:         cn.businessId,
           transactionDate:    new Date(),
@@ -342,19 +348,7 @@ class CreditNoteService {
           ? Number(invoice.exchangeRate)
           : (Number(cn.exchangeRate) > 0 ? Number(cn.exchangeRate) : 1);
         const debitBase = toBaseAmount(cn.totalAmount, bookingRate);
-        const [arAcct, salesAcct] = await Promise.all([
-          ChartOfAccount.findOne({
-            businessId: cn.businessId,
-            $or: [{ accountCode: '1110' }, { accountName: /accounts receivable/i }],
-          }).lean(),
-          ChartOfAccount.findOne({
-            businessId: cn.businessId,
-            $or: [{ accountCode: '4110' }, { accountName: /^sales$/i }],
-          }).lean(),
-        ]);
-        if (!arAcct || !salesAcct) {
-          throw new ApiError(500, 'Cannot apply debit note: Accounts Receivable (1110) or Sales (4110) account is not set up.');
-        }
+        // Accounts resolved before the transaction opened (see above).
         const je = await postBalancedJournal({
           businessId:         cn.businessId,
           transactionDate:    new Date(),

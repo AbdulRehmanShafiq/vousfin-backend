@@ -573,22 +573,14 @@ class InvoiceService {
     // regardless — leaving an invoice written off with the receivable still open in
     // the GL (overstated assets, unrecorded expense).
     if (outstanding > 0) {
+      // Resolve BEFORE the transaction (I-9, heal-or-refuse): the resolver may
+      // SEED a missing default, and a document created outside the session is
+      // not visible to reads inside it — resolution first, posting second.
+      const [badDebtAcct, arAcct] = await Promise.all([
+        accountResolver.resolve(invoice.businessId, '6370'),
+        accountResolver.resolve(invoice.businessId, '1110'),
+      ]);
       return withTransaction(async (s) => {
-        const [badDebtAcct, arAcct] = await Promise.all([
-          ChartOfAccount.findOne({
-            businessId: invoice.businessId,
-            $or: [{ accountCode: '6370' }, { accountName: /bad debt/i }],
-          }).lean(),
-          ChartOfAccount.findOne({
-            businessId: invoice.businessId,
-            $or: [{ accountCode: '1110' }, { accountName: /accounts receivable/i }],
-          }).lean(),
-        ]);
-
-        if (!badDebtAcct || !arAcct) {
-          throw new ApiError(500, `Cannot write off invoice ${invoice.invoiceNumber}: Bad Debt Expense (6370) or Accounts Receivable (1110) account is not set up.`);
-        }
-
         // F2 (residual) — `outstanding` is in DOCUMENT currency; the ledger,
         // party balance and open item are base.
         const outstandingBase = toBaseAmount(outstanding, invoice.exchangeRate);
@@ -831,16 +823,24 @@ class InvoiceService {
     const bookingRate = Number(invoice.exchangeRate) > 0 ? Number(invoice.exchangeRate) : 1;
     const primaryBase = toBaseAmount(primaryAmount, bookingRate);
 
-    // ── Resolve the optional output-tax account up-front (read, no write) ────
+    // ── Resolve the output-tax account up-front, FAIL CLOSED (I-3) ──────────
+    // The old `$in ['2120','2125']` lookup silently SKIPPED the tax leg when
+    // neither account existed — AR was debited net-only while the document
+    // owed total-with-tax, and the tax liability was never booked. A
+    // tax-bearing invoice may never half-post: 2120 is a seeded default, so
+    // the resolver heals it or refuses in plain language.
     const taxAmount = r2(invoice.taxAmount || 0);
     const taxBase = toBaseAmount(taxAmount, bookingRate);
     let outputTaxAcc = null;
     if (taxAmount > 0) {
-      const acc = await ChartOfAccount.findOne({
-        businessId,
-        accountCode: { $in: ['2120', '2125'] }, // GST Payable → WHT Payable fallback
-      }).lean();
-      if (acc && acc._id.toString() !== arAccount._id.toString()) outputTaxAcc = acc;
+      outputTaxAcc = await accountResolver.resolve(businessId, '2120');
+      if (outputTaxAcc._id.toString() === arAccount._id.toString()) {
+        throw new ApiError(
+          400,
+          `${invoice.invoiceNumber} can't be recorded: its tax and Accounts Receivable point at `
+          + 'the same account, so the tax entry would cancel itself out. Fix the account setup, then try again.'
+        );
+      }
     }
 
     // ── R-01: recognize AR atomically ────────────────────────────────────────
@@ -1026,16 +1026,21 @@ class InvoiceService {
    * create or update the matching Invoice record.  Existing Invoices are not
    * duplicated; the function is safe to call repeatedly for the same JE.
    */
-  async syncFromJournalEntry(je, user, ipAddress) {
+  async syncFromJournalEntry(je, user, ipAddress, session = null) {
     if (!je || !je.invoiceNumber) return null;
-    const existing = await Invoice.findOne({
+    // I-6: when called from inside createTransaction's unit, every read and
+    // write joins the caller's session so the mirror commits WITH the entry.
+    const findQuery = Invoice.findOne({
       businessId:    je.businessId,
       invoiceNumber: je.invoiceNumber,
     });
+    const existing = await (typeof findQuery.session === 'function'
+      ? findQuery.session(session || null)
+      : findQuery);
     if (existing) {
       if (!existing.linkedJournalEntryId) {
         existing.linkedJournalEntryId = je._id;
-        await existing.save();
+        await existing.save(session ? { session } : undefined);
       }
       return existing;
     }
@@ -1082,7 +1087,7 @@ class InvoiceService {
         timestamp: new Date(),
       });
     }
-    await invoice.save();
+    await invoice.save(session ? { session } : undefined);
     try {
       await auditService.logCreate(
         ENTITY_TYPES.INVOICE,

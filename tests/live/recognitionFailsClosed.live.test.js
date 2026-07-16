@@ -124,6 +124,98 @@ describe('AR recognition', () => {
   });
 });
 
+describe('tax legs fail closed (spec 2026-07-16 I-3)', () => {
+  it('a tax-bearing invoice posts BOTH legs, healing GST Payable (2120) if missing', async () => {
+    // The regression: no 2120/2125 → the tax leg silently skipped → AR debited
+    // net-only while the document owed total-with-tax, tax liability never booked.
+    await ChartOfAccount.deleteOne({ businessId: ctx.business._id, accountCode: '2120' });
+    const Invoice = require('../../models/Invoice.model');
+    const inv = await Invoice.create({
+      businessId: ctx.business._id,
+      invoiceNumber: `INV-TAX-${Date.now()}`,
+      customerId: null,
+      customerSnapshot: { fullName: 'Taxed Customer' },
+      // taxRate on the LINE: the model derives taxAmount from line items, so a
+      // top-level taxAmount alone would be recomputed away by the pre-save hook.
+      lineItems: [{ name: 'Consulting', description: 'c', quantity: 1, unitPrice: 10000, taxRate: 18 }],
+      amount: 10000, taxAmount: 1800, totalAmount: 11800, remainingBalance: 11800,
+      issueDate: new Date('2026-05-01'), dueDate: new Date('2026-06-01'),
+      state: 'approved', currencyCode: 'PKR', exchangeRate: 1, createdBy: ctx.user._id,
+    });
+
+    await invoiceService.postArJournal(inv, user(), '127.0.0.1');
+
+    // AR leg + output-tax leg — never one without the other.
+    expect(await JournalEntry.countDocuments({ businessId: ctx.business._id })).toBe(2);
+    const healed = await ChartOfAccount.findOne({
+      businessId: ctx.business._id, accountCode: '2120',
+    }).lean();
+    expect(healed).toBeTruthy();
+    const taxJe = await JournalEntry.findOne({
+      businessId: ctx.business._id, creditAccountId: healed._id,
+    }).lean();
+    expect(taxJe.amount).toBe(1800);
+    await expectGoldenInvariants(ctx.businessId, { asOf: new Date('2026-12-31') });
+  });
+
+  it('a tax-bearing bill seeds the tax-engine accounts and books the recoverable input tax', async () => {
+    // The regression: no 1170-1172 → the tax debit silently dropped → AP
+    // credited net-only (apCredit sums the debits) while the document owed
+    // total-with-tax, and the recoverable input tax never reached the books.
+    const Bill = require('../../models/Bill.model');
+    const bill = await Bill.create({
+      businessId: ctx.business._id,
+      billNumber: `BILL-TAX-${Date.now()}`,
+      vendorId: null,
+      vendorSnapshot: { vendorName: 'Taxed Vendor' },
+      // taxRate on the LINE — same reason as the invoice fixture above.
+      lineItems: [{ name: 'Supplies', description: 's', quantity: 1, unitPrice: 5000, taxRate: 18 }],
+      amount: 5000, taxAmount: 900, totalAmount: 5900, remainingBalance: 5900,
+      billDate: new Date('2026-05-01'), issueDate: new Date('2026-05-01'), dueDate: new Date('2026-06-01'),
+      state: 'approved', currencyCode: 'PKR', exchangeRate: 1, createdBy: ctx.user._id,
+    });
+
+    const je = await billService.postApLiabilityJournal(bill, user(), '127.0.0.1');
+
+    const credit = (je.journalLines || []).find((l) => l.type === 'credit');
+    expect(credit.amount).toBe(5900); // net 5,000 + tax 900 — the FULL payable
+    const inputTax = await ChartOfAccount.findOne({
+      businessId: ctx.business._id, accountCode: { $in: ['1170', '1171', '1172'] },
+    }).lean();
+    expect(inputTax).toBeTruthy(); // seeded by the tax engine's own healer
+    expect((je.journalLines || []).some(
+      (l) => l.type === 'debit' && String(l.accountId) === String(inputTax._id) && l.amount === 900
+    )).toBe(true);
+    await expectGoldenInvariants(ctx.businessId, { asOf: new Date('2026-12-31') });
+  });
+});
+
+describe('the mirror commits with the entry (spec 2026-07-16 I-6)', () => {
+  it('a credit sale persists its mirror document in the same unit as the journal', async () => {
+    const transactionService = require('../../services/transaction.service');
+    const je = await transactionService.createTransaction({
+      businessId: ctx.business._id,
+      transactionType: 'Credit Sale',
+      amount: 750,
+      description: 'Mirrored credit sale',
+      transactionDate: new Date('2026-05-10'),
+      dueDate: new Date('2026-06-10'),
+      invoiceNumber: 'INV-MIR-1',
+      debitAccountId: ctx.acct('1110')._id,
+      creditAccountId: ctx.acct('4110')._id,
+      inputMethod: 'form',
+    }, ctx.user._id, '127.0.0.1');
+
+    const Invoice = require('../../models/Invoice.model');
+    const mirror = await Invoice.findOne({
+      businessId: ctx.business._id, invoiceNumber: 'INV-MIR-1',
+    }).lean();
+    expect(mirror).toBeTruthy();
+    expect(String(mirror.linkedJournalEntryId)).toBe(String(je._id));
+    await expectGoldenInvariants(ctx.businessId, { asOf: new Date('2026-12-31') });
+  });
+});
+
 describe('AP recognition', () => {
   async function aBill({ lineAccountId = null } = {}) {
     const Bill = require('../../models/Bill.model');

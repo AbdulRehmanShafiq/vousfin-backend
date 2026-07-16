@@ -21,6 +21,12 @@ jest.mock('../../../models/ChartOfAccount.model', () => ({
     lean: () => Promise.resolve({ _id: new (require('mongoose').Types.ObjectId)() }),
   })),
 }));
+// I-9 — credit/debit-note GL accounts resolve through the heal-or-refuse
+// resolver now; hand back a fresh account per code like the stub above.
+jest.mock('../../../services/accountResolver.service', () => ({
+  resolve: jest.fn(async () => ({ _id: new (require('mongoose').Types.ObjectId)() })),
+  resolveId: jest.fn(async () => new (require('mongoose').Types.ObjectId)()),
+}));
 jest.mock('../../../services/ledgerPosting.service', () => ({
   postBalancedJournal: jest.fn().mockResolvedValue({ _id: 'je-gl' }),
 }));

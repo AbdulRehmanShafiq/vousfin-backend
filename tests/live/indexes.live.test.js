@@ -70,15 +70,20 @@ describe('index specifications', () => {
 });
 
 describe('the unique constraints that were never real', () => {
-  it('rejects a duplicate invoice number within one business', async () => {
+  it('lets several journal entries share one document number — they are legs of one story', async () => {
+    // Spec 2026-07-16: the AR recognition leg, its output-tax leg, the COGS
+    // entry and a write-off all carry the same invoiceNumber. The Phase-0
+    // UNIQUE version of this index made every tax-bearing invoice-first
+    // approval an E11000. Document-number uniqueness lives on the DOCUMENT
+    // (next test), not on the ledger.
     const JournalEntry = require('../../models/JournalEntry.model');
     await JournalEntry.createIndexes();
     const businessId = new mongoose.Types.ObjectId();
     const doc = () => ({
       businessId,
-      invoiceNumber: 'INV-DUP-1',
+      invoiceNumber: 'INV-LEGS-1',
       transactionDate: new Date(),
-      description: 'dup test',
+      description: 'recognition legs',
       transactionType: 'journal_entry',
       amount: 10,
       debitAccountId: new mongoose.Types.ObjectId(),
@@ -88,10 +93,28 @@ describe('the unique constraints that were never real', () => {
       createdBy: new mongoose.Types.ObjectId(),
     });
 
-    await mongoose.connection.db.collection('journalentries').insertOne(doc());
-    await expect(
-      mongoose.connection.db.collection('journalentries').insertOne(doc())
-    ).rejects.toThrow(/E11000|duplicate/i);
+    const col = mongoose.connection.db.collection('journalentries');
+    await col.insertOne(doc());
+    await expect(col.insertOne(doc())).resolves.toBeTruthy();
+  });
+
+  it('rejects a duplicate invoice number where the invariant belongs — on the DOCUMENT', async () => {
+    const Invoice = require('../../models/Invoice.model');
+    await Invoice.createIndexes();
+    const businessId = new mongoose.Types.ObjectId();
+    const doc = () => ({
+      businessId,
+      invoiceNumber: 'INV-DUP-1',
+      issueDate: new Date(),
+      state: 'draft',
+      amount: 10,
+      totalAmount: 10,
+      createdBy: new mongoose.Types.ObjectId(),
+    });
+
+    const col = mongoose.connection.db.collection('invoices');
+    await col.insertOne(doc());
+    await expect(col.insertOne(doc())).rejects.toThrow(/E11000|duplicate/i);
   });
 
   it('lets the same invoice number exist in a different business', async () => {

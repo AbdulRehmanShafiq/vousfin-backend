@@ -914,19 +914,24 @@ journalEntrySchema.post('insertMany', function (docs) {
   for (const id of ids) { _invalidateReportCache(id); _scheduleEquationCheck(id); }
 });
 
-// Prevent duplicate invoice numbers within the same business.
-// Only entries with a string invoiceNumber are indexed.
+// Lookup index for entries by document number — NOT unique (spec 2026-07-16).
 //
-// This spec previously ALSO declared `sparse: true`. mongod rejects an index
-// that mixes `sparse` with `partialFilterExpression`, so this unique index
-// never existed anywhere — duplicate invoice numbers were never actually
-// prevented at the database level, despite the constraint being declared.
-// partialFilterExpression alone gives the intended behaviour.
+// Several journal entries legitimately share ONE document number: the AR
+// recognition leg and its output-tax leg, the COGS entry, a write-off, a
+// debit-note charge — they are all chapters of the same document's story.
+// The Phase-0 resurrection of this index as UNIQUE turned every tax-bearing
+// invoice-first approval and every post-recognition write-off into an E11000
+// (caught by the live tier the first time the tax leg actually posted).
+//
+// Document-number uniqueness is a DOCUMENT invariant and lives where the
+// document lives: the unique indexes on Invoice.invoiceNumber and
+// Bill.billNumber. Since the dual-write mirror commits in the same unit as
+// the entry (I-6), those indexes now protect the ledger path atomically too.
+// (Migration 20260716-je-invoice-number-not-unique drops the old unique index.)
 journalEntrySchema.index(
   { businessId: 1, invoiceNumber: 1 },
   {
-    unique: true,
-    name: 'idx_je_invoice_number',
+    name: 'idx_je_invoice_number_lookup',
     partialFilterExpression: { invoiceNumber: { $type: 'string' } },
   }
 );

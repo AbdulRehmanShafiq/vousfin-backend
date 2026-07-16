@@ -735,8 +735,27 @@ class BillService {
       lines.push({ accountId: expenseAccountId, type: 'debit', amount: expenseDebit, description: 'Purchase / expense' });
     }
     if (taxAmount > 0) {
-      const inputTaxAcc = await ChartOfAccount.findOne({ businessId, accountCode: { $in: ['1170', '1171', '1172'] } }).lean();
-      if (inputTaxAcc) lines.push({ accountId: inputTaxAcc._id, type: 'debit', amount: taxAmount, description: 'Recoverable input tax' });
+      // FAIL CLOSED (I-3): a tax-bearing bill may never half-post. The old
+      // `if (inputTaxAcc)` silently dropped the tax debit when 1170-1172 were
+      // missing — AP was then credited net-only (apCredit sums the debits)
+      // while the document owed total-with-tax, and the recoverable input tax
+      // never reached the books. 1170-1172 are the tax engine's own lazy
+      // accounts, so its healer seeds them; only if that still fails do we
+      // refuse, in plain language.
+      const inputTaxQuery = { businessId, accountCode: { $in: ['1170', '1171', '1172'] } };
+      let inputTaxAcc = await ChartOfAccount.findOne(inputTaxQuery).lean();
+      if (!inputTaxAcc) {
+        await require('./taxEngine.service').ensureTaxAccounts(businessId);
+        inputTaxAcc = await ChartOfAccount.findOne(inputTaxQuery).lean();
+      }
+      if (!inputTaxAcc) {
+        throw new ApiError(
+          400,
+          `${bill.billNumber} can't be recorded: it carries tax but your tax accounts aren't set up. `
+          + 'Open Settings → Tax to set them up, then approve the bill again.'
+        );
+      }
+      lines.push({ accountId: inputTaxAcc._id, type: 'debit', amount: taxAmount, description: 'Recoverable input tax' });
     }
     const apCredit = r2(lines.filter((l) => l.type === 'debit').reduce((s, l) => s + l.amount, 0));
     lines.push({ accountId: apAccount._id, type: 'credit', amount: apCredit, description: 'Accounts payable' });
@@ -756,7 +775,7 @@ class BillService {
           transactionDate:   bill.issueDate,
           description:       `AP Liability — ${bill.billNumber}${bill.vendorSnapshot?.vendorName ? ' (' + bill.vendorSnapshot.vendorName + ')' : ''}`,
           // One payable per bill, forever — a retry must not owe twice.
-          idempotencyKey: `bill-ap:${bill._id}`,
+          // (Key declared once, below — a duplicate literal used to shadow it.)
           transactionType:   TRANSACTION_TYPES.CREDIT_PURCHASE,
           transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
           invoiceNumber:     bill.billNumber,
@@ -844,16 +863,21 @@ class BillService {
   // Sync helper (dual-write from transaction.service)
   // ───────────────────────────────────────────────────────────────────────────
 
-  async syncFromJournalEntry(je, user, ipAddress) {
+  async syncFromJournalEntry(je, user, ipAddress, session = null) {
     if (!je || !je.invoiceNumber) return null;
-    const existing = await Bill.findOne({
+    // I-6: when called from inside createTransaction's unit, every read and
+    // write joins the caller's session so the mirror commits WITH the entry.
+    const findQuery = Bill.findOne({
       businessId: je.businessId,
       billNumber: je.invoiceNumber, // we reuse the BILL-XXXXX number stored on JE.invoiceNumber
     });
+    const existing = await (typeof findQuery.session === 'function'
+      ? findQuery.session(session || null)
+      : findQuery);
     if (existing) {
       if (!existing.linkedJournalEntryId) {
         existing.linkedJournalEntryId = je._id;
-        await existing.save();
+        await existing.save(session ? { session } : undefined);
       }
       return existing;
     }
@@ -899,7 +923,7 @@ class BillService {
         timestamp: new Date(),
       });
     }
-    await bill.save();
+    await bill.save(session ? { session } : undefined);
     try {
       await auditService.logCreate(
         ENTITY_TYPES.BILL,

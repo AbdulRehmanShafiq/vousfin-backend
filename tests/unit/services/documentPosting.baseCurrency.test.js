@@ -61,7 +61,9 @@ beforeEach(() => {
   postCompoundJournal.mockResolvedValue({ _id: 'je2' });
   // The control account (1110/2110) and the income/expense account are resolved
   // by code; each test's ChartOfAccount stub still supplies everything else.
-  const byCode = { 1110: AR_ID, 4110: REV_ID, 2110: AP_ID, 6390: EXP_ID };
+  // 2120 included since I-3: the output-tax leg fails CLOSED through the
+  // resolver instead of silently skipping when the account is missing.
+  const byCode = { 1110: AR_ID, 4110: REV_ID, 2110: AP_ID, 6390: EXP_ID, 2120: TAXOUT_ID };
   accountResolver.resolve.mockImplementation(async (_biz, code) => ({ _id: byCode[code], accountCode: code }));
   accountResolver.resolveId.mockImplementation(async (_biz, code) => byCode[code]);
 });

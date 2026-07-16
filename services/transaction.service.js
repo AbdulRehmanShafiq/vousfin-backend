@@ -899,6 +899,11 @@ class TransactionService {
       for (const sideEffect of deferredSideEffects) {
         await sideEffect(txnSession, tx);
       }
+      // I-6 (spec 2026-07-16): the mirror DOCUMENT commits with the entry — a
+      // credit sale that cannot write its document does not post. The old
+      // warn-only mirror (which ran after commit) meant a sale could exist in
+      // the ledger with no document, invisible to every document-side view.
+      await this._mirrorInvoiceOrBill(tx, userId, ipAddress, txnSession);
       return tx;
     };
     const transaction = session ? await persist(session) : await withTransaction(persist);
@@ -916,14 +921,7 @@ class TransactionService {
     // Invalidate report cache so Balance Sheet, Income Statement, etc. reflect the new entry
     reportCache.invalidate(data.businessId.toString());
 
-    // ── Phase 1 dual-write: mirror Credit Sale / Inventory Sale → Invoice ────
-    //                         mirror Credit Purchase / Inventory Purchase → Bill
-    // Non-fatal: any failure is logged but the ledger entry is preserved.
-    try {
-      await this._mirrorInvoiceOrBill(transaction, userId, ipAddress);
-    } catch (mirrorErr) {
-      logger.warn(`[invoice/bill] dual-write mirror failed (non-fatal): ${mirrorErr.message}`);
-    }
+    // (The dual-write mirror now runs INSIDE the persist unit above — I-6.)
 
     logger.info(`Transaction created: ${transaction._id} by user ${userId}`);
 
@@ -958,7 +956,7 @@ class TransactionService {
    * Lazy-required to avoid a require-time circular import
    *   (transaction.service → invoice.service → ... → transaction.service).
    */
-  async _mirrorInvoiceOrBill(je, userId, ipAddress) {
+  async _mirrorInvoiceOrBill(je, userId, ipAddress, session = null) {
     if (!je || !je.invoiceNumber) return;
     const SALE_TYPES = [
       TRANSACTION_TYPES.CREDIT_SALE,
@@ -979,10 +977,10 @@ class TransactionService {
 
     if (isSale) {
       const invoiceService = require('./invoice.service');
-      await invoiceService.syncFromJournalEntry(je, userStub, ipAddress);
+      await invoiceService.syncFromJournalEntry(je, userStub, ipAddress, session);
     } else if (isPurchase) {
       const billService = require('./bill.service');
-      await billService.syncFromJournalEntry(je, userStub, ipAddress);
+      await billService.syncFromJournalEntry(je, userStub, ipAddress, session);
     }
   }
 
