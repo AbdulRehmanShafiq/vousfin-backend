@@ -10,3 +10,5 @@ outputs/
 
 # Local debug scratch (not part of the app)
 test-handler.js
+
+suite-run.log
