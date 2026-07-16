@@ -1015,19 +1015,34 @@ class TransactionService {
     if (!parent) throw new ApiError(404, 'Parent transaction not found');
     if (parent.status === JOURNAL_STATUS.REVERSED) throw new ApiError(400, 'Cannot pay a reversed transaction');
 
-    // Distinguish three states clearly so the user gets a precise error:
-    //   remainingBalance === null  → this is a cash/non-AR/non-AP entry; payment doesn't apply
-    //   remainingBalance === 0     → balance has been fully paid
-    //   remainingBalance > 0       → outstanding balance exists, proceed
-    if (parent.remainingBalance === null || parent.remainingBalance === undefined) {
-      throw new ApiError(
-        400,
-        'This transaction does not track an outstanding balance (cash sales / cash expenses do not accept payments). ' +
-        'Only Credit Sales, Credit Purchases, and Installment plans accept partial payments.'
-      );
-    }
-    if (parent.remainingBalance === 0) {
-      throw new ApiError(400, 'Transaction is already fully paid');
+    // ── Authority resolution (spec 2026-07-16) ──────────────────────────────
+    // A PROJECTION parent means the DOCUMENT owns the open item (invoice-first,
+    // M-refactor convention) — the JE deliberately carries no balance, so the
+    // settlement validates against and settles the document. Everything else
+    // (transaction-first, installments, manual AR/AP journals) keeps the JE as
+    // its own open item, byte-for-byte the existing behavior.
+    let docOpenItem = null;
+    if (parent.isProjection === true) {
+      docOpenItem = await require('./openItem.service')
+        .resolveOpenItem(businessId, { journalEntryId: parentTransactionId }, { session });
+      if (!(docOpenItem.remainingBase > 0)) {
+        throw new ApiError(400, 'Transaction is already fully paid');
+      }
+    } else {
+      // Distinguish three states clearly so the user gets a precise error:
+      //   remainingBalance === null  → this is a cash/non-AR/non-AP entry; payment doesn't apply
+      //   remainingBalance === 0     → balance has been fully paid
+      //   remainingBalance > 0       → outstanding balance exists, proceed
+      if (parent.remainingBalance === null || parent.remainingBalance === undefined) {
+        throw new ApiError(
+          400,
+          'This transaction does not track an outstanding balance (cash sales / cash expenses do not accept payments). ' +
+          'Only Credit Sales, Credit Purchases, and Installment plans accept partial payments.'
+        );
+      }
+      if (parent.remainingBalance === 0) {
+        throw new ApiError(400, 'Transaction is already fully paid');
+      }
     }
 
     // 2. Validate Payment Amount (the base-currency over-payment guard runs in
@@ -1087,11 +1102,14 @@ class TransactionService {
     const baseSettled = fxContext
       ? _r2(paymentData.amount * fxContext.bookingRate)
       : _r2(paymentData.amount);
-    if (baseSettled > _r2(parent.remainingBalance)) {
+    // The open balance in BASE, read from whichever side owns it.
+    const openRemainingBase = docOpenItem ? docOpenItem.remainingBase : _r2(parent.remainingBalance);
+    const openPaidBase = docOpenItem ? docOpenItem.paidBase : _r2(parent.partiallyPaidAmount || 0);
+    if (baseSettled > openRemainingBase) {
       throw new ApiError(
         400,
         `Payment amount (${paymentData.amount}${fxContext ? ` ${fxContext.currencyCode} ≈ ${baseSettled}` : ''}) ` +
-        `cannot exceed remaining balance (${_r2(parent.remainingBalance)})`
+        `cannot exceed remaining balance (${openRemainingBase})`
       );
     }
 
@@ -1122,7 +1140,7 @@ class TransactionService {
     //    All in BASE currency (F2) — baseSettled equals the raw amount for
     //    domestic settlements.
     const { newRemaining: newRemainingBalance, newPartiallyPaid: newPartiallyPaidAmount, fullyPaid } =
-      computeSettlement(parent.remainingBalance, baseSettled, parent.partiallyPaidAmount || 0);
+      computeSettlement(openRemainingBase, baseSettled, openPaidBase);
     let newPaymentStatus = PAYMENT_STATUS.PARTIALLY_PAID;
     if (fullyPaid) {
       newPaymentStatus = PAYMENT_STATUS.PAID;
@@ -1139,35 +1157,59 @@ class TransactionService {
     const childTx = await runUnit(async (s) => {
       const child = await this.createTransaction(childData, userId, ipAddress, s);
 
-      const parentUpdate = {
-        remainingBalance: newRemainingBalance,
-        partiallyPaidAmount: newPartiallyPaidAmount,
-        paymentStatus: newPaymentStatus,
-        status: fullyPaid ? JOURNAL_STATUS.SETTLED : JOURNAL_STATUS.PARTIALLY_SETTLED,
-        $push: {
-          relatedTransactions: child._id,
-          settlements: {
-            transactionId: child._id,
-            amount: paymentData.amount,
-            date: childData.transactionDate,
+      if (docOpenItem) {
+        // Document authority: the DOC's balance moves; the projection JE gets
+        // only settlement METADATA (never balance fields — writing a
+        // remainingBalance onto a projection would put the item back on the
+        // journal side of the open-items union and double-count it).
+        await transactionRepository.updateTransaction(parent._id, businessId, {
+          $push: {
+            relatedTransactions: child._id,
+            settlements: {
+              transactionId: child._id,
+              amount: paymentData.amount,
+              date: childData.transactionDate,
+            },
           },
-        },
-      };
-      // F5 — optimistic guard: only land the precomputed balances if the parent
-      // still carries the remainingBalance we read. Two concurrent payments both
-      // pass the over-payment check against the same opening balance; without
-      // this guard both would $set the same "after" values and the document
-      // would be over-settled (double cash, AR/AP driven negative).
-      const guardedParent = await transactionRepository.updateTransactionGuarded(
-        parent._id, businessId,
-        { remainingBalance: parent.remainingBalance },
-        parentUpdate, s
-      );
-      if (!guardedParent) {
-        throw new ApiError(
-          409,
-          'Another payment was applied to this document at the same moment. Refresh to see the updated balance, then try again.'
+        }, s);
+        // Guarded on the document's read balance (F5 pattern, same 409).
+        await require('./openItem.service').applyDocumentSettlement(businessId, docOpenItem, {
+          amountDocUnits: _r2(paymentData.amount),
+          fullyPaid,
+          session: s,
+          userId,
+        });
+      } else {
+        const parentUpdate = {
+          remainingBalance: newRemainingBalance,
+          partiallyPaidAmount: newPartiallyPaidAmount,
+          paymentStatus: newPaymentStatus,
+          status: fullyPaid ? JOURNAL_STATUS.SETTLED : JOURNAL_STATUS.PARTIALLY_SETTLED,
+          $push: {
+            relatedTransactions: child._id,
+            settlements: {
+              transactionId: child._id,
+              amount: paymentData.amount,
+              date: childData.transactionDate,
+            },
+          },
+        };
+        // F5 — optimistic guard: only land the precomputed balances if the parent
+        // still carries the remainingBalance we read. Two concurrent payments both
+        // pass the over-payment check against the same opening balance; without
+        // this guard both would $set the same "after" values and the document
+        // would be over-settled (double cash, AR/AP driven negative).
+        const guardedParent = await transactionRepository.updateTransactionGuarded(
+          parent._id, businessId,
+          { remainingBalance: parent.remainingBalance },
+          parentUpdate, s
         );
+        if (!guardedParent) {
+          throw new ApiError(
+            409,
+            'Another payment was applied to this document at the same moment. Refresh to see the updated balance, then try again.'
+          );
+        }
       }
 
       // Update Customer/Vendor balances (centralized — emits *_BALANCE_CHANGED).
@@ -1412,6 +1454,18 @@ class TransactionService {
     if (original.partiallyPaidAmount > 0) {
       throw new ApiError(400, 'Cannot reverse a transaction that has partial payments applied. Reverse the payments first.');
     }
+    // A recognition PROJECTION mirrors an authoritative document (spec
+    // 2026-07-16). Reversing it directly would unwind the ledger and the party
+    // balance while the document stays open — the document-side open-items view
+    // would keep counting money the books no longer hold. Void the document
+    // instead: void reverses the books AND closes the document together.
+    if (original.isProjection === true) {
+      throw new ApiError(
+        400,
+        'This entry mirrors an invoice or bill. Reverse it by voiding that document instead — '
+        + 'voiding reverses the books and closes the document together.'
+      );
+    }
 
     // Period Lock Check for original transaction's period
     if (original.entryType === 'normal') {
@@ -1529,23 +1583,40 @@ class TransactionService {
           const restoredAmt = isForeignSettlement
             ? _r2(original.amount * (parent.exchangeRate || 1))
             : _r2(original.amount);
-          const newRemaining = _r2((parent.remainingBalance || 0) + restoredAmt);
-          const newPaid      = Math.max(0, _r2((parent.partiallyPaidAmount || 0) - restoredAmt));
-          const newPaymentStatus = newPaid > 0
-            ? PAYMENT_STATUS.PARTIALLY_PAID
-            : (parent.dueDate && new Date() > new Date(parent.dueDate) ? PAYMENT_STATUS.OVERDUE : PAYMENT_STATUS.UNPAID);
-          const newStatus = newPaid > 0 ? JOURNAL_STATUS.PARTIALLY_SETTLED : JOURNAL_STATUS.POSTED;
 
-          await transactionRepository.updateTransaction(parentId, businessId, {
-            remainingBalance:    newRemaining,
-            partiallyPaidAmount: newPaid,
-            paymentStatus:       newPaymentStatus,
-            status:              newStatus,
-            $pull: {
-              settlements:         { transactionId: original._id },
-              relatedTransactions: original._id,
-            },
-          }, s);
+          if (parent.isProjection === true) {
+            // Document authority (spec 2026-07-16): the DOC's balance is
+            // restored (in DOCUMENT units — the settlement child's amount);
+            // the projection parent only sheds the settlement metadata.
+            await require('./openItem.service').restoreDocumentSettlement(businessId, {
+              documentType: parent.projectionOf?.documentType,
+              documentId: parent.projectionOf?.documentId,
+            }, { amountDocUnits: _r2(original.amount), session: s, userId });
+            await transactionRepository.updateTransaction(parentId, businessId, {
+              $pull: {
+                settlements:         { transactionId: original._id },
+                relatedTransactions: original._id,
+              },
+            }, s);
+          } else {
+            const newRemaining = _r2((parent.remainingBalance || 0) + restoredAmt);
+            const newPaid      = Math.max(0, _r2((parent.partiallyPaidAmount || 0) - restoredAmt));
+            const newPaymentStatus = newPaid > 0
+              ? PAYMENT_STATUS.PARTIALLY_PAID
+              : (parent.dueDate && new Date() > new Date(parent.dueDate) ? PAYMENT_STATUS.OVERDUE : PAYMENT_STATUS.UNPAID);
+            const newStatus = newPaid > 0 ? JOURNAL_STATUS.PARTIALLY_SETTLED : JOURNAL_STATUS.POSTED;
+
+            await transactionRepository.updateTransaction(parentId, businessId, {
+              remainingBalance:    newRemaining,
+              partiallyPaidAmount: newPaid,
+              paymentStatus:       newPaymentStatus,
+              status:              newStatus,
+              $pull: {
+                settlements:         { transactionId: original._id },
+                relatedTransactions: original._id,
+              },
+            }, s);
+          }
 
           if (parent.transactionType === TRANSACTION_TYPES.CREDIT_SALE && parent.customerId) {
             await partyBalanceService.adjustReceivable(

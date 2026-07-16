@@ -403,6 +403,18 @@ class BillService {
 
   async cancel(id, user, reason, ipAddress) {
     const bill = await this._loadOrThrow(id, user?.businessId);
+    // A recognized bill-first bill IS in the books (expense + AP posted, vendor
+    // balance moved). Cancelling would close the document while the books keep
+    // holding the liability — the document-side open-items view and the vendor
+    // balance would disagree forever (spec 2026-07-16). Void is the honest
+    // exit: it reverses the accounting and closes the document together.
+    if (bill.apLiabilityJournalId) {
+      throw new ApiError(
+        400,
+        `${bill.billNumber} is already recorded in your books, so it can't be cancelled. `
+        + 'Void it instead — voiding reverses the accounting and closes the bill together.'
+      );
+    }
     return this._applyStateChange(bill, BILL_STATES.CANCELLED, user, { reason, ipAddress });
   }
 
@@ -495,37 +507,58 @@ class BillService {
     return bill;
   }
 
-  async markPaid(id, user, ipAddress) {
+  async markPaid(id, user, ipAddress, opts = {}) {
     const bill = await this._loadOrThrow(id, user?.businessId);
-    const outstanding = Math.round(
-      ((bill.remainingBalance != null ? bill.remainingBalance : bill.totalAmount) || 0) * 100
-    ) / 100;
 
-    bill.paidAmount = bill.totalAmount;
-    bill.remainingBalance = 0;
+    // ── ONE settlement engine (spec 2026-07-16, I-4/I-5) ─────────────────────
+    // markPaid IS a payment: the full remaining balance, recorded through
+    // payment.service like every other payment. That gives every markPaid a
+    // real Payment document (audit), posts the settlement journal, moves the
+    // vendor balance in BASE currency (the old path decremented document
+    // units — an F2-class bug on foreign bills), and settles whichever side
+    // owns the open item (document for bill-first, JE for transaction-first —
+    // the old transaction-first path flipped the document while the ledger
+    // kept the full liability open).
+    const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    let item = null;
+    try {
+      item = await require('./openItem.service')
+        .resolveOpenItem(bill.businessId, { documentType: 'bill', documentId: bill._id });
+    } catch (e) {
+      item = null; // no posted journal behind it — nothing to settle, plain flip below
+    }
 
-    // ── ERP Step 4: settle the AP liability + vendor balance ─────────────────
-    // Only for bills that recognized their OWN AP (bill-first flow, identified by
-    // apLiabilityJournalId). Transaction-first bills (synced from a journal entry)
-    // are settled via transaction.service, which owns that balance lifecycle —
-    // skipping them here prevents a double-decrement. (Rules 4, 5)
-    // All-or-nothing (audit A10): the PAID state change, the cash-settlement journal
-    // and the vendor-balance decrement must commit together. Previously the state
-    // change committed first and a settlement failure was swallowed — leaving the
-    // bill marked PAID while the AP liability stayed open in the GL.
     let paid;
-    if (bill.apLiabilityJournalId && bill.vendorId && outstanding > 0) {
-      paid = await withTransaction(async (s) => {
-        const p = await this._applyStateChange(bill, BILL_STATES.PAID, user, { ipAddress, session: s });
-        await this._postBillSettlementJournal(bill, outstanding, user, s);
-        await partyBalanceService.adjustPayable(bill.businessId, bill.vendorId, -outstanding, {
-          userId: user._id, reason: 'bill_paid', entityType: ENTITY_TYPES.BILL, entityId: bill._id, session: s,
-        });
-        return p;
-      });
+    if (item && item.remainingBase > 0) {
+      // Payments leave in DOCUMENT currency; the resolver's balance is base.
+      const outstandingDoc = item.authority === 'document' && item.doc.remainingBalance != null
+        ? r2(item.doc.remainingBalance)
+        : r2(item.remainingBase / item.bookingRate);
+      const cashAccountId = opts.paymentAccountId
+        || (await accountResolver.resolve(bill.businessId, '1010'))._id;
+
+      await require('./payment.service').recordPayment(bill.businessId, {
+        amount: outstandingDoc,
+        cashAccountId,
+        paymentDate: new Date(),
+        reference: `markpaid:${bill._id}`,
+        notes: `Marked paid — ${bill.billNumber}`,
+        allocations: [{ documentType: 'bill', documentId: bill._id, amount: outstandingDoc }],
+      }, user._id, ipAddress);
+
+      // Journal-authority items flip the document through the M1 reconciler —
+      // run it now (idempotent) so the document we return already shows its
+      // final state instead of waiting on the event subscriber.
+      if (item.authority === 'journal') {
+        await require('./arApReconciliation.service')
+          .reconcileByJournalEntryId(bill.businessId, item.je._id);
+      }
+      paid = await this._loadOrThrow(id, user?.businessId);
     } else {
-      // No own-AP settlement to post (transaction-first bill, no vendor, or nothing
-      // outstanding) — just the state change.
+      // Nothing settleable (no journal, or nothing outstanding) — the
+      // historical plain state flip.
+      bill.paidAmount = bill.totalAmount;
+      bill.remainingBalance = 0;
       paid = await this._applyStateChange(bill, BILL_STATES.PAID, user, { ipAddress });
     }
 
@@ -544,53 +577,10 @@ class BillService {
   }
 
   /**
-   * ERP Step 4 — post the cash-settlement journal for a bill payment.
-   *   DR  Accounts Payable (2110)  — clears the liability
-   *   CR  Cash / Bank (1010…)      — money leaves the business
-   * Balanced + running-balance-synced via ledgerPosting. Returns null (logged)
-   * if the AP or a cash/bank account can't be resolved, rather than throwing.
-   * @private
+   * (The old _postBillSettlementJournal helper lived here. markPaid now
+   * records a real Payment through payment.service — ONE settlement engine —
+   * so the bespoke settlement poster was deleted rather than left as a trap.)
    */
-  async _postBillSettlementJournal(bill, amount, user, session = null) {
-    const businessId = bill.businessId;
-    // Independent lookups — fetch in parallel to save a DB round-trip (Step 10).
-    const [apAccount, cashAccount] = await Promise.all([
-      ChartOfAccount.findOne({ businessId, accountCode: '2110' }).lean(),
-      ChartOfAccount.findOne({
-        businessId,
-        accountCode: { $in: ['1010', '1020', '1040', '1030'] }, // Cash at Bank → on Hand → Savings → Petty
-      }).lean(),
-    ]);
-
-    // Can't post → throw so the caller's transaction rolls back (audit A10). Marking
-    // a bill PAID with no settlement journal would leave the AP liability open.
-    if (!apAccount || !cashAccount) {
-      throw new ApiError(500, `Cannot settle bill ${bill.billNumber}: Accounts Payable (2110) or a cash/bank account is not set up.`);
-    }
-    if (apAccount._id.toString() === cashAccount._id.toString()) {
-      throw new ApiError(500, `Cannot settle bill ${bill.billNumber}: AP and cash resolve to the same account.`);
-    }
-
-    return postBalancedJournal({
-      businessId,
-      transactionDate:   new Date(),
-      description:       `Bill Payment — ${bill.billNumber}${bill.vendorSnapshot?.vendorName ? ' (' + bill.vendorSnapshot.vendorName + ')' : ''}`,
-      // markPaid settles the whole bill in one entry.
-      idempotencyKey: `bill-markpaid:${bill._id}`,
-      transactionType:   TRANSACTION_TYPES.PAYMENT_MADE,
-      amount,
-      debitAccountId:    apAccount._id,
-      creditAccountId:   cashAccount._id,
-      status:            JOURNAL_STATUS.POSTED,
-      transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
-      invoiceNumber:     bill.billNumber,
-      vendorId:          bill.vendorId || null,
-      currencyCode:      bill.currencyCode || 'PKR',
-      exchangeRate:      bill.exchangeRate || 1,
-      createdBy:         user._id,
-      lastModifiedBy:    user._id,
-    }, { session });
-  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // Phase 3.2 — 3-Way Match
@@ -811,6 +801,17 @@ class BillService {
   }
 
   async transitionState(id, toState, user, { reason = null, ipAddress = null } = {}) {
+    // Money-bearing exits route through their proper flows — a raw state flip
+    // must never stand in for a settlement or a reversal (spec 2026-07-16 I-4).
+    if (toState === BILL_STATES.PAID) return this.markPaid(id, user, ipAddress);
+    if (toState === BILL_STATES.CANCELLED) return this.cancel(id, user, reason, ipAddress);
+    if (toState === BILL_STATES.VOIDED) return this.void(id, reason, user, ipAddress);
+    if (toState === BILL_STATES.PARTIALLY_PAID) {
+      throw new ApiError(
+        400,
+        'A bill becomes partially paid by recording a payment against it — record the payment instead.'
+      );
+    }
     const bill = await this._loadOrThrow(id, user?.businessId);
     return this._applyStateChange(bill, toState, user, { reason, ipAddress });
   }

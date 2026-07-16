@@ -28,6 +28,7 @@ const { ApiError } = require('../utils/ApiError');
 const {
   JOURNAL_STATUS, PAYMENT_STATUS, TRANSACTION_TYPES,
   OPEN_INVOICE_STATES, OPEN_BILL_STATES,
+  INVOICE_TRANSITIONS, BILL_TRANSITIONS,
 } = require('../config/constants');
 const { toBaseAmount } = require('../utils/currency.util');
 
@@ -60,7 +61,13 @@ async function adjustOpenItem(businessId, journalEntryId, delta, { session = nul
     .session(session || null)
     .lean();
   if (!je) return null;
-  if (je.remainingBalance === null || je.remainingBalance === undefined) return null; // not an open-item entry
+  // Not an open-item entry. DESIGN (spec 2026-07-16): for a PROJECTION JE this
+  // no-op is correct, not a gap — the document owns the money, and the credit
+  // callers (credit notes, vendor credits, write-off, early-payment discount)
+  // already adjust the document's remainingBalance in the same transaction, in
+  // exact document units. Making this adjuster also write the document would
+  // double-reduce it.
+  if (je.remainingBalance === null || je.remainingBalance === undefined) return null;
   if (je.status === JOURNAL_STATUS.REVERSED) return null;
 
   const newRemaining = Math.max(0, r2(je.remainingBalance + amount));
@@ -114,8 +121,13 @@ async function adjustOpenItem(businessId, journalEntryId, delta, { session = nul
 // writes convert back to document units at the same rate.
 // ═══════════════════════════════════════════════════════════════════════════
 
-const _lean = (Model, filter, session) =>
-  Model.findOne(filter).session(session || null).lean();
+const _lean = (Model, filter, session) => {
+  const q = Model.findOne(filter);
+  // Real mongoose Queries always expose .session(); tolerate its absence so the
+  // large existing unit-test surface (which mocks findOne().lean()) keeps
+  // exercising the same call sites.
+  return (typeof q.session === 'function' ? q.session(session || null) : q).lean();
+};
 
 /**
  * Resolve an open item to its single authority.
@@ -404,6 +416,109 @@ async function sumOpenLedger(businessId, direction, { partyLinkedOnly = false } 
 }
 
 /**
+ * Settle part (or all) of a DOCUMENT-authority open item.
+ *
+ * The write targets the document only — the projection JE's balance fields are
+ * never touched (writing remainingBalance onto a projection would put the item
+ * back on the journal side of the union and double-count it).
+ *
+ * Units: `amountDocUnits` is DOCUMENT currency (the currency payments arrive
+ * in); `fullyPaid` comes from the caller's BASE-currency computeSettlement so
+ * a sub-cent FX residue still snaps the document to fully paid.
+ *
+ * Optimistic guard (F5 pattern): the update only lands if the document still
+ * carries the remainingBalance that was read — a concurrent payment or credit
+ * loses the race with a 409 instead of over-settling.
+ *
+ * State moves through the document state machine (partially_paid / paid). No
+ * stateHistory entry is pushed here — the Payment document, the child
+ * settlement JE and the audit log carry the who/when/why.
+ */
+async function applyDocumentSettlement(businessId, openItem, { amountDocUnits, fullyPaid, session = null, userId = null }) {
+  const { doc, documentType } = openItem;
+  const Model = documentType === 'invoice'
+    ? require('../models/Invoice.model')
+    : require('../models/Bill.model');
+
+  const currentRemaining = doc.remainingBalance != null
+    ? doc.remainingBalance
+    : r2((doc.totalAmount || 0) - (doc.paidAmount || 0));
+  const newRemaining = fullyPaid ? 0 : Math.max(0, r2(currentRemaining - amountDocUnits));
+  const newPaid = r2((doc.paidAmount || 0) + amountDocUnits);
+  const targetState = fullyPaid ? 'paid' : 'partially_paid';
+  const transitions = documentType === 'invoice' ? INVOICE_TRANSITIONS : BILL_TRANSITIONS;
+  const stateAllowed = doc.state === targetState || (transitions[doc.state] || []).includes(targetState);
+
+  const updated = await Model.findOneAndUpdate(
+    { _id: doc._id, businessId, remainingBalance: doc.remainingBalance != null ? doc.remainingBalance : null },
+    {
+      $set: {
+        remainingBalance: newRemaining,
+        paidAmount: newPaid,
+        ...(stateAllowed ? { state: targetState } : {}),
+        ...(userId ? { lastModifiedBy: userId } : {}),
+        ...(fullyPaid ? { paidAt: new Date() } : {}),
+      },
+    },
+    { new: true, session }
+  );
+  if (!updated) {
+    throw new ApiError(
+      409,
+      'Another payment was applied to this document at the same moment. Refresh to see the updated balance, then try again.'
+    );
+  }
+  return updated;
+}
+
+/**
+ * Exact inverse of applyDocumentSettlement — the reversal path (F4).
+ *
+ * The restored state is reversal BOOKKEEPING, not a forward business
+ * transition, so it is set directly: paid again > 0 → partially_paid, else
+ * back to approved (overdue-ness is derived from dueDate by every reader).
+ * A missing document is corruption — refuse, never skip (the party balance
+ * and GL restore would silently diverge from a document that isn't there).
+ */
+async function restoreDocumentSettlement(businessId, { documentType, documentId }, { amountDocUnits, session = null, userId = null }) {
+  const Model = documentType === 'invoice'
+    ? require('../models/Invoice.model')
+    : require('../models/Bill.model');
+  const doc = await _lean(Model, { _id: documentId, businessId }, session);
+  if (!doc) {
+    throw new ApiError(
+      500,
+      'The document behind this payment is missing, so the reversal can\'t restore its balance safely. '
+      + 'Nothing was changed — contact support.'
+    );
+  }
+
+  const newPaid = Math.max(0, r2((doc.paidAmount || 0) - amountDocUnits));
+  const newRemaining = r2((doc.remainingBalance || 0) + amountDocUnits);
+  const targetState = newPaid > 0 ? 'partially_paid' : 'approved';
+
+  const updated = await Model.findOneAndUpdate(
+    { _id: doc._id, businessId, remainingBalance: doc.remainingBalance != null ? doc.remainingBalance : null },
+    {
+      $set: {
+        remainingBalance: newRemaining,
+        paidAmount: newPaid,
+        state: targetState,
+        ...(userId ? { lastModifiedBy: userId } : {}),
+      },
+    },
+    { new: true, session }
+  );
+  if (!updated) {
+    throw new ApiError(
+      409,
+      'This document\'s balance changed while the reversal was running. Refresh and try again.'
+    );
+  }
+  return updated;
+}
+
+/**
  * Corruption detector for the discriminator itself:
  *   • a projection JE whose source document is gone
  *   • an invoice-first document whose anchor JE is gone
@@ -469,6 +584,8 @@ module.exports = {
   openItems,
   documentOpenItems,
   sumOpenLedger,
+  applyDocumentSettlement,
+  restoreDocumentSettlement,
   projectionLinkageBreaks,
   OPEN_JE_STATUSES,
 };

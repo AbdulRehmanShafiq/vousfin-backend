@@ -16,6 +16,12 @@ jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJourna
 jest.mock('../../../services/partyBalance.service', () => ({ adjustPayable: jest.fn() }));
 jest.mock('../../../services/billMatching.service', () => ({ runFullMatch: jest.fn() }));
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
+// markPaid is now a real Payment through payment.service (ONE settlement
+// engine, spec 2026-07-16); the resolver decides which side owns the balance.
+// Default resolveOpenItem → undefined = "nothing settleable" → plain flip.
+jest.mock('../../../services/payment.service', () => ({ recordPayment: jest.fn() }));
+jest.mock('../../../services/openItem.service', () => ({ resolveOpenItem: jest.fn(), adjustOpenItem: jest.fn() }));
+jest.mock('../../../services/arApReconciliation.service', () => ({ reconcileByJournalEntryId: jest.fn() }));
 jest.mock('../../../models/Bill.model', () => {
   const stateStore = new Map();
   const mongoose = require('mongoose');
@@ -430,19 +436,29 @@ describe('billService.approve() — AP liability journal', () => {
     });
   });
 
-  test('markPaid does NOT swallow a settlement posting failure (audit A10)', async () => {
-    // Seed an approved, own-AP bill with an outstanding balance so markPaid enters
-    // the settlement branch (DR AP / CR cash + vendor decrement).
+  test('markPaid does NOT swallow a settlement failure (audit A10 — one engine)', async () => {
+    // Seed an approved, own-AP bill with an outstanding balance so markPaid
+    // enters the settlement branch (a real Payment through payment.service).
+    const openItemService = require('../../../services/openItem.service');
+    const paymentService = require('../../../services/payment.service');
+    const accountResolver = require('../../../services/accountResolver.service');
     const bill = new Bill({
       _id: new mongoose.Types.ObjectId(), businessId: 'biz1', billNumber: 'BILL-PAY',
       state: 'approved', vendorId: 'v1', totalAmount: 1000, remainingBalance: 1000,
       apLiabilityJournalId: new mongoose.Types.ObjectId(),
     });
     await bill.save();
-    // The cash-settlement posting fails — the bill must NOT be left marked PAID
-    // (remainingBalance 0) while the AP liability is still open in the GL.
-    postBalancedJournal.mockRejectedValueOnce(new Error('settlement ledger down'));
+    openItemService.resolveOpenItem.mockResolvedValueOnce({
+      authority: 'document', direction: 'payable', documentType: 'bill',
+      je: { _id: 'je1' }, doc: { _id: bill._id, remainingBalance: 1000 },
+      remainingBase: 1000, paidBase: 0, bookingRate: 1, number: 'BILL-PAY',
+    });
+    accountResolver.resolve.mockResolvedValueOnce({ _id: 'acct-1010' });
+    // The payment fails — the bill must NOT be left marked PAID while the AP
+    // liability is still open in the GL.
+    paymentService.recordPayment.mockRejectedValueOnce(new Error('settlement ledger down'));
 
     await expect(billService.markPaid(bill._id, USER, '')).rejects.toThrow('settlement ledger down');
+    expect((await Bill.findById(bill._id)).state).toBe('approved'); // untouched
   });
 });

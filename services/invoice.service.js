@@ -508,6 +508,19 @@ class InvoiceService {
 
   async cancel(id, user, reason, ipAddress) {
     const invoice = await this._loadOrThrow(id, user?.businessId);
+    // A recognized invoice-first invoice IS in the books (AR + revenue posted,
+    // customer balance moved). Cancelling would close the document while the
+    // books keep holding the receivable — the document-side open-items view
+    // and the party balance would disagree forever (spec 2026-07-16). Void is
+    // the honest exit: it reverses the accounting and closes the document
+    // together.
+    if (invoice.arJournalId) {
+      throw new ApiError(
+        400,
+        `${invoice.invoiceNumber} is already recorded in your books, so it can't be cancelled. `
+        + 'Void it instead — voiding reverses the accounting and closes the invoice together.'
+      );
+    }
     return this._applyStateChange(invoice, INVOICE_STATES.CANCELLED, user, { reason, ipAddress });
   }
 
@@ -628,37 +641,57 @@ class InvoiceService {
     return this._applyStateChange(invoice, INVOICE_STATES.WRITTEN_OFF, user, { reason, ipAddress });
   }
 
-  async markPaid(id, user, ipAddress) {
+  async markPaid(id, user, ipAddress, opts = {}) {
     const invoice = await this._loadOrThrow(id, user?.businessId);
-    const outstanding = Math.round(
-      ((invoice.remainingBalance != null ? invoice.remainingBalance : invoice.totalAmount) || 0) * 100
-    ) / 100;
 
-    invoice.paidAmount = invoice.totalAmount;
-    invoice.remainingBalance = 0;
+    // ── ONE settlement engine (spec 2026-07-16, I-4/I-5) ─────────────────────
+    // markPaid IS a payment: the full remaining balance, recorded through
+    // payment.service like every other payment. That gives every markPaid a
+    // real Payment document (audit), posts the settlement journal, moves the
+    // party balance in base currency, and settles whichever side owns the open
+    // item (document for invoice-first, JE for transaction-first — the old
+    // transaction-first path flipped the document while the ledger kept the
+    // full balance open).
+    const r2 = (v) => Math.round((Number(v) || 0) * 100) / 100;
+    let item = null;
+    try {
+      item = await require('./openItem.service')
+        .resolveOpenItem(invoice.businessId, { documentType: 'invoice', documentId: invoice._id });
+    } catch (e) {
+      item = null; // no posted journal behind it — nothing to settle, plain flip below
+    }
 
-    // ── ERP Step 4: settle the AR + customer balance ─────────────────────────
-    // Only for invoices that recognized their OWN AR (invoice-first flow,
-    // identified by arJournalId). Transaction-first invoices (synced from a
-    // journal entry) are settled via transaction.service, which owns that
-    // balance lifecycle — skipping them prevents a double-decrement. (Rules 4, 5)
-    // All-or-nothing (audit A10): the PAID state change, the cash-settlement journal
-    // and the customer-balance decrement commit together. Previously the state change
-    // committed first and a settlement failure was swallowed — leaving the invoice
-    // marked PAID while the AR balance stayed open in the GL.
     let paid;
-    if (invoice.arJournalId && invoice.customerId && outstanding > 0) {
-      paid = await withTransaction(async (s) => {
-        const p = await this._applyStateChange(invoice, INVOICE_STATES.PAID, user, { ipAddress, session: s });
-        await this._postInvoiceSettlementJournal(invoice, outstanding, user, s);
-        // F2 (residual) — the party balance is base currency.
-        await partyBalanceService.adjustReceivable(invoice.businessId, invoice.customerId,
-          -toBaseAmount(outstanding, invoice.exchangeRate), {
-            userId: user._id, reason: 'invoice_paid', entityType: ENTITY_TYPES.INVOICE, entityId: invoice._id, session: s,
-          });
-        return p;
-      });
+    if (item && item.remainingBase > 0) {
+      // Payments arrive in DOCUMENT currency; the resolver's balance is base.
+      const outstandingDoc = item.authority === 'document' && item.doc.remainingBalance != null
+        ? r2(item.doc.remainingBalance)
+        : r2(item.remainingBase / item.bookingRate);
+      const cashAccountId = opts.paymentAccountId
+        || (await accountResolver.resolve(invoice.businessId, '1010'))._id;
+
+      await require('./payment.service').recordPayment(invoice.businessId, {
+        amount: outstandingDoc,
+        cashAccountId,
+        paymentDate: new Date(),
+        reference: `markpaid:${invoice._id}`,
+        notes: `Marked paid — ${invoice.invoiceNumber}`,
+        allocations: [{ documentType: 'invoice', documentId: invoice._id, amount: outstandingDoc }],
+      }, user._id, ipAddress);
+
+      // Journal-authority items flip the document through the M1 reconciler —
+      // run it now (idempotent) so the document we return already shows its
+      // final state instead of waiting on the event subscriber.
+      if (item.authority === 'journal') {
+        await require('./arApReconciliation.service')
+          .reconcileByJournalEntryId(invoice.businessId, item.je._id);
+      }
+      paid = await this._loadOrThrow(id, user?.businessId);
     } else {
+      // Nothing settleable (no journal, or nothing outstanding) — the
+      // historical plain state flip.
+      invoice.paidAmount = invoice.totalAmount;
+      invoice.remainingBalance = 0;
       paid = await this._applyStateChange(invoice, INVOICE_STATES.PAID, user, { ipAddress });
     }
 
@@ -678,6 +711,21 @@ class InvoiceService {
 
   /** Generic state transition entry point (used by tests + admin tooling). */
   async transitionState(id, toState, user, { reason = null, ipAddress = null } = {}) {
+    // Money-bearing exits route through their proper flows — a raw state flip
+    // must never stand in for a settlement, a reversal or a write-off (spec
+    // 2026-07-16 I-4). Transitioning to `paid` without posting cash, or to
+    // `voided` without reversing the recognition, would leave the document and
+    // the books telling different stories forever.
+    if (toState === INVOICE_STATES.PAID) return this.markPaid(id, user, ipAddress);
+    if (toState === INVOICE_STATES.CANCELLED) return this.cancel(id, user, reason, ipAddress);
+    if (toState === INVOICE_STATES.VOIDED) return this.void(id, reason, user, ipAddress);
+    if (toState === INVOICE_STATES.WRITTEN_OFF) return this.writeOff(id, user, reason, ipAddress);
+    if (toState === INVOICE_STATES.PARTIALLY_PAID) {
+      throw new ApiError(
+        400,
+        'An invoice becomes partially paid by recording a payment against it — record the payment instead.'
+      );
+    }
     const invoice = await this._loadOrThrow(id, user?.businessId);
     return this._applyStateChange(invoice, toState, user, { reason, ipAddress });
   }
@@ -964,55 +1012,10 @@ class InvoiceService {
   }
 
   /**
-   * ERP Step 4 — post the cash-settlement journal for an invoice payment.
-   *   DR  Cash / Bank (1010…)        — money arrives
-   *   CR  Accounts Receivable (1110) — clears the receivable
-   * Balanced + running-balance-synced via ledgerPosting. Returns null (logged)
-   * if the AR or a cash/bank account can't be resolved, rather than throwing.
-   * @private
+   * (The old _postInvoiceSettlementJournal helper lived here. markPaid now
+   * records a real Payment through payment.service — ONE settlement engine —
+   * so the bespoke settlement poster was deleted rather than left as a trap.)
    */
-  async _postInvoiceSettlementJournal(invoice, amount, user, session = null) {
-    const businessId = invoice.businessId;
-    // Independent lookups — fetch in parallel to save a DB round-trip (Step 10).
-    const [arAccount, cashAccount] = await Promise.all([
-      ChartOfAccount.findOne({ businessId, accountCode: '1110' }).lean(),
-      ChartOfAccount.findOne({
-        businessId,
-        accountCode: { $in: ['1010', '1020', '1040', '1030'] }, // Cash at Bank → on Hand → Savings → Petty
-      }).lean(),
-    ]);
-    // Can't post → throw so the caller's transaction rolls back (audit A10). Marking
-    // an invoice PAID with no settlement journal would leave the AR open.
-    if (!arAccount || !cashAccount) {
-      throw new ApiError(500, `Cannot settle invoice ${invoice.invoiceNumber}: Accounts Receivable (1110) or a cash/bank account is not set up.`);
-    }
-    if (arAccount._id.toString() === cashAccount._id.toString()) {
-      throw new ApiError(500, `Cannot settle invoice ${invoice.invoiceNumber}: AR and cash resolve to the same account.`);
-    }
-
-    // F2 (residual) — `amount` arrives in DOCUMENT currency; the ledger is base.
-    const settleBase = toBaseAmount(amount, invoice.exchangeRate);
-    return postBalancedJournal({
-      businessId,
-      transactionDate:   new Date(),
-      description:       `Invoice Payment — ${invoice.invoiceNumber}${invoice.customerSnapshot?.fullName ? ' (' + invoice.customerSnapshot.fullName + ')' : ''}`,
-      // markPaid settles the whole invoice in one entry.
-      idempotencyKey: `invoice-markpaid:${invoice._id}`,
-      transactionType:   TRANSACTION_TYPES.PAYMENT_RECEIVED,
-      amount:            settleBase,
-      baseCurrencyAmount: settleBase,
-      debitAccountId:    cashAccount._id,
-      creditAccountId:   arAccount._id,
-      status:            JOURNAL_STATUS.POSTED,
-      transactionSource: TRANSACTION_SOURCES.SYSTEM_GENERATED,
-      invoiceNumber:     invoice.invoiceNumber,
-      customerId:        invoice.customerId || null,
-      currencyCode:      invoice.currencyCode || 'PKR',
-      exchangeRate:      invoice.exchangeRate || 1,
-      createdBy:         user._id,
-      lastModifiedBy:    user._id,
-    }, { session });
-  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // Sync helper (used by transaction.service dual-write)

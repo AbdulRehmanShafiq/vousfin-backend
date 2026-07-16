@@ -270,49 +270,37 @@ class PaymentService {
     // an individual check can't see the others and would over-settle the parent).
     const perJeAllocated = new Map();
 
+    const openItemService = require('./openItem.service'); // lazy — avoid require cycle
+
     for (const spec of specs) {
       const allocAmount = r2(spec.amount);
       if (!(allocAmount > 0)) throw new ApiError(400, 'Each allocation amount must be greater than zero');
 
-      // Resolve the parent recognition JE (by document or directly by JE id).
-      let je = null;
-      let doc = null;
-      let documentType = spec.documentType || null;
+      // Resolve to the open item's single AUTHORITY (spec 2026-07-16): the
+      // document when the recognition JE is a projection (invoice-first), the
+      // JE itself otherwise (transaction-first, installments, manual AR/AP
+      // journals). Every historical rejection message lives in the resolver,
+      // byte-identical, so this surface's API contract is unchanged.
+      const item = await openItemService.resolveOpenItem(businessId, {
+        journalEntryId: spec.parentTransactionId || null,
+        documentType: spec.documentType || null,
+        documentId: spec.documentId || null,
+      });
 
-      if (spec.parentTransactionId) {
-        je = await JournalEntry.findOne({ _id: spec.parentTransactionId, businessId }).lean();
-        if (!je) throw new ApiError(404, `Parent transaction ${spec.parentTransactionId} not found`);
-      } else if (spec.documentId && documentType) {
-        const Model = documentType === 'invoice' ? Invoice : Bill;
-        doc = await Model.findOne({ _id: spec.documentId, businessId });
-        if (!doc) throw new ApiError(404, `${documentType} ${spec.documentId} not found`);
-        if (!doc.linkedJournalEntryId) {
-          throw new ApiError(400, `${documentType} ${doc[documentType === 'invoice' ? 'invoiceNumber' : 'billNumber']} has no posted journal entry to settle`);
-        }
-        je = await JournalEntry.findOne({ _id: doc.linkedJournalEntryId, businessId }).lean();
-        if (!je) throw new ApiError(404, 'Linked journal entry not found for the document');
-      } else {
-        throw new ApiError(400, 'Each allocation needs either { documentType, documentId } or { parentTransactionId }');
-      }
-
-      // The JE must be an AR/AP recognition entry with a tracked balance.
-      const isAR = je.transactionType === TRANSACTION_TYPES.CREDIT_SALE;
-      const isAP = je.transactionType === TRANSACTION_TYPES.CREDIT_PURCHASE;
-      if (!isAR && !isAP) throw new ApiError(400, 'Allocations must target a credit sale (invoice) or credit purchase (bill)');
-      if (je.remainingBalance == null) throw new ApiError(400, 'Target entry does not track an outstanding balance');
+      const je = item.je;
       const jeKey = String(je._id);
       const cumulativeForJe = r2((perJeAllocated.get(jeKey) || 0) + allocAmount);
-      if (cumulativeForJe > r2(je.remainingBalance) + 0.001) {
-        throw new ApiError(400, `Allocation${perJeAllocated.has(jeKey) ? 's' : ''} (${cumulativeForJe}) exceed${perJeAllocated.has(jeKey) ? '' : 's'} the outstanding balance (${r2(je.remainingBalance)}) of ${je.invoiceNumber || 'the document'}`);
+      if (cumulativeForJe > item.remainingBase + 0.001) {
+        throw new ApiError(400, `Allocation${perJeAllocated.has(jeKey) ? 's' : ''} (${cumulativeForJe}) exceed${perJeAllocated.has(jeKey) ? '' : 's'} the outstanding balance (${item.remainingBase}) of ${item.number || 'the document'}`);
       }
       perJeAllocated.set(jeKey, cumulativeForJe);
 
-      const thisDirection = isAR ? 'inbound' : 'outbound';
+      const thisDirection = item.direction === 'receivable' ? 'inbound' : 'outbound';
       // An unlinked AR/AP entry (no customer/vendor — e.g. a manual credit-sale
       // journal) can still be settled: we post the cash receipt and reduce the
       // outstanding, just without touching any party subledger. partyId stays null.
-      const thisPartyId = (isAR ? je.customerId : je.vendorId) || null;
-      const thisPartyKey = thisPartyId ? String(thisPartyId) : null;
+      const thisPartyId = item.partyId || null;
+      const thisPartyKey = thisPartyId ? String(thisPartyId._id || thisPartyId) : null;
 
       // A single payment is for a single party and a single direction (AR or AP).
       if (direction === null) { direction = thisDirection; partyId = thisPartyKey; }
@@ -321,10 +309,11 @@ class PaymentService {
         if (partyId !== thisPartyKey) throw new ApiError(400, 'All allocations of a payment must be for the same party');
       }
 
-      if (!documentType) documentType = isAR ? 'invoice' : 'bill';
+      const documentType = item.documentType || (item.direction === 'receivable' ? 'invoice' : 'bill');
       // Best-effort document link (may be absent for legacy JE-only data).
+      let doc = item.doc;
       if (!doc) {
-        const Model = isAR ? Invoice : Bill;
+        const Model = item.direction === 'receivable' ? Invoice : Bill;
         doc = await Model.findOne({ businessId, linkedJournalEntryId: je._id }).lean();
       }
 

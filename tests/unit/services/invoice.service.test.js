@@ -22,6 +22,13 @@ jest.mock('../../../services/accountResolver.service', () => ({
 }));
 jest.mock('../../../services/ledgerPosting.service', () => ({ postBalancedJournal: jest.fn() }));
 jest.mock('../../../services/partyBalance.service', () => ({ adjustReceivable: jest.fn() }));
+// markPaid is now a real Payment through payment.service (ONE settlement
+// engine, spec 2026-07-16); the resolver decides which side owns the balance.
+// Default resolveOpenItem → undefined = "nothing settleable" → the historical
+// plain state flip, which is what the transition-driven tests exercise.
+jest.mock('../../../services/payment.service', () => ({ recordPayment: jest.fn() }));
+jest.mock('../../../services/openItem.service', () => ({ resolveOpenItem: jest.fn(), adjustOpenItem: jest.fn() }));
+jest.mock('../../../services/arApReconciliation.service', () => ({ reconcileByJournalEntryId: jest.fn() }));
 jest.mock('../../../utils/withTransaction', () => ({ withTransaction: (fn) => fn(null) }));
 // Inventory service — auto-mocked so the lazy require inside invoice service gets the same
 // mock instance. Individual tests set up spies as needed.
@@ -292,20 +299,29 @@ describe('invoiceService approval workflow', () => {
     await expect(invoiceService.approve(inv._id, USER, 'ok', '')).rejects.toThrow('ledger down');
   });
 
-  test('markPaid does NOT swallow a settlement posting failure (audit A10)', async () => {
-    // Seed an approved, own-AR invoice with an outstanding balance so markPaid enters
-    // the settlement branch (DR cash / CR AR + customer decrement).
+  test('markPaid does NOT swallow a settlement failure (audit A10 — one engine)', async () => {
+    // Seed an approved, own-AR invoice with an outstanding balance so markPaid
+    // enters the settlement branch (a real Payment through payment.service).
+    const openItemService = require('../../../services/openItem.service');
+    const paymentService = require('../../../services/payment.service');
     const inv = new Invoice({
       _id: new mongoose.Types.ObjectId(), businessId: 'biz1', invoiceNumber: 'INV-PAY',
       state: 'approved', customerId: 'c1', totalAmount: 1000, remainingBalance: 1000,
       arJournalId: new mongoose.Types.ObjectId(),
     });
     await inv.save();
-    // The cash-settlement posting fails — the invoice must NOT be left marked PAID
-    // (remainingBalance 0) while the AR balance stays open in the GL.
-    postBalancedJournal.mockRejectedValueOnce(new Error('settlement ledger down'));
+    openItemService.resolveOpenItem.mockResolvedValueOnce({
+      authority: 'document', direction: 'receivable', documentType: 'invoice',
+      je: { _id: 'je1' }, doc: { _id: inv._id, remainingBalance: 1000 },
+      remainingBase: 1000, paidBase: 0, bookingRate: 1, number: 'INV-PAY',
+    });
+    accountResolver.resolve.mockResolvedValueOnce({ _id: 'acct-1010' });
+    // The payment fails — the invoice must NOT be left marked PAID while the AR
+    // balance stays open in the GL.
+    paymentService.recordPayment.mockRejectedValueOnce(new Error('settlement ledger down'));
 
     await expect(invoiceService.markPaid(inv._id, USER, '')).rejects.toThrow('settlement ledger down');
+    expect((await Invoice.findById(inv._id)).state).toBe('approved'); // untouched
   });
 });
 
@@ -368,7 +384,11 @@ describe('invoiceService dispute + write-off', () => {
       USER, ''
     );
     await invoiceService.transitionState(inv._id, 'approved', USER, {});
-    await invoiceService.transitionState(inv._id, 'partially_paid', USER, {});
+    // partially_paid is created by payments now, never by a raw transition
+    // (spec 2026-07-16 I-4) — seed the state directly instead.
+    const stored = await Invoice.findById(inv._id);
+    stored.state = 'partially_paid';
+    await stored.save();
     const wo = await invoiceService.writeOff(inv._id, USER, 'bankruptcy', '');
     expect(wo.state).toBe('written_off');
     expect(wo.writeOffReason).toBe('bankruptcy');
