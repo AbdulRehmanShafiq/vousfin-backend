@@ -1703,13 +1703,13 @@ class TransactionService {
    * Get outstanding balances (Receivables or Payables)
    */
   async getOutstandingBalances(businessId, type) {
-    if (type === 'receivable') {
-      return transactionRepository.getOutstandingReceivables(businessId);
-    } else if (type === 'payable') {
-      return transactionRepository.getOutstandingPayables(businessId);
-    } else {
+    if (type !== 'receivable' && type !== 'payable') {
       throw new ApiError(400, 'Invalid outstanding balance type. Use "receivable" or "payable"');
     }
+    // THE open-items union (spec 2026-07-16) — journal-authority entries plus
+    // document-authority (invoice-first) items. Same rows, same shape as the
+    // old JE-only queries; invoice-first items simply appear now.
+    return require('./openItem.service').openItems(businessId, type);
   }
 
   /**

@@ -102,23 +102,24 @@ class ArApReportingService {
    *   • sum of open recognition journal entries' remaining balances
    */
   async getReconciliation(businessId, kind) {
-    const { Model, states, txType, controlCode } = this._cfg(kind);
+    const { Model, states, controlCode } = this._cfg(kind);
     const bid = oid(businessId);
 
-    const [docAgg, jeAgg, control] = await Promise.all([
+    const [docAgg, openLedger, control] = await Promise.all([
       Model.aggregate([
         { $match: { businessId: bid, isArchived: { $ne: true }, remainingBalance: { $gt: 0 }, state: { $in: states } } },
-        { $group: { _id: null, total: { $sum: '$remainingBalance' } } },
+        // Document balances are DOCUMENT currency; the ledger is base — convert
+        // at each document's booking rate so the comparison is unit-honest (F2).
+        { $group: { _id: null, total: { $sum: { $multiply: [{ $ifNull: ['$remainingBalance', 0] }, { $ifNull: ['$exchangeRate', 1] }] } } } },
       ]),
-      JournalEntry.aggregate([
-        { $match: { businessId: bid, transactionType: txType, remainingBalance: { $gt: 0 }, isArchived: { $ne: true } } },
-        { $group: { _id: null, total: { $sum: '$remainingBalance' } } },
-      ]),
+      // The ledger's open-item view is THE union (spec 2026-07-16): summing only
+      // JE.remainingBalance made every invoice-first item read as a discrepancy.
+      require('./openItem.service').sumOpenLedger(businessId, kind, { partyLinkedOnly: false }),
       ChartOfAccount.findOne({ businessId, accountCode: controlCode }).lean(),
     ]);
 
     const documentTotal     = r2(docAgg[0]?.total || 0);
-    const ledgerEntriesTotal = r2(jeAgg[0]?.total || 0);
+    const ledgerEntriesTotal = openLedger.total;
     const ledgerControl     = r2(control?.runningBalance || 0);
     const discrepancyVsEntries = r2(documentTotal - ledgerEntriesTotal);
     const discrepancyVsControl = r2(documentTotal - ledgerControl);

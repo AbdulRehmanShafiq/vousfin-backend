@@ -437,6 +437,10 @@ class TransactionRepository extends BaseRepository {
       ],
       paymentStatus: { $in: [PAYMENT_STATUS.UNPAID, PAYMENT_STATUS.PARTIALLY_PAID, PAYMENT_STATUS.OVERDUE] },
       remainingBalance: { $gt: 0 },
+      // Projection JEs (invoice-first) never track a balance, so the two
+      // clauses above already exclude them — this filter is the standing
+      // declaration that the DOCUMENT owns those items (spec 2026-07-16).
+      isProjection: { $ne: true },
       isArchived: { $ne: true },
     })
       .populate('customerId', 'fullName businessName')
@@ -474,6 +478,8 @@ class TransactionRepository extends BaseRepository {
       ],
       paymentStatus: { $in: [PAYMENT_STATUS.UNPAID, PAYMENT_STATUS.PARTIALLY_PAID, PAYMENT_STATUS.OVERDUE] },
       remainingBalance: { $gt: 0 },
+      // Same standing declaration as the receivables query (spec 2026-07-16).
+      isProjection: { $ne: true },
       isArchived: { $ne: true },
     })
       .populate('vendorId', 'vendorName contactPerson')

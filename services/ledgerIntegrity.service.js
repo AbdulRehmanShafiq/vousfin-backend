@@ -150,24 +150,26 @@ async function computeArApSubledgerDrift(businessId) {
   const bizId = sanitizeAndValidateId(businessId);
   const Customer = require('../models/Customer.model');
   const Vendor = require('../models/Vendor.model');
-  const JournalEntry = require('../models/JournalEntry.model');
 
   const { accounts } = await computeDrift(businessId);
   const arControl = accounts.find((a) => a.code === AR_CONTROL_CODE);
   const apControl = accounts.find((a) => a.code === AP_CONTROL_CODE);
 
-  const [customerBalSum, vendorBalSum, arLinkedLedger, apLinkedLedger] = await Promise.all([
+  // The ledger side of the reconcile is THE open-items definition
+  // (openItem.sumOpenLedger): journal-authority entries ∪ document-authority
+  // documents (invoice-first, whose projection JE deliberately carries no
+  // balance — spec 2026-07-16). Summing only JE.remainingBalance here is how
+  // the invoice-first drift stayed invisible: the party balance moved on
+  // approval while the JE side showed nothing.
+  const openItemService = require('./openItem.service');
+  const [customerBalSum, vendorBalSum, arOpen, apOpen] = await Promise.all([
     _sumField(Customer, { businessId: bizId }, 'currentReceivableBalance'),
     _sumField(Vendor, { businessId: bizId }, 'currentPayableBalance'),
-    _sumField(JournalEntry, {
-      businessId: bizId, transactionType: TRANSACTION_TYPES.CREDIT_SALE,
-      customerId: { $ne: null }, status: { $in: OPEN_AR_AP_STATUSES },
-    }, 'remainingBalance'),
-    _sumField(JournalEntry, {
-      businessId: bizId, transactionType: TRANSACTION_TYPES.CREDIT_PURCHASE,
-      vendorId: { $ne: null }, status: { $in: OPEN_AR_AP_STATUSES },
-    }, 'remainingBalance'),
+    openItemService.sumOpenLedger(businessId, 'receivable', { partyLinkedOnly: true }),
+    openItemService.sumOpenLedger(businessId, 'payable', { partyLinkedOnly: true }),
   ]);
+  const arLinkedLedger = arOpen.total;
+  const apLinkedLedger = apOpen.total;
 
   const build = (control, subledgerSum, partyLinkedLedger) => {
     const controlDerived = r2(control?.derived || 0);
@@ -178,7 +180,11 @@ async function computeArApSubledgerDrift(businessId) {
       partyLinkedLedger: r2(partyLinkedLedger),
       subledgerDrift,
       unattributed: r2(controlDerived - partyLinkedLedger),
-      reconciled: subledgerDrift === 0,
+      // One cent of tolerance: document-authority balances convert at booking
+      // rates, so a foreign-currency item can differ from the party balance by
+      // sub-cent rounding. Below a cent is rounding, not a break — the same
+      // standard booksAssurance applies everywhere else.
+      reconciled: Math.abs(subledgerDrift) < 0.01,
     };
   };
 

@@ -706,6 +706,15 @@ module.exports = {
     voided:            [], // terminal (GL-correct void — M5)
   },
 
+  // States in which a document still carries an OPEN receivable/payable —
+  // recognized in the books and not yet fully settled, credited away, written
+  // off or voided. THE one definition: the open-items union (openItem.service),
+  // the AR/AP sub-ledger reconciler and the M7 document view all read these
+  // lists, so no two surfaces can ever disagree on what "open" means.
+  OPEN_INVOICE_STATES: ['approved', 'sent', 'partially_paid', 'overdue', 'disputed'],
+  // Bill-side equivalent (bills have no disputed state; scheduled is open).
+  OPEN_BILL_STATES: ['approved', 'scheduled', 'partially_paid', 'overdue'],
+
   // ===============================
   // Phase 1 — Bill State Machine
   // Lifecycle: draft → awaiting_approval → approved → scheduled → partially_paid → paid

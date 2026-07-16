@@ -845,9 +845,11 @@ class ReportService {
     if (!['receivable', 'payable'].includes(type))
       throw new ApiError(400, 'Invalid aging report type. Use "receivable" or "payable"');
 
-    let outstanding = type === 'receivable'
-      ? await transactionRepository.getOutstandingReceivables(businessId)
-      : await transactionRepository.getOutstandingPayables(businessId);
+    // THE open-items union (spec 2026-07-16): journal-authority entries plus
+    // document-authority (invoice-first) items, one definition shared with the
+    // sub-ledger reconciler — reading only JE.remainingBalance here is how
+    // invoice-first invoices were invisible to aging.
+    const outstanding = await require('./openItem.service').openItems(businessId, type);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);

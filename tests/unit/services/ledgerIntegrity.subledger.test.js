@@ -12,12 +12,20 @@ jest.mock('../../../repositories/transaction.repository');
 jest.mock('../../../models/Customer.model', () => ({ aggregate: jest.fn() }));
 jest.mock('../../../models/Vendor.model', () => ({ aggregate: jest.fn() }));
 jest.mock('../../../models/JournalEntry.model', () => ({ aggregate: jest.fn() }));
+// The ledger side now reads the open-items UNION (openItem.sumOpenLedger, spec
+// 2026-07-16): journal side (JournalEntry.aggregate) + document side
+// (Invoice/Bill.aggregate). These tests exercise the reconcile arithmetic with
+// an empty document side; the union itself is proven on the live tier.
+jest.mock('../../../models/Invoice.model', () => ({ aggregate: jest.fn() }));
+jest.mock('../../../models/Bill.model', () => ({ aggregate: jest.fn() }));
 
 const accountRepository = require('../../../repositories/account.repository');
 const transactionRepository = require('../../../repositories/transaction.repository');
 const Customer = require('../../../models/Customer.model');
 const Vendor = require('../../../models/Vendor.model');
 const JournalEntry = require('../../../models/JournalEntry.model');
+const Invoice = require('../../../models/Invoice.model');
+const Bill = require('../../../models/Bill.model');
 const { computeArApSubledgerDrift } = require('../../../services/ledgerIntegrity.service');
 
 const BIZ = '507f1f77bcf86cd799439099';
@@ -35,7 +43,12 @@ function stubLedger({ arDerived, apDerived }) {
 }
 const sum = (n) => Promise.resolve(n == null ? [] : [{ sum: n }]);
 
-beforeEach(() => jest.clearAllMocks());
+beforeEach(() => {
+  jest.clearAllMocks();
+  // No invoice-first documents in these fixtures — the document side sums to 0.
+  Invoice.aggregate.mockResolvedValue([]);
+  Bill.aggregate.mockResolvedValue([]);
+});
 
 describe('computeArApSubledgerDrift (VE-5/VE-6)', () => {
   it('reconciles when party balances equal the party-linked ledger', async () => {

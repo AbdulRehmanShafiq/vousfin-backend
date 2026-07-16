@@ -178,18 +178,32 @@ async function verify(businessId, { asOf = new Date() } = {}) {
     }),
 
     safeCheck('subledger_agrees', 'Customer and supplier balances match the books', async () => {
-      const s = await computeArApSubledgerDrift(businessId);
+      // The reconcile reads the open-items UNION (journal-authority entries +
+      // document-authority invoice-first items). The linkage sweep guards the
+      // discriminator itself: a projection that lost its document (or a
+      // document that lost its journal) would silently mis-sum forever, so it
+      // surfaces here the day it happens.
+      const openItemService = require('./openItem.service');
+      const [s, linkage] = await Promise.all([
+        computeArApSubledgerDrift(businessId),
+        openItemService.projectionLinkageBreaks(businessId),
+      ]);
       const notes = [];
       if (!s.ar.reconciled) notes.push(`customers are out by ${Math.abs(s.ar.subledgerDrift)}`);
       if (!s.ap.reconciled) notes.push(`suppliers are out by ${Math.abs(s.ap.subledgerDrift)}`);
+      if (linkage.length) {
+        notes.push(`${linkage.length} document${linkage.length === 1 ? ' has' : 's have'} a broken link to the books`);
+      }
+      const ok = s.reconciled && linkage.length === 0;
       return {
         key: 'subledger_agrees',
         title: 'Customer and supplier balances match the books',
-        ok: s.reconciled,
+        ok,
         verified: true,
-        detail: s.reconciled
+        detail: ok
           ? 'What each customer and supplier owes adds up to what the books say.'
           : `What the books say and what the list says disagree: ${notes.join(' and ')}.`,
+        offenders: linkage.slice(0, 5),
       };
     }),
 
